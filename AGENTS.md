@@ -10,6 +10,8 @@ WSL Ubuntu 24.04 와 폐쇄망 RHEL 8.10(ETX 접속) 양쪽에서 동일하게 �
 | `docs/plan.md` | 작업 계획서(정본) — 설계 근거와 Phase 0~5 |
 | `docs/closed-network-setup.md` | 반입·설치 절차 |
 | `docs/env-survey.md` | 폐쇄망에서 확인해 올 것 |
+| `docs/spec-ws-run.md` | Phase 1 상세 명세 — `idk ws` · `idk run` |
+| `docs/spec-dt.md` | Phase 2 상세 명세 — `idk dt` |
 | `CHANGELOG.md` | 변경 이력 + 릴리스 방법 |
 
 새 서브커맨드를 추가할 때는 `docs/ARCHITECTURE.md` §6 을 따른다.
@@ -23,6 +25,8 @@ WSL Ubuntu 24.04 와 폐쇄망 RHEL 8.10(ETX 접속) 양쪽에서 동일하게 �
 - 산출물은 `shiv` 단일 zipapp `dist/idk.pyz` 하나. 반입 파일 수를 늘리지 않는다.
 - zellij 호출은 `src/idk/ws/backends/zellij.py` 에만 존재한다.
 - `src/idk/dt/` 는 의존성 0(stdlib만) — typer/rich/textual 도 import 하지 않는다.
+  변환 로직만 두고 CLI 배선은 `src/idk/cli_dt.py` 에 둔다. 폐쇄망에서 그 파일만 꺼내
+  아무 python 으로 돌릴 수 있어야 한다는 것이 이 규약의 목적이다.
 - 설정은 `~/.config/idk/*.toml` (XDG). root 권한을 요구하는 동작 금지.
 
 위 규약 중 `tomllib`/`requests`/`httpx`/`certifi` 금지는 ruff TID251(banned-api)로,
