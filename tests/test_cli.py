@@ -35,6 +35,17 @@ def test_doctor_json_is_parsable():
     assert payload["checks"]
 
 
+def test_doctor_brief_runs():
+    result = runner.invoke(app, ["doctor", "--brief"])
+    assert result.exit_code == 0, result.stdout
+    assert result.stdout.startswith(f"idk {__version__} brief")
+
+
+def test_doctor_rejects_json_and_brief_together():
+    result = runner.invoke(app, ["doctor", "--json", "--brief"])
+    assert result.exit_code == 2
+
+
 def test_env_csh_uses_setenv(monkeypatch, tmp_path):
     result = runner.invoke(app, ["env", "--csh", "--bindir", str(tmp_path / "bin")])
     assert result.exit_code == 0, result.stdout

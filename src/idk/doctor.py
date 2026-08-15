@@ -1,12 +1,18 @@
 """`idk doctor` — 두 환경의 차이를 한 장으로 뽑는 진단.
 
-`--json` 결과를 WSL/폐쇄망 양쪽에서 떠서 diff 하면 "여기선 되는데 저기선 안 되는" 문제의
-1차 원인이 대개 바로 보인다.
+출력이 셋인 이유:
+
+- 기본(표): 사람이 화면에서 훑어보는 용도
+- `--json`: 파일을 꺼낼 수 있는 환경끼리 diff 하는 용도
+- `--brief`: **폐쇄망 전용.** 파일 반출이 불가능해 --json 을 떠서 diff 할 수가 없다.
+  화면을 보고 손으로 옮겨 적는 것이 유일한 경로이므로 줄 수를 최소화한 형태로 뽑는다.
+  docs/env-survey.md 가 이 출력을 그대로 받아 적도록 되어 있다.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from dataclasses import asdict, dataclass
@@ -106,7 +112,9 @@ def _python_checks(info: env.SystemInfo) -> list[Check]:
 
 def _tool_checks() -> list[Check]:
     checks = [
-        _tool_check("tools", "zellij", required=True, note="idk ws 에 필요 — docs/closed-network-setup.md"),
+        _tool_check(
+            "tools", "zellij", required=True, note="idk ws 에 필요 — docs/closed-network-setup.md"
+        ),
         _tool_check("tools", "xclip", required=False, note="없으면 Shift+드래그 복사로 폴백"),
         _tool_check("tools", "git", required=False),
     ]
@@ -212,19 +220,87 @@ def render(checks: list[Check]) -> None:
     console.print(f"\nfail {failures} · warn {warnings} · 총 {len(checks)}")
 
 
+_VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
+
+
+def _short_version(text: str) -> str:
+    """`gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0` → `15.2.0`. 옮겨 적을 양을 줄인다."""
+    if not text or text == "미설치":
+        return "-"
+    found = _VERSION_RE.findall(text)
+    return found[-1] if found else text.split()[0]
+
+
+def brief(checks: list[Check]) -> str:
+    """손으로 옮겨 적을 수 있게 압축한 출력.
+
+    폐쇄망은 파일 반출이 안 되므로 이 출력이 환경 정보를 밖으로 옮기는 유일한 수단이다.
+    타이핑 양이 곧 비용이라 줄 수와 글자 수를 모두 줄인다.
+    """
+    lookup = {(c.section, c.name): c for c in checks}
+    info = env.detect()
+
+    def value(section: str, name: str, *, short: bool = False) -> str:
+        check = lookup.get((section, name))
+        if check is None:
+            return "-"
+        text = check.value
+        if text in {"(unset)", "미설치", "미설정"}:
+            return "-"
+        return _short_version(text) if short else text
+
+    lines = [
+        f"idk {__version__} brief",
+        f"os      {info.label or '-'}  glibc={info.glibc or '-'}  "
+        f"kernel={info.kernel or '-'}  arch={info.arch or '-'}  wsl={'yes' if info.wsl else 'no'}",
+        f"shell   {info.shell or '-'}  TERM={info.term or '-'}  "
+        f"COLORTERM={info.colorterm or '-'}  LANG={info.lang or '-'}  "
+        f"utf8={'yes' if info.utf8 else 'NO'}",
+        f"python  running={info.python}  IDK_PYTHON={value('python', 'IDK_PYTHON')}",
+    ]
+    # 후보별 경로가 핵심이다 — IDK_PYTHON 에 적을 절대경로가 여기서 나온다.
+    candidates = [c for c in checks if c.section == "python" and c.name.startswith("후보 ")]
+    for index, check in enumerate(candidates, start=1):
+        name = check.name.removeprefix("후보 ")
+        lines.append(f"py.{index}    {name}={check.value}  {check.detail}")
+    if not candidates:
+        lines.append("py.1    (후보 없음)")
+
+    lines += [
+        "tools   "
+        + "  ".join(f"{n}={value('tools', n, short=True)}" for n in ("zellij", "xclip", "git")),
+        "build   "
+        + "  ".join(
+            f"{n}={value('build', n, short=True)}" for n in ("gcc", "g++", "make", "cmake")
+        ),
+    ]
+    mirror = next((c for c in checks if c.section == "mirror"), None)
+    if mirror is not None:
+        lines.append(f"mirror  {mirror.status}  {mirror.value}  {mirror.detail}".rstrip())
+    return "\n".join(lines)
+
+
 def exit_code(checks: list[Check], *, strict: bool) -> int:
     if not strict:
         return 0
     return 1 if any(c.status == FAIL for c in checks) else 0
 
 
-def main(*, as_json: bool = False, net: bool = False, strict: bool = False) -> int:
+def main(
+    *,
+    as_json: bool = False,
+    as_brief: bool = False,
+    net: bool = False,
+    strict: bool = False,
+) -> int:
     checks = collect(net=net)
     if as_json:
         import json
 
         json.dump(to_payload(checks), sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
         sys.stdout.write("\n")
+    elif as_brief:
+        sys.stdout.write(brief(checks) + "\n")
     else:
         render(checks)
     return exit_code(checks, strict=strict)

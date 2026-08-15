@@ -57,7 +57,8 @@ idk/
 ├─ AGENTS.md                 # 프로젝트 규약 (정본)
 ├─ CLAUDE.md -> AGENTS.md    # 심볼릭 링크
 ├─ docs/plan.md              # 이 문서
-├─ docs/closed-network-setup.md         # 반입·설치 체크리스트
+├─ docs/closed-network-setup.md  # 반입·설치 절차
+├─ docs/env-survey.md        # 폐쇄망에서 확인해 올 것 (파일 반출 불가 전제)
 ├─ pyproject.toml
 ├─ src/idk/
 │  ├─ __main__.py            # typer 앱 루트
@@ -270,8 +271,17 @@ idk mirror pipconf                       # index-url + extra-index-url 생성
 
 ### 7. `idk doctor`
 
-OS/커널/glibc/Python/컴파일러/zellij/xclip/locale/TERM + 미러 접속 가능 여부를 점검하고
-`--json` 으로 떠서 두 환경 결과를 diff 한다. "여기선 되는데 저기선 안 되는" 문제의 1차 진단.
+OS/커널/glibc/Python/컴파일러/zellij/xclip/locale/TERM + 미러 접속 가능 여부를 점검한다.
+"여기선 되는데 저기선 안 되는" 문제의 1차 진단.
+
+출력 3종:
+- 기본(표) — 화면에서 훑어보는 용도
+- `--json` — 파일을 꺼낼 수 있는 환경끼리 diff 하는 용도
+- `--brief` — **폐쇄망 전용.** 9줄로 압축해 손으로 옮겨 적는다
+
+> ⚠️ 원래 계획은 "양쪽에서 `--json` 을 떠서 diff" 였는데 **폐쇄망은 파일 반출이 불가능**해
+> 성립하지 않는다. 화면을 보고 타이핑하는 것이 유일한 경로라 `--brief` 를 추가했고,
+> 무엇을 적어 올지는 `docs/env-survey.md` 에 양식으로 정리했다.
 
 ---
 
@@ -343,23 +353,25 @@ idk ws up demo --print-layout            # 생성된 KDL 육안 검증
 # detach 후 재attach 로 ETX 끊김 시나리오 재현
 ```
 
-**폐쇄망 실환경 (반입 후)**
-1. `idk doctor` — glibc/Python/컴파일러/zellij/xclip/locale/TERM/미러 접속 확인
-2. WSL의 `idk doctor --json` 결과와 diff 해 환경 차이 목록화
+**폐쇄망 실환경 (반입 후)** — 절차와 양식은 `docs/env-survey.md`
+1. `idk --version` — 런처가 실제 tcsh/RHEL 에서 동작하는지. **여기가 1차 반입의 핵심 목적**
+2. `idk doctor --brief` — 9줄을 손으로 옮겨 적어 반출 (파일 반출 불가)
 3. 실제 Qt 프로젝트를 `workspaces.toml` 에 정의 → `idk ws up` → ETX 강제 종료 → 재접속 → 세션 복구 확인
-4. 실제 빌드 로그로 `idk build --file` 파싱 정확도 확인
+4. 실제 빌드 로그로 `idk build --file` 파싱 정확도 확인 (로그 반출이 불가하므로 현지에서)
 
 ---
 
-## 폐쇄망 사전 확인 항목 (Phase 0 진입 전 수집)
+## 폐쇄망 사전 확인 항목
 
-```bash
-which python3.10        # .csh source 후 절대경로 — IDK_PYTHON 에 사용
-locale                  # LANG이 UTF-8이 아니면 zellij/TUI 박스 문자가 깨짐
-echo $TERM; echo $COLORTERM
-dnf list available xclip xsel libX11-devel libXmu-devel autoconf automake libtool
-```
-추가로 아티팩토리 base URL + PyPI 저장소 2개의 repo key + 인증 방식(netrc/토큰) — Phase 5에서 필요.
+**→ `docs/env-survey.md` 로 이동했다.** (Phase 0 진입 전 수집이 원래 계획이었으나, Phase 0 은
+수집 없이 완료됐고 남은 항목들은 Phase 3·5 의 착수 조건이다.)
+
+핵심 제약이 하나 바뀌었다: **폐쇄망은 파일 반출이 불가능하다.** 버전·환경 정보를 사람이
+읽고 옮겨 적는 것만 가능하다. 그래서
+- `doctor --json` 양쪽 diff 전략 → `doctor --brief` 를 손으로 옮겨 적는 방식으로 대체
+- Phase 3 의 빌드 로그 fixture → 실제 로그를 꺼낼 수 없으므로 합성 로그로 시작하고,
+  파싱 정확도는 현지에서 `idk build --file` 로 확인
+- Phase 5 의 repo key 등 → 손으로 적어 오거나, 민감하면 형태만 확인
 
 ---
 
