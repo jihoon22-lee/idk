@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "idk"
 description = "Integrated Developer Kit — WSL / RHEL 양쪽에서 동일하게 동작하는 CLI/TUI 도구 모음"
-readme = "AGENTS.md"
+readme = "README.md"
 requires-python = ">=3.10"
 dynamic = ["version"]
 dependencies = [
