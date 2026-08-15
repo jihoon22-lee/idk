@@ -2,20 +2,8 @@
 
 폐쇄망(RHEL 8.10, ETX 접속, tcsh)에 `idk` 를 올리는 절차. **전 과정에서 root 권한이 필요 없다.**
 
----
-
-## 0. 반입 전에 폐쇄망에서 수집할 것
-
-```bash
-which python3.10        # .csh source 후 절대경로 — IDK_PYTHON 에 쓴다
-python3 -V              # 기본 python3 버전 (구버전일 것)
-locale                  # LANG 이 UTF-8 이 아니면 zellij/TUI 박스 문자가 깨진다
-echo $TERM; echo $COLORTERM
-dnf list available xclip xsel libX11-devel libXmu-devel autoconf automake libtool
-```
-
-Phase 5(`idk mirror`) 에 추가로 필요한 것: 아티팩토리 base URL, PyPI 저장소 2개의 repo key,
-인증 방식(netrc / 토큰).
+> **환경 정보를 확인해 오는 것이 목적이라면** [env-survey.md](env-survey.md) 를 볼 것.
+> 이 문서는 설치 절차만 다룬다.
 
 ---
 
@@ -83,12 +71,15 @@ idk doctor
 - `tools / zellij` 가 ok
 - `tools / xclip` 이 warn 이어도 정상 — Shift+드래그 복사 경로로 폴백한다
 
-WSL 에서 뜬 결과와 비교하면 환경 차이가 바로 보인다:
+환경 정보를 밖으로 가져가려면 `--brief` 를 쓴다:
 
 ```bash
-idk doctor --json > ~/doctor-closed.json     # 폐쇄망에서
-diff <(jq -S . doctor-wsl.json) <(jq -S . doctor-closed.json)
+idk doctor --brief
 ```
+
+**`--json` 을 떠서 diff 하는 방법은 쓸 수 없다** — 폐쇄망은 파일 반출이 불가능하다.
+`--brief` 는 그래서 만든 출력으로, 화면을 보고 손으로 옮겨 적기 좋게 9줄로 압축돼 있다.
+무엇을 적어 와야 하는지는 [env-survey.md](env-survey.md) 에 양식으로 정리돼 있다.
 
 ---
 

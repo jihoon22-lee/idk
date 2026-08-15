@@ -61,6 +61,55 @@ def test_mirror_with_net_reports_unreachable_host():
     assert check.status == doctor.FAIL
 
 
+def test_short_version_extracts_the_number():
+    assert doctor._short_version("gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0") == "15.2.0"
+    assert doctor._short_version("git version 2.53.0") == "2.53.0"
+    assert doctor._short_version("GNU Make 4.4.1") == "4.4.1"
+    assert doctor._short_version("zellij 0.44.3") == "0.44.3"
+    assert doctor._short_version("미설치") == "-"
+    assert doctor._short_version("") == "-"
+
+
+def test_brief_is_short_enough_to_transcribe_by_hand():
+    """폐쇄망은 파일 반출이 안 돼 이 출력을 손으로 옮겨 적는다. 길면 쓸모가 없다."""
+    text = doctor.brief(doctor.collect())
+    lines = text.splitlines()
+    assert len(lines) <= 15, f"{len(lines)} 줄은 옮겨 적기 너무 길다"
+    assert all(len(ln) <= 120 for ln in lines), "한 줄이 너무 길다"
+
+
+def test_brief_covers_what_the_survey_needs():
+    text = doctor.brief(doctor.collect())
+    for token in ("idk ", "os ", "shell ", "python ", "py.1", "tools ", "build ", "mirror "):
+        assert token in text, f"{token!r} 가 빠졌다"
+    assert "glibc=" in text
+    assert "LANG=" in text
+    assert "utf8=" in text
+
+
+def test_brief_reports_python_candidate_paths():
+    """IDK_PYTHON 에 적을 절대경로가 여기서 나와야 한다 — 반출의 핵심 정보."""
+    checks = doctor.collect()
+    candidates = [c for c in checks if c.section == "python" and c.name.startswith("후보 ")]
+    text = doctor.brief(checks)
+    assert candidates, "이 머신에 후보가 하나는 있어야 한다"
+    for check in candidates:
+        assert check.detail in text
+
+
+def test_brief_marks_missing_tools_with_a_dash():
+    checks = [
+        doctor.Check("tools", "zellij", doctor.WARN, "미설치"),
+        doctor.Check("tools", "xclip", doctor.WARN, "미설치"),
+    ]
+    assert "zellij=-" in doctor.brief(checks)
+
+
+def test_brief_survives_an_empty_check_list():
+    text = doctor.brief([])
+    assert "py.1    (후보 없음)" in text
+
+
 def test_exit_code_is_zero_unless_strict():
     checks = [doctor.Check("system", "x", doctor.FAIL, "boom")]
     assert doctor.exit_code(checks, strict=False) == 0

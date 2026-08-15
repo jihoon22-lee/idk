@@ -44,7 +44,10 @@ def _root(
 @app.command("doctor")
 def doctor_cmd(  # 모듈 idk.doctor 와 이름이 겹치지 않게 _cmd 접미사를 쓴다
     as_json: Annotated[
-        bool, typer.Option("--json", help="JSON 으로 출력 (두 환경 diff 용)")
+        bool, typer.Option("--json", help="JSON 으로 출력 (파일을 꺼낼 수 있는 환경끼리 diff 용)")
+    ] = False,
+    as_brief: Annotated[
+        bool, typer.Option("--brief", help="손으로 옮겨 적기 좋은 압축 출력 (폐쇄망용)")
     ] = False,
     net: Annotated[
         bool, typer.Option("--net", help="mirror.toml 의 아티팩토리 접속까지 확인")
@@ -52,7 +55,10 @@ def doctor_cmd(  # 모듈 idk.doctor 와 이름이 겹치지 않게 _cmd 접미�
     strict: Annotated[bool, typer.Option("--strict", help="fail 이 있으면 exit 1")] = False,
 ) -> None:
     """환경 진단 — OS/glibc/python/zellij/locale/미러 접속을 점검한다."""
-    raise typer.Exit(doctor.main(as_json=as_json, net=net, strict=strict))
+    if as_json and as_brief:
+        typer.echo("--json 과 --brief 는 함께 쓸 수 없습니다.", err=True)
+        raise typer.Exit(2)
+    raise typer.Exit(doctor.main(as_json=as_json, as_brief=as_brief, net=net, strict=strict))
 
 
 def _best_python() -> str | None:

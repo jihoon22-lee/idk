@@ -1,7 +1,12 @@
 # idk — Integrated Developer Kit
 
 WSL Ubuntu 24.04 와 폐쇄망 RHEL 8.10(ETX 접속) 양쪽에서 동일하게 동작하는 CLI/TUI 도구 모음.
-상세 계획은 docs/plan.md 참조.
+
+| 문서 | 내용 |
+|---|---|
+| `docs/plan.md` | 작업 계획서(정본) — 설계 근거와 Phase 0~5 |
+| `docs/closed-network-setup.md` | 반입·설치 절차 |
+| `docs/env-survey.md` | 폐쇄망에서 확인해 올 것 |
 
 ## 반드시 지킬 규약
 - **Python 3.10 하한.** 3.11+ 문법 금지. `tomllib` 대신 `tomli`.
@@ -27,6 +32,10 @@ WSL Ubuntu 24.04 와 폐쇄망 RHEL 8.10(ETX 접속) 양쪽에서 동일하게 �
 ## 문서 규약
 - 이 파일(AGENTS.md)이 규약의 정본. CLAUDE.md 는 이 파일로의 심볼릭 링크다 — **CLAUDE.md 를
   직접 수정하지 말 것.** 규약 변경은 AGENTS.md 에서만.
+- **공개 저장소다.** 사내 시스템 명칭을 쓰지 않는다 — 폐쇄망 쪽 환경은 "폐쇄망" 으로만
+  부른다. RHEL 8.10·tcsh·glibc 2.28 같은 일반 기술 사실은 설계 근거라 그대로 둔다.
+- **폐쇄망은 파일 반출이 불가능하다.** 환경 정보를 가져오는 절차를 설계할 때 파일을
+  꺼내는 것을 전제하지 말 것 (그래서 `doctor --json` diff 가 아니라 `--brief` 다).
 
 ## 검증
 ```bash
