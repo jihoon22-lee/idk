@@ -59,6 +59,8 @@ idk/
 ├─ docs/plan.md              # 이 문서
 ├─ docs/closed-network-setup.md  # 반입·설치 절차
 ├─ docs/env-survey.md        # 폐쇄망에서 확인해 올 것 (파일 반출 불가 전제)
+├─ docs/spec-ws-run.md       # Phase 1 상세 명세
+├─ docs/spec-dt.md           # Phase 2 상세 명세
 ├─ pyproject.toml
 ├─ src/idk/
 │  ├─ __main__.py            # typer 앱 루트
@@ -158,11 +160,17 @@ idk doctor
 
 ### 1. `idk ws` — 워크스페이스 / 터미널 매니저 (최우선)
 
+> 구현 단계의 상세 명세는 [spec-ws-run.md](spec-ws-run.md) 에 있다. 아래는 설계 의도다.
+
 가장 아픈 지점. ETX 세션이 끊겨도 zellij 세션은 살아있어 재접속 시 그대로 복구된다.
 
 - `workspaces.toml` 에 프로젝트별 정의: 이름, cwd, pane 목록(명령·크기·탭 구성)
 - `idk ws` → Textual TUI: 정의된 워크스페이스 + 살아있는 zellij 세션을 한 화면에, Enter로 attach/생성
-- `idk ws up <name>` → 정의를 **KDL 레이아웃 텍스트로 렌더**해 임시 파일에 쓰고 `zellij --layout <file> --session <name>`
+- `idk ws up <name>` → 정의를 **KDL 레이아웃 텍스트로 렌더**해 임시 파일에 쓰고
+  `zellij --new-session-with-layout <file> --session <name>`
+  > ⚠️ 초안에 적었던 `--layout` 은 **틀렸다.** 그 플래그는 새 세션을 만드는 게 아니라
+  > 기존 세션에 탭을 추가하는 것이라 세션이 없으면 `There is no active session!` 로 실패한다.
+  > zellij 0.44.3 실측으로 확인했다 — 자세한 내용은 [spec-ws-run.md](spec-ws-run.md) §1.
 - `idk ws ls` / `idk ws kill <name>` / `idk ws attach <name>` (내부적으로 `zellij attach --create`)
 - `idk ws up <name> --print-layout` — 생성된 KDL 육안 검증용
 - 셸: zellij `default_shell` 을 설정에서 지정 가능(기본 `$SHELL`). tcsh는 스크립팅이 빈약하므로
@@ -182,6 +190,8 @@ idk doctor
 
 ### 3. `idk dt` — 개발 도구 모음
 
+> 구현 단계의 상세 명세는 [spec-dt.md](spec-dt.md) 에 있다.
+
 **의존성 0 (stdlib만).** devbox `apps/developer-toolbox/src/tools/index.tsx` 의 목록을 그대로 옮긴다.
 Rust 원본(`apps/developer-toolbox/src-tauri/src/commands/tools.rs`)의 로직은 전부 stdlib에 1:1 대응된다.
 
@@ -192,7 +202,7 @@ Rust 원본(`apps/developer-toolbox/src-tauri/src/commands/tools.rs`)의 로직�
 | URL encode / decode | `urllib.parse` |
 | Timestamp 변환 | `datetime` |
 | Case 변환 | `re` |
-| Hash (md5/sha256/sha512) | `hashlib` |
+| Hash (md5/sha1/sha256/sha512) | `hashlib` |
 | UUID v4 | `uuid` |
 | Regex 테스터 | `re` |
 | Text diff | `difflib` |
@@ -310,8 +320,8 @@ OS/커널/glibc/Python/컴파일러/zellij/xclip/locale/TERM + 미러 접속 가
 | Phase | 내용 | 비고 |
 |---|---|---|
 | **0** ✅ | 저장소 스캐폴딩, `pyproject.toml`, `config.py`/`env.py`/`httpc.py`, `idk doctor`, `idk env`, `build-pyz.sh`/`smoke.sh`/`fetch-vendor.sh`, CI | 완료. sh 프리앰블 폴리글롯 검증 통과 — 2파일 분리 불필요 |
-| **1** | `idk ws` + `idk run` | 가장 아픈 지점. 둘이 결합되어 있어 함께 |
-| **2** | `idk dt` | 의존성 0, 명세가 이미 있어 가장 빠른 성과 |
+| **1** | `idk ws` + `idk run` | 가장 아픈 지점. 둘이 결합되어 있어 함께. **상세 명세: [spec-ws-run.md](spec-ws-run.md)** |
+| **2** | `idk dt` | 의존성 0, 명세가 이미 있어 가장 빠른 성과. **상세 명세: [spec-dt.md](spec-dt.md)** |
 | **3** | `idk build` | 파서 단위 테스트 비중 큼 |
 | **4** | `idk log` | |
 | **5** | `idk mirror` | 실제 아티팩토리 URL·repo key 확보 후 |

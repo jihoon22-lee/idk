@@ -80,6 +80,8 @@ idk doctor
 | [docs/plan.md](docs/plan.md) | 작업 계획서(정본) — 설계 근거와 Phase 0~5 |
 | [docs/closed-network-setup.md](docs/closed-network-setup.md) | 폐쇄망 반입·설치 절차 |
 | [docs/env-survey.md](docs/env-survey.md) | 폐쇄망에서 확인해 올 항목 (답변 양식 포함) |
+| [docs/spec-ws-run.md](docs/spec-ws-run.md) | Phase 1 상세 명세 — `idk ws` · `idk run` |
+| [docs/spec-dt.md](docs/spec-dt.md) | Phase 2 상세 명세 — `idk dt` |
 | [AGENTS.md](AGENTS.md) | 프로젝트 규약 (LLM 협업 포함) |
 | [CHANGELOG.md](CHANGELOG.md) | 변경 이력 |
 
