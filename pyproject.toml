@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "idk"
+description = "Integrated Developer Kit — WSL / RHEL 양쪽에서 동일하게 동작하는 CLI/TUI 도구 모음"
+readme = "AGENTS.md"
+requires-python = ">=3.10"
+dynamic = ["version"]
+dependencies = [
+    # 전부 py3-none-any 순수 파이썬 휠이어야 한다 (build-pyz.sh 가 검사한다).
+    "typer>=0.12",
+    "rich>=13.7",
+    "textual>=0.60",
+    "tomli>=2.0",
+    "tomli-w>=1.0",
+]
+
+[project.scripts]
+idk = "idk.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0", "shiv>=1.0.6"]
+
+[tool.hatch.version]
+path = "src/idk/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/idk"]
+
+[tool.ruff]
+target-version = "py310"          # 3.11+ 문법을 lint 실패로 만든다
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle / pyflakes
+    "I",             # isort
+    "UP",            # pyupgrade (target-version 이 py310 이라 3.10 이하로만 제안)
+    "B",             # bugbear
+    "SIM",           # simplify
+    "TID",           # tidy-imports (banned-api)
+    "RUF",
+]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"tomllib".msg = "tomllib 은 3.11+ 다. 폐쇄망은 3.10 이므로 tomli 를 쓴다 (AGENTS.md)."
+"requests".msg = "certifi 번들 CA 때문에 사내 TLS 인터셉션 환경에서 깨진다. idk.httpc 를 쓴다."
+"httpx".msg = "certifi 번들 CA 때문에 사내 TLS 인터셉션 환경에서 깨진다. idk.httpc 를 쓴다."
+"certifi".msg = "시스템 CA 를 써야 한다. ssl.create_default_context() (idk.httpc)."
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

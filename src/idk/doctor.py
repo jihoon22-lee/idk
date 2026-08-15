@@ -1,0 +1,230 @@
+"""`idk doctor` — 두 환경의 차이를 한 장으로 뽑는 진단.
+
+`--json` 결과를 WSL/폐쇄망 양쪽에서 떠서 diff 하면 "여기선 되는데 저기선 안 되는" 문제의
+1차 원인이 대개 바로 보인다.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import sys
+from dataclasses import asdict, dataclass
+from typing import Any
+
+from . import MIN_PYTHON, __version__, config, env, httpc
+
+OK = "ok"
+WARN = "warn"
+FAIL = "fail"
+INFO = "info"
+SKIP = "skip"
+
+STATUS_STYLE = {
+    OK: "green",
+    WARN: "yellow",
+    FAIL: "red",
+    INFO: "cyan",
+    SKIP: "dim",
+}
+
+
+@dataclass(frozen=True)
+class Check:
+    section: str
+    name: str
+    status: str
+    value: str
+    detail: str = ""
+
+
+def _tool_check(section: str, name: str, *, required: bool, note: str = "") -> Check:
+    path = shutil.which(name)
+    if not path:
+        return Check(section, name, FAIL if required else WARN, "미설치", note)
+    version = env.tool_version(name) or ""
+    return Check(section, name, OK, version or path, path)
+
+
+def _system_checks(info: env.SystemInfo) -> list[Check]:
+    return [
+        Check("system", "os", INFO, info.os_name or info.label, info.label),
+        Check("system", "kernel", INFO, info.kernel, info.arch),
+        Check("system", "wsl", INFO, "yes" if info.wsl else "no"),
+        Check(
+            "system",
+            "glibc",
+            INFO if info.glibc else WARN,
+            info.glibc or "확인 불가",
+            "RHEL 8.10=2.28 / Ubuntu 24.04=2.39",
+        ),
+        Check("system", "shell", INFO, info.shell or "(unset)", "로그인 셸"),
+    ]
+
+
+def _python_checks(info: env.SystemInfo) -> list[Check]:
+    min_str = ".".join(str(p) for p in MIN_PYTHON)
+    checks = [
+        Check(
+            "python",
+            "running",
+            OK if info.python_ok else FAIL,
+            info.python,
+            f"{info.python_executable} (하한 {min_str})",
+        )
+    ]
+    idk_python = os.environ.get("IDK_PYTHON")
+    checks.append(
+        Check(
+            "python",
+            "IDK_PYTHON",
+            INFO if idk_python else SKIP,
+            idk_python or "(unset)",
+            "런처가 인터프리터 탐색을 건너뛴다"
+            if idk_python
+            else "미설정이면 후보를 순서대로 탐색",
+        )
+    )
+    for name, path, version in env.python_candidates():
+        ver_str = ".".join(str(p) for p in version) if version else "확인 불가"
+        usable = bool(version) and version[: len(MIN_PYTHON)] >= MIN_PYTHON
+        checks.append(
+            Check("python", f"후보 {name}", OK if usable else WARN, ver_str, path),
+        )
+    if not any(c.name.startswith("후보 ") and c.status == OK for c in checks):
+        checks.append(
+            Check(
+                "python",
+                "런처",
+                FAIL,
+                f"{min_str}+ 후보 없음",
+                "IDK_PYTHON 에 절대경로를 지정해야 한다",
+            )
+        )
+    return checks
+
+
+def _tool_checks() -> list[Check]:
+    checks = [
+        _tool_check("tools", "zellij", required=True, note="idk ws 에 필요 — docs/closed-network-setup.md"),
+        _tool_check("tools", "xclip", required=False, note="없으면 Shift+드래그 복사로 폴백"),
+        _tool_check("tools", "git", required=False),
+    ]
+    checks += [_tool_check("build", n, required=False) for n in ("gcc", "g++", "make", "cmake")]
+    return checks
+
+
+def _terminal_checks(info: env.SystemInfo) -> list[Check]:
+    return [
+        Check("terminal", "TERM", INFO if info.term else WARN, info.term or "(unset)"),
+        Check("terminal", "COLORTERM", INFO, info.colorterm or "(unset)"),
+        Check(
+            "terminal",
+            "locale",
+            OK if info.utf8 else WARN,
+            info.lang or "(unset)",
+            "" if info.utf8 else "UTF-8 이 아니면 TUI 박스 문자가 깨진다",
+        ),
+    ]
+
+
+def _config_checks() -> list[Check]:
+    directory = config.config_dir()
+    present = [p.name for p in config.existing_configs()]
+    return [
+        Check(
+            "config",
+            "dir",
+            OK if directory.exists() else SKIP,
+            str(directory),
+            "존재" if directory.exists() else "아직 없음 (기본값으로 동작)",
+        ),
+        Check(
+            "config",
+            "files",
+            INFO if present else SKIP,
+            ", ".join(present) if present else "(없음)",
+        ),
+    ]
+
+
+def _mirror_checks(*, net: bool) -> list[Check]:
+    """mirror.toml 의 base_url 에 실제로 닿는지. 파일이 없으면 조용히 skip."""
+    try:
+        cfg = config.load("mirror.toml")
+    except config.ConfigError as exc:
+        return [Check("mirror", "mirror.toml", FAIL, "파싱 실패", str(exc))]
+    base_url = (cfg.get("artifactory") or {}).get("base_url")
+    if not base_url:
+        return [Check("mirror", "base_url", SKIP, "미설정", "~/.config/idk/mirror.toml (Phase 5)")]
+    if not net:
+        return [Check("mirror", "base_url", SKIP, str(base_url), "--net 을 주면 접속까지 확인한다")]
+    try:
+        resp = httpc.request(str(base_url), timeout=5.0, auth="netrc")
+    except httpc.HttpError as exc:
+        return [Check("mirror", "base_url", FAIL, str(base_url), str(exc))]
+    status = OK if resp.status < 500 else WARN
+    return [Check("mirror", "base_url", status, str(base_url), f"HTTP {resp.status}")]
+
+
+def collect(*, net: bool = False) -> list[Check]:
+    info = env.detect()
+    return [
+        *_system_checks(info),
+        *_python_checks(info),
+        *_tool_checks(),
+        *_terminal_checks(info),
+        *_config_checks(),
+        *_mirror_checks(net=net),
+    ]
+
+
+def to_payload(checks: list[Check]) -> dict[str, Any]:
+    return {
+        "idk": __version__,
+        "env": env.detect().to_dict(),
+        "checks": [asdict(c) for c in checks],
+    }
+
+
+def render(checks: list[Check]) -> None:
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
+    table.add_column("")
+    table.add_column("항목")
+    table.add_column("값", overflow="fold")
+    table.add_column("비고", style="dim", overflow="fold")
+
+    current = None
+    for check in checks:
+        if check.section != current:
+            current = check.section
+            table.add_row(f"[bold]{current}[/bold]", "", "", "")
+        mark = f"[{STATUS_STYLE[check.status]}]{check.status:<4}[/]"
+        table.add_row(f"  {mark}", check.name, check.value, check.detail)
+    console.print(table)
+
+    failures = sum(1 for c in checks if c.status == FAIL)
+    warnings = sum(1 for c in checks if c.status == WARN)
+    console.print(f"\nfail {failures} · warn {warnings} · 총 {len(checks)}")
+
+
+def exit_code(checks: list[Check], *, strict: bool) -> int:
+    if not strict:
+        return 0
+    return 1 if any(c.status == FAIL for c in checks) else 0
+
+
+def main(*, as_json: bool = False, net: bool = False, strict: bool = False) -> int:
+    checks = collect(net=net)
+    if as_json:
+        import json
+
+        json.dump(to_payload(checks), sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+    else:
+        render(checks)
+    return exit_code(checks, strict=strict)

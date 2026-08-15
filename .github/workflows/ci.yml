@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Ubuntu 24.04 apt 에는 3.10 이 없다. 산출물이 돌아야 하는 버전이므로 직접 확보한다.
+      - run: uv python install 3.10 3.9
+
+      - name: ruff
+        run: |
+          uvx ruff check .
+          uvx ruff format --check .
+
+      - name: pytest (3.10 — 폐쇄망과 같은 버전)
+        run: uv run --python 3.10 --group dev pytest
+
+      - name: pytest (3.12 — WSL 개발 버전)
+        run: uv run --python 3.12 --group dev pytest
+
+  artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv python install 3.10 3.9
+
+      - name: build-pyz
+        run: ./scripts/build-pyz.sh
+
+      # 런처 폴백까지 포함한 아티팩트 스모크. 반입 전 게이트와 동일한 스크립트다.
+      - name: smoke
+        run: ./scripts/smoke.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: idk-pyz
+          path: dist/idk.pyz
