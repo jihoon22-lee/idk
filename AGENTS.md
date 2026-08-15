@@ -4,9 +4,15 @@ WSL Ubuntu 24.04 와 폐쇄망 RHEL 8.10(ETX 접속) 양쪽에서 동일하게 �
 
 | 문서 | 내용 |
 |---|---|
+| `README.md` | 저장소 첫 화면 — 무엇이고 왜 이렇게 만들었나 |
+| `docs/GUIDE.md` | 사용법 — 명령어와 설정 파일 |
+| `docs/ARCHITECTURE.md` | 구조 — 폴리글롯·빌드 파이프라인·**새 서브커맨드 추가법** |
 | `docs/plan.md` | 작업 계획서(정본) — 설계 근거와 Phase 0~5 |
 | `docs/closed-network-setup.md` | 반입·설치 절차 |
 | `docs/env-survey.md` | 폐쇄망에서 확인해 올 것 |
+| `CHANGELOG.md` | 변경 이력 + 릴리스 방법 |
+
+새 서브커맨드를 추가할 때는 `docs/ARCHITECTURE.md` §6 을 따른다.
 
 ## 반드시 지킬 규약
 - **Python 3.10 하한.** 3.11+ 문법 금지. `tomllib` 대신 `tomli`.
