@@ -54,3 +54,6 @@ select = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "zellij: zellij 바이너리가 PATH 에 있을 때만 도는 통합 테스트 (ci.yml integration 잡)",
+]

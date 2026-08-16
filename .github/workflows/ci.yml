@@ -48,3 +48,24 @@ jobs:
         with:
           name: idk-pyz
           path: dist/idk.pyz
+
+  integration:
+    # zellij 실제 바이너리 대상 통합 테스트 (@pytest.mark.zellij).
+    # vendor/ 는 gitignored 라 매 실행 시 fetch-vendor.sh 로 받는다 (업스트림 체크섬 대조).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+      - run: uv python install 3.10
+
+      - name: zellij 확보
+        run: |
+          ./scripts/fetch-vendor.sh
+          mkdir -p /tmp/zellij
+          tar xzf vendor/zellij-*.tar.gz -C /tmp/zellij
+          echo "/tmp/zellij" >> "$GITHUB_PATH"
+
+      - name: 통합 테스트
+        run: uv run --python 3.10 --group dev pytest -m zellij

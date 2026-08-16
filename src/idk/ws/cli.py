@@ -20,15 +20,21 @@ from idk.ws import layout as layoutmod
 from idk.ws import model
 from idk.ws.backends import zellij
 
-ws_app = typer.Typer(
-    name="ws",
-    help="워크스페이스/터미널 매니저 (zellij 백엔드)",
-    no_args_is_help=True,
-)
+ws_app = typer.Typer(name="ws", help="워크스페이스/터미널 매니저 (zellij 백엔드)")
 
 EXIT_ERROR = 1
 EXIT_CONFLICT = 3
 EXIT_NO_ZELLIJ = 4
+
+
+@ws_app.callback(invoke_without_command=True)
+def _ws_default(ctx: typer.Context) -> None:
+    """서브커맨드 없이 `idk ws` 면 TUI 를 띄운다."""
+    if ctx.invoked_subcommand is not None:
+        return
+    from idk.ws import tui
+
+    tui.run()
 
 
 def _guard_zellij_missing(fn):
@@ -130,11 +136,8 @@ def _do_up(name: str, ws: model.Workspace, *, attach: bool, print_layout: bool) 
         typer.echo(f"세션 '{name}' 을 만들었습니다. `zellij attach {name}` 로 붙으세요.")
 
 
-@ws_app.command("ls")
-def ls_cmd(
-    as_json: Annotated[bool, typer.Option("--json", help="JSON 으로 출력")] = False,
-) -> None:
-    """정의된 워크스페이스와 살아있는 세션을 합쳐 보여준다."""
+def list_rows() -> list[dict[str, object]]:
+    """정의된 워크스페이스와 살아있는 세션을 합친 행 목록. ls 명령과 TUI 가 공유한다."""
     try:
         sessions = _sessions()
     except zellij.ZellijMissing:
@@ -160,6 +163,25 @@ def ls_cmd(
                 "desc": ws.desc if ws else "",
             }
         )
+    return rows
+
+
+def attach_or_create(name: str) -> None:
+    """attach. 세션이 없으면 정의로 생성 후 attach. (attach 명령과 TUI Enter 가 공유)"""
+    sessions = _sessions()
+    if name in sessions:
+        zellij.attach(name)
+        return
+    ws = _find_workspace(name)
+    _do_up(name, ws, attach=True, print_layout=False)
+
+
+@ws_app.command("ls")
+def ls_cmd(
+    as_json: Annotated[bool, typer.Option("--json", help="JSON 으로 출력")] = False,
+) -> None:
+    """정의된 워크스페이스와 살아있는 세션을 합쳐 보여준다."""
+    rows = list_rows()
 
     if as_json:
         typer.echo(json.dumps(rows, ensure_ascii=False, indent=2))
@@ -199,17 +221,7 @@ def attach_cmd(name: str) -> None:
     if _is_nested():
         typer.echo("zellij 세션 안에서는 attach 할 수 없습니다.", err=True)
         raise typer.Exit(EXIT_CONFLICT)
-
-    sessions = _sessions()
-    if name in sessions:
-        try:
-            zellij.attach(name)
-        except zellij.ZellijMissing:
-            raise
-        return
-
-    ws = _find_workspace(name)
-    _do_up(name, ws, attach=True, print_layout=False)
+    attach_or_create(name)
 
 
 @ws_app.command("kill")
