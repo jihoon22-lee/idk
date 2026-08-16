@@ -14,6 +14,7 @@ import typer
 
 from . import MIN_PYTHON, __version__, doctor
 from . import env as envmod
+from .ws import cli as ws_cli
 
 app = typer.Typer(
     name="idk",
@@ -21,6 +22,8 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+app.add_typer(ws_cli.ws_app, name="ws")
 
 
 def _version_callback(value: bool) -> None:
