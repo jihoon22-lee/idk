@@ -6,10 +6,10 @@ import datetime as _dt
 import time
 
 
-def parse(text: str) -> float:
+def parse(text: str, *, ms: bool = False) -> float:
     """epoch(정수·자릿수로 초/밀리초 추정) 또는 ISO 8601 → epoch 초(float).
 
-    `now` 는 현재 시각이다.
+    `now` 는 현재 시각, `ms=True` 면 숫자 입력을 밀리초로 강제한다.
     """
     value = text.strip()
     if value == "now":
@@ -17,7 +17,7 @@ def parse(text: str) -> float:
     if value.isdigit():
         number = int(value)
         # 자릿수로 초/밀리초 추정: 10자리 = 초, 13자리 = 밀리초
-        if len(value) > 10:
+        if ms or len(value) > 10:
             return number / 1000.0
         return float(number)
     return _parse_iso(value)
