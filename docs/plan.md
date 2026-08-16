@@ -320,13 +320,14 @@ OS/커널/glibc/Python/컴파일러/zellij/xclip/locale/TERM + 미러 접속 가
 | Phase | 내용 | 비고 |
 |---|---|---|
 | **0** ✅ | 저장소 스캐폴딩, `pyproject.toml`, `config.py`/`env.py`/`httpc.py`, `idk doctor`, `idk env`, `build-pyz.sh`/`smoke.sh`/`fetch-vendor.sh`, CI | 완료. sh 프리앰블 폴리글롯 검증 통과 — 2파일 분리 불필요 |
-| **1** | `idk ws` + `idk run` | 가장 아픈 지점. 둘이 결합되어 있어 함께. **상세 명세: [spec-ws-run.md](spec-ws-run.md)** |
-| **2** | `idk dt` | 의존성 0, 명세가 이미 있어 가장 빠른 성과. **상세 명세: [spec-dt.md](spec-dt.md)** |
+| **1** ✅ | `idk ws` + `idk run` | 완료 (v0.1.0~0.1.1). 모델·KDL·백엔드·CLI·TUI. 상세 명세: [spec-ws-run.md](spec-ws-run.md) |
+| **2** ✅ | `idk dt` | 완료 (v0.1.0~0.1.1). 13개 도구 + TUI. `src/idk/dt/` 의존성 0. 상세 명세: [spec-dt.md](spec-dt.md) |
 | **3** | `idk build` | 파서 단위 테스트 비중 큼 |
 | **4** | `idk log` | |
 | **5** | `idk mirror` | 실제 아티팩토리 URL·repo key 확보 후 |
 
 **Phase 0~2를 1차 반입 대상으로 삼고**, 폐쇄망에서 실제로 써본 뒤 3~5의 우선순위를 조정한다.
+(Phase 1·2 는 `v0.1.0` 으로 반입 가능. 실사용 피드백 반영분은 `v0.1.1`.)
 
 ---
 
