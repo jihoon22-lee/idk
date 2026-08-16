@@ -7,9 +7,19 @@
 `idk.pyz` 는 사람이 손으로 반입하는 파일이라 **"지금 들고 들어간 게 어느 버전인지"** 가
 중요하다. `idk --version` 이 여기 적힌 버전과 일치한다.
 
-## [Unreleased]
+## [0.1.0] - 2026-08-16
 
 ### Added
+- **`idk ws`** — 워크스페이스/터미널 매니저 (zellij 백엔드). `ls`/`up`/`attach`/`kill` + TUI.
+  - `workspaces.toml` 을 zellij KDL 레이아웃으로 렌더링해 선언적으로 세션을 재현.
+  - 접속이 끊겨도 세션이 살아 재접속하면 그대로 복구 (ETX 끊김 복원).
+  - detached 생성은 사설 pty + SIGTERM(zellij 기본 `on_force_close "detach"`)으로 구현.
+- **`idk run`** — 명령 런처(스니펫). `snippets.toml` 의 명령을 `{{param}}` 치환으로 실행.
+  - 기본 `shlex.quote()` (인젝션 방지), `raw=true` 만 인용 생략. `--pane` 으로 zellij 새 pane 실행.
+  - 퍼지 검색 TUI (부분문자열→subsequence).
+- **`idk dt`** — 개발 도구 모음. json fmt/min, b64, url, ts, case 4종, hash 4종, uuid, regex, diff, jwt + TUI.
+  - `src/idk/dt/` 는 **의존성 0(stdlib 만)** — 폐쇄망에서 그 디렉터리만 꺼내 아무 python 으로 돌릴 수 있다.
+  - 파이프 친화: `cat x.json | idk dt json fmt`.
 - **`idk doctor`** — 환경 진단. OS/glibc/커널, python 후보와 절대경로, zellij·xclip·컴파일러,
   TERM·LANG, 설정 파일, 아티팩토리 미러 접속을 점검한다.
   - `--brief` — 9줄로 압축한 출력. **폐쇄망은 파일 반출이 불가능**해 화면을 보고 손으로
@@ -34,7 +44,7 @@
 - **`src/idk/config.py`** — `~/.config/idk/*.toml` 로드/저장 (XDG, `tomli`).
 - 문서: `README.md`, `docs/ARCHITECTURE.md`, `docs/GUIDE.md`, `docs/plan.md`,
   `docs/closed-network-setup.md`, `docs/env-survey.md`, `AGENTS.md`.
-- CI: ruff + pytest(3.10/3.12) + 아티팩트 빌드·스모크. 릴리스 워크플로(태그 `v*`).
+- CI: ruff + pytest(3.10/3.12) + 아티팩트 빌드·스모크 + zellij 통합 테스트 잡. 릴리스 워크플로(태그 `v*`).
 
 ### Notes
 - **Python 3.10 하한.** 폐쇄망 설치 버전이 3.10 이라 `tomllib`(3.11+) 대신 `tomli` 를 쓰고,
@@ -58,4 +68,4 @@ git tag v0.1.0 && git push origin v0.1.0
 워크플로가 태그와 `__version__` 이 일치하는지 확인하고, 빌드·스모크를 돌린 뒤
 `idk.pyz` 와 `idk.pyz.sha256` 을 릴리스에 붙이고 이 파일의 해당 섹션을 릴리스 노트로 쓴다.
 
-[Unreleased]: https://github.com/jihoon22-lee/idk/commits/main
+[0.1.0]: https://github.com/jihoon22-lee/idk/releases/tag/v0.1.0

@@ -122,8 +122,8 @@ idk env --bindir /opt/tools/bin
 | 파일 | 쓰는 곳 | 상태 |
 |---|---|---|
 | `mirror.toml` | 아티팩토리 접속 정보 | `doctor --net` 이 읽는다. `idk mirror` 는 Phase 5 |
-| `workspaces.toml` | 워크스페이스 정의 | Phase 1 |
-| `snippets.toml` | 명령 스니펫 | Phase 1 |
+| `workspaces.toml` | 워크스페이스 정의 | `idk ws` |
+| `snippets.toml` | 명령 스니펫 | `idk run` |
 | `logview.toml` | 로그 하이라이팅 규칙 | Phase 4 |
 
 `mirror.toml` 예시:
@@ -141,15 +141,95 @@ auth     = "netrc"          # 또는 token_env = "ARTIFACTORY_TOKEN"
 
 ---
 
+## `idk ws` — 워크스페이스 / 터미널 매니저
+
+`workspaces.toml` 에 프로젝트별 레이아웃을 정의하고 zellij 세션으로 재현한다. 접속이
+끊겨도 세션은 살아 있어 재접속하면 그대로 복구된다.
+
+```toml
+[[workspace]]
+name  = "qt-app"
+cwd   = "~/src/qt-app"
+shell = "bash"
+
+  [[workspace.tab]]
+  name  = "build"
+  split = "vertical"
+    [[workspace.tab.pane]]
+    command = "make -j8"
+    size    = "60%"
+```
+
+```bash
+idk ws                 # TUI: 정의 + 살아있는 세션
+idk ws ls              # 표 (--json)
+idk ws up qt-app       # 세션 생성 후 attach
+idk ws up qt-app --print-layout   # KDL 만 출력
+idk ws attach qt-app   # 붙기 (없으면 정의로 생성)
+idk ws kill qt-app --purge
+```
+
+zellij 가 없으면 설치 안내 후 exit 4 로 끝난다.
+
+## `idk run` — 명령 런처(스니펫)
+
+`tcsh` alias 가 담기 어려운 긴 빌드/배포/ssh 명령을 `snippets.toml` 에 담아 둔다.
+
+```toml
+[[snippet]]
+name = "deploy"
+cmd  = "ssh {{host}} 'systemctl restart {{svc}}'"
+
+  [snippet.params.host]
+  desc = "대상 호스트"
+  [snippet.params.svc]
+  default = "myapp"
+```
+
+```bash
+idk run                # 퍼지 검색 TUI
+idk run ls             # 목록 (--tag)
+idk run deploy -p host=h1 --print   # 치환 결과만 확인
+idk run deploy -p host=h1           # 실행
+idk run deploy -p host=h1 --pane    # zellij 새 pane 에서
+```
+
+`{{param}}` 은 기본으로 셸 인용(`shlex.quote`)돼 치환된다. 값 자체가 셸 조각이어야 할 때만
+`params.<k>.raw = true` 로 선언한다.
+
+## `idk dt` — 개발 도구 모음
+
+폐쇄망에서 jsonformatter·jwt.io 같은 웹 도구를 못 여는 것을 대체한다. **의존성 0**(stdlib 만).
+
+```bash
+cat x.json | idk dt json fmt --sort-keys
+idk dt hash sha256 --file a.bin --check <expected>
+idk dt b64 enc "hello" | idk dt b64 dec
+idk dt ts 1755302400
+idk dt case snake HTTPServerError
+idk dt jwt '<token>'
+idk dt tui              # 대화형 입력/출력
+```
+
+| 그룹 | 명령 |
+|---|---|
+| JSON | `json fmt` / `json min` |
+| 인코딩 | `b64 enc/dec`, `url enc/dec` |
+| 시간 | `ts` |
+| 텍스트 | `case camel\|snake\|kebab\|pascal` |
+| 보안 | `hash md5\|sha1\|sha256\|sha512`, `uuid` |
+| 기타 | `regex`, `diff`, `jwt` |
+
+입력은 위치 인자 → `--file` → stdin 순서. 출력은 stdout 한 줄씩, 장식이 없다.
+
+---
+
 ## 아직 없는 명령
 
 계획만 있고 구현되지 않았다. 설계는 [plan.md](plan.md) 의 "앱별 설계" 에 있다.
 
 | 명령 | Phase | 무엇을 할 것인가 |
 |---|---|---|
-| `idk ws` | 1 | zellij 세션 관리. 접속이 끊겨도 세션이 살아 있어 재접속하면 그대로 복구된다 |
-| `idk run` | 1 | 자주 쓰는 긴 명령을 스니펫으로 저장하고 퍼지 검색으로 실행 |
-| `idk dt` | 2 | JSON·Base64·URL·hash·UUID·regex·diff·JWT. 폐쇄망에서 웹 도구를 못 여는 것을 대체 |
 | `idk build` | 3 | 수천 줄 빌드 로그에서 진단만 추려 파일별로 탐색 |
 | `idk log` | 4 | 여러 로그를 한 화면에서 tail·필터·하이라이팅 |
 | `idk mirror` | 5 | 패키지가 사내 미러에 있는지 조회 |
