@@ -12,7 +12,7 @@ from typing import Annotated
 
 import typer
 
-from . import MIN_PYTHON, __version__, doctor
+from . import MIN_PYTHON, __version__, cli_dt, doctor
 from . import env as envmod
 from .snip import cli as snip_cli
 from .ws import cli as ws_cli
@@ -26,6 +26,7 @@ app = typer.Typer(
 
 app.add_typer(ws_cli.ws_app, name="ws")
 app.command("run")(snip_cli.run_cmd)
+app.add_typer(cli_dt.dt_app, name="dt")
 
 
 def _version_callback(value: bool) -> None:
