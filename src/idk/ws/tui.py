@@ -45,6 +45,7 @@ class WsApp(App[None]):
         table = self.query_one("#table", DataTable)
         table.add_columns("NAME", "STATE", "TABS", "DESC")
         self._refresh()
+        table.focus()
 
     def _refresh(self) -> None:
         self._rows = cli.list_rows()
@@ -53,6 +54,9 @@ class WsApp(App[None]):
         for row in self._rows:
             tabs = str(row["tabs"]) if row["tabs"] is not None else "-"
             table.add_row(str(row["name"]), str(row["state"]), tabs, str(row["desc"]))
+        # 빈 목록이 아니면 커서를 첫 행에 두어 Enter 가 항상 대상이 있게 한다
+        if table.row_count:
+            table.move_cursor(row=0, animate=False)
 
     def _selected(self) -> dict[str, object] | None:
         table = self.query_one("#table", DataTable)
@@ -62,6 +66,14 @@ class WsApp(App[None]):
         if index is None or index >= len(self._rows):
             return None
         return self._rows[index]
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        # Enter 바인딩이 우선이라 보통 여기까지 오지 않지만, 마우스 클릭 등으로
+        # 도착하면 같은 동작을 한다.
+        row = self._selected()
+        if row is not None:
+            self.attach_target = str(row["name"])
+            self.exit()
 
     def action_activate(self) -> None:
         row = self._selected()

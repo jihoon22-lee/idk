@@ -22,7 +22,10 @@ def _load(text: str) -> model.Workspace:
 
 
 def test_golden_example_matches_spec():
-    """spec-ws-run.md §3 의 KDL 예시와 정확히 일치해야 한다."""
+    """spec-ws-run.md §3 의 KDL 예시와 일치해야 한다.
+
+    첫 탭에는 zellij 기본 UI(tab-bar/status-bar)가 감싸진다 — 키힌트 바 표시용.
+    """
     base = (Path.home() / "src/qt-app").resolve()
     ws = _load(
         """
@@ -60,7 +63,15 @@ shell = "bash"
         "layout {\n"
         f'    cwd "{base}"\n'
         '    tab name="edit" focus=true {\n'
-        '        pane command="bash"\n'
+        "        pane size=1 borderless=true {\n"
+        '            plugin location="tab-bar"\n'
+        "        }\n"
+        "        pane {\n"
+        '            pane command="bash"\n'
+        "        }\n"
+        "        pane size=1 borderless=true {\n"
+        '            plugin location="status-bar"\n'
+        "        }\n"
         "    }\n"
         '    tab name="build" {\n'
         '        pane split_direction="vertical" {\n'

@@ -84,3 +84,17 @@ def test_param_without_equals_is_exit_2(monkeypatch):
     _write('[[snippet]]\nname = "build"\ncmd = "make"\n')
     result = runner.invoke(__main__.app, ["run", "build", "-p", "jobs"])
     assert result.exit_code == 2
+
+
+def test_run_init_creates_starter_config():
+    result = runner.invoke(__main__.app, ["run", "init"])
+    assert result.exit_code == 0
+    path = config.config_path("snippets.toml")
+    assert path.exists()
+    assert "[[snippet]]" in path.read_text(encoding="utf-8")
+
+
+def test_run_init_refuses_to_overwrite():
+    _write('[[snippet]]\nname = "x"\ncmd = "y"\n')
+    result = runner.invoke(__main__.app, ["run", "init"])
+    assert result.exit_code == 3

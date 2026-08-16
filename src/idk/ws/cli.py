@@ -86,6 +86,50 @@ def _is_nested() -> bool:
     return bool(os.environ.get("ZELLIJ"))
 
 
+STARTER_WORKSPACES = """\
+# idk ws 워크스페이스 정의 — ~/.config/idk/workspaces.toml
+# 필수: name, cwd. 선택: desc, shell, tab 목록. zellij KDL 에 1:1 대응한다.
+# 자세한 필드 설명은 docs/GUIDE.md 또는 docs/spec-ws-run.md §2 참고.
+
+[[workspace]]
+name  = "dev"
+desc  = "기본 개발"
+cwd   = "~"
+shell = "bash"
+
+  [[workspace.tab]]
+  name  = "main"
+  focus = true
+  split = "vertical"
+
+    [[workspace.tab.pane]]
+    command = "vim"
+
+    [[workspace.tab.pane]]
+    command = "bash"
+
+  [[workspace.tab]]
+  name  = "build"
+
+    [[workspace.tab.pane]]
+    command = "make -j8"
+"""
+
+
+@ws_app.command("init")
+def init_cmd(
+    force: Annotated[bool, typer.Option("--force", help="기존 파일을 덮어쓴다")] = False,
+) -> None:
+    """기본 workspaces.toml 을 생성한다 (이미 있으면 건드리지 않는다)."""
+    target = config.config_path("workspaces.toml")
+    if target.exists() and not force:
+        typer.echo(f"이미 있습니다: {target}  (덮어쓰려면 --force)", err=True)
+        raise typer.Exit(EXIT_CONFLICT)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(STARTER_WORKSPACES, encoding="utf-8")
+    typer.echo(f"작성: {target}\nidk ws ls 로 확인, idk ws up dev 로 실행하세요.")
+
+
 def _render_to_temp(kdl: str) -> Path:
     fd, raw = tempfile.mkstemp(suffix=".kdl", prefix="idk-ws-")
     os.close(fd)
@@ -110,13 +154,11 @@ def _do_up(name: str, ws: model.Workspace, *, attach: bool, print_layout: bool) 
                 f"세션 '{name}' 이 이미 실행 중입니다. `idk ws attach {name}` 로 붙으세요.",
                 err=True,
             )
-        else:
-            typer.echo(
-                f"'{name}' 은 종료된 세션으로 남아 있습니다. "
-                f"`idk ws kill {name} --purge` 로 제거 후 다시 시도하세요.",
-                err=True,
-            )
-        raise typer.Exit(EXIT_CONFLICT)
+            raise typer.Exit(EXIT_CONFLICT)
+        # EXITED(부활 가능한 죽은 세션) — 같은 이름으로 새로 만들 수 없으므로
+        # 자동으로 정리하고 재생성한다. 잔재가 "신규 세션 생성 실패" 의 흔한 원인이다.
+        typer.echo(f"종료된 세션 '{name}' 을 제거하고 새로 만듭니다...", err=True)
+        zellij.kill(name, purge=True)
 
     if _is_nested():
         attach = False

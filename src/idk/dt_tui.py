@@ -12,7 +12,7 @@ from typing import ClassVar
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header, OptionList, TextArea
+from textual.widgets import Button, Footer, Header, OptionList, TextArea
 from textual.widgets.option_list import Option
 
 from idk.dt import case, encoding, jsonfmt, jwt, security, timestamp
@@ -62,7 +62,9 @@ class DtApp(App[None]):
     TITLE = "idk dt"
 
     BINDINGS: ClassVar[list[Binding]] = [
-        Binding("ctrl+enter", "run", "실행", priority=True),
+        # ctrl+enter 는 터미널에 따라 시퀀스가 안 오기도 한다. 확실한 경로는 '실행' 버튼.
+        Binding("ctrl+enter", "run", "실행 (또는 버튼)", priority=True),
+        Binding("f2", "run", "실행", priority=True),
         Binding("q", "quit", "종료", priority=True),
     ]
 
@@ -73,6 +75,7 @@ class DtApp(App[None]):
             with Vertical():
                 yield TextArea(id="input", language=None)
                 yield TextArea(id="output", read_only=True)
+                yield Button("실행", id="run", variant="primary")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -87,6 +90,10 @@ class DtApp(App[None]):
         _, fn = TOOLS[index]
         text = self.query_one("#input", TextArea).text
         self.query_one("#output", TextArea).text = fn(text)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "run":
+            self.action_run()
 
 
 def run() -> None:

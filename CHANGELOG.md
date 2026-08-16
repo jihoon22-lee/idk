@@ -7,6 +7,28 @@
 `idk.pyz` 는 사람이 손으로 반입하는 파일이라 **"지금 들고 들어간 게 어느 버전인지"** 가
 중요하다. `idk --version` 이 여기 적힌 버전과 일치한다.
 
+## [Unreleased]
+
+### Fixed
+- **`idk ws` 세션이 EXITED 로 남아 재생성이 막히는 문제** — 같은 이름의 EXITED(부활 가능한
+  죽은) 세션이 있으면 `zellij -n` 이 "already exists" 로 실패하고, detached 생성은 이를
+  "생성됨" 으로 오판했다. `up` 이 EXITED 잔재를 자동 정리 후 재생성하고, 생성 폴링은
+  running 상태만 성공으로 인정한다.
+- **`idk ws up` 이 zellij 실패를 조용히 무시** — attach 생성이 exit code 를 확인하지 않아
+  "만들었다" 고 속였다. 이제 실패 시 오류를 알린다.
+- **zellij 하단 키힌트 바가 안 보이던 문제** — 생성 KDL 에 `tab-bar`/`status-bar` plugin
+  pane 을 첫 탭에 감싸 기본 zellij 와 같은 UI 를 보여준다.
+- **`idk dt tui` 의 Ctrl+Enter 가 안 먹던 문제** — 터미널이 Ctrl+Enter 시퀀스를 안 보내는
+  경우가 많다. '실행' 버튼과 `F2` 를 추가했다.
+- **`purge` 가 EXITED 흔적을 남기는 경우 대응** — `delete-session` 에 `--force` 를 붙여
+  확실히 제거한다.
+
+### Added
+- `idk ws init` — 추천 설정이 담긴 기본 `workspaces.toml` 생성.
+- `idk run init` — 추천 설정이 담긴 기본 `snippets.toml` 생성.
+
+---
+
 ## [0.1.0] - 2026-08-16
 
 ### Added

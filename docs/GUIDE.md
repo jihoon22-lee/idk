@@ -119,6 +119,9 @@ idk env --bindir /opt/tools/bin
 `~/.config/idk/` 아래 TOML 로 둔다 (`XDG_CONFIG_HOME` 을 존중한다).
 **전부 선택 사항이고, 없으면 기본값으로 동작한다.**
 
+`idk ws init` / `idk run init` 이 추천 설정이 담긴 스타터 파일을 만들어 준다.
+모르겠으면 그걸로 시작해서 조금씩 고치면 된다.
+
 | 파일 | 쓰는 곳 | 상태 |
 |---|---|---|
 | `mirror.toml` | 아티팩토리 접속 정보 | `doctor --net` 이 읽는다. `idk mirror` 는 Phase 5 |
@@ -144,13 +147,23 @@ auth     = "netrc"          # 또는 token_env = "ARTIFACTORY_TOKEN"
 ## `idk ws` — 워크스페이스 / 터미널 매니저
 
 `workspaces.toml` 에 프로젝트별 레이아웃을 정의하고 zellij 세션으로 재현한다. 접속이
-끊겨도 세션은 살아 있어 재접속하면 그대로 복구된다.
+끊겨도 세션은 살아 있어 재접속하면 그대로 복구된다. 세션은 기본 zellij 와 마찬가지로
+하단 키힌트 바를 보여준다.
+
+```bash
+idk ws init              # 기본 workspaces.toml 생성 (첫 사용 추천)
+```
 
 ```toml
 [[workspace]]
 name  = "qt-app"
+desc  = "메인 Qt 프로젝트"
 cwd   = "~/src/qt-app"
 shell = "bash"
+
+  [[workspace.tab]]
+  name  = "edit"
+  focus = true
 
   [[workspace.tab]]
   name  = "build"
@@ -158,6 +171,9 @@ shell = "bash"
     [[workspace.tab.pane]]
     command = "make -j8"
     size    = "60%"
+
+    [[workspace.tab.pane]]
+    command = "tail -F build.log"
 ```
 
 ```bash
@@ -174,6 +190,10 @@ zellij 가 없으면 설치 안내 후 exit 4 로 끝난다.
 ## `idk run` — 명령 런처(스니펫)
 
 `tcsh` alias 가 담기 어려운 긴 빌드/배포/ssh 명령을 `snippets.toml` 에 담아 둔다.
+
+```bash
+idk run init            # 기본 snippets.toml 생성 (첫 사용 추천)
+```
 
 ```toml
 [[snippet]]
@@ -241,9 +261,11 @@ idk dt tui              # 대화형 입력/출력
 | 증상 | 원인 / 대응 |
 |---|---|
 | `idk: python 3.10+ 를 찾지 못했습니다` | `.csh` 를 source 하지 않은 컨텍스트. `setenv IDK_PYTHON <절대경로>` |
+| `idk ws up` 이 "이미 실행 중" 이라는데 세션은 안 보인다 | EXITED(부활 가능한 죽은 세션) 잔재. `up` 이 자동으로 정리 후 재생성한다. 수동으로는 `idk ws kill <name> --purge` |
 | 첫 실행이 느리다 | `~/.shiv/` 로 압축을 푸는 1회성 비용. 두 번째부터는 없다 |
 | 홈이 NFS 라 계속 느리다 | `setenv SHIV_ROOT /var/tmp/$USER/shiv` 로 로컬 디스크로 옮긴다 |
 | TUI 박스 문자가 깨진다 | `LANG` 이 UTF-8 이 아니다. `doctor` 의 `locale` 이 warn 으로 잡아 준다 |
+| `idk dt tui` 의 Ctrl+Enter 가 안 눌린다 | 터미널이 Ctrl+Enter 시퀀스를 안 보내는 경우. '실행' 버튼이나 `F2` 를 쓰면 된다 |
 | `Permission denied` | `chmod +x ~/.local/bin/idk` |
 | 표가 좁게 접힌다 | 터미널 폭 문제. `--brief` 나 `--json` 을 쓰면 된다 |
 
