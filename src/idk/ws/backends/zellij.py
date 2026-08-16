@@ -86,8 +86,12 @@ def _run(
 
 
 def list_sessions() -> list[Session]:
-    """세션 목록. 세션이 하나도 없으면 빈 목록 (zellij 는 그때 stderr 로만 안내한다)."""
-    proc = _run(["list-sessions", "--no-formatting"])
+    """세션 목록. 세션이 하나도 없으면 빈 목록.
+
+    zellij 는 세션이 없을 때 exit 1 + stderr 안내를 낸다. 그건 오류가 아니라
+    "빈 목록"이므로 check=False 로 돌리고 stdout 만 본다.
+    """
+    proc = _run(["list-sessions", "--no-formatting"], check=False)
     sessions: list[Session] = []
     for line in proc.stdout.splitlines():
         match = SESSION_RE.match(line.strip())
@@ -128,6 +132,10 @@ def _new_session_detached(name: str, layout_path: Path) -> None:
             time.sleep(_DETACH_POLL)
         raise ZellijError(f"세션 '{name}' 생성 실패 (타임아웃)")
     finally:
+        # SIGTERM 으로 클라이언트를 떨어뜨린다. zellij 기본 설정은
+        # on_force_close "detach" 라 SIGTERM/SIGHUP 을 받으면 detach 하므로
+        # 세션이 그대로 남는다. SIGKILL 은 처리할 기회가 없어 서버(클라이언트의
+        # 자식)가 레이스로 함께 죽는다 — 쓰면 안 된다.
         proc.terminate()
         try:
             proc.wait(timeout=5)
@@ -154,7 +162,12 @@ def attach(name: str) -> None:
 
 def kill(name: str, *, purge: bool = False) -> None:
     if purge:
-        _run(["delete-session", name, "--force"])
+        # delete-session --force 는 attached 세션만 정리하고 detached(클라이언트 없는)
+        # 세션에는 "not found" 를 내는 0.44.3 quirk 가 있다. kill-session 은 둘 다
+        # 처리하므로 먼저 kill-session 으로 죽이고, 남은 EXITED 흔적을 delete-session
+        # 으로 지운다. "not found"(이미 없음)는 무시한다.
+        _run(["kill-session", name], check=False)
+        _run(["delete-session", name], check=False)
     else:
         _run(["kill-session", name])
 

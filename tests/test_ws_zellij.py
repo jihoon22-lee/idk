@@ -49,8 +49,11 @@ def test_list_sessions_parses_running_and_exited(monkeypatch):
 
 
 def test_list_sessions_empty_when_none(monkeypatch):
+    # zellij 는 세션이 없을 때 exit 1 + stderr 안내를 낸다 — 오류가 아니라 빈 목록이다.
     monkeypatch.setattr(
-        zellij.subprocess, "run", lambda *a, **k: _proc(stderr="No active zellij sessions found.\n")
+        zellij.subprocess,
+        "run",
+        lambda *a, **k: _proc(rc=1, stderr="No active zellij sessions found.\n"),
     )
     assert zellij.list_sessions() == []
 
@@ -78,7 +81,9 @@ def test_kill_and_purge(monkeypatch):
     zellij.kill("demo")
     zellij.kill("demo", purge=True)
     assert calls[0] == [ZBIN, "kill-session", "demo"]
-    assert calls[1] == [ZBIN, "delete-session", "demo", "--force"]
+    # purge 는 detached 세션 quirk 대응으로 kill-session → delete-session 2단계
+    assert calls[1] == [ZBIN, "kill-session", "demo"]
+    assert calls[2] == [ZBIN, "delete-session", "demo"]
 
 
 def test_new_pane_builds_args(monkeypatch):
