@@ -62,9 +62,9 @@ idk doctor
 |---|---|---|
 | `idk doctor` | ✅ | 환경 진단. `--brief`(전사용) / `--json`(diff용) / `--net`(미러 접속) |
 | `idk env` | ✅ | 셸 환경파일에 넣을 `PATH`·`IDK_PYTHON` 줄 생성 (`--csh` / `--sh`) |
-| `idk ws` | 📋 Phase 1 | 워크스페이스·터미널 매니저 (zellij 백엔드) |
-| `idk run` | 📋 Phase 1 | 명령 런처(스니펫) |
-| `idk dt` | 📋 Phase 2 | 개발 도구 모음 (JSON·Base64·hash·JWT·diff…) |
+| `idk ws` | ✅ | 워크스페이스·터미널 매니저 (zellij 백엔드) |
+| `idk run` | ✅ | 명령 런처(스니펫) |
+| `idk dt` | ✅ | 개발 도구 모음 (JSON·Base64·hash·JWT·diff…) |
 | `idk build` | 📋 Phase 3 | 빌드 에러 네비게이터 |
 | `idk log` | 📋 Phase 4 | 멀티 로그 뷰어 |
 | `idk mirror` | 📋 Phase 5 | 사내 아티팩토리 미러 검색 |
