@@ -125,6 +125,7 @@ shell = "bash"                   # 명령 없는 pane 의 셸 (생략 시 zellij
 | 모델 | KDL |
 |---|---|
 | `workspace.cwd` | `layout { cwd "<abs>" … }` |
+| 첫 탭 | zellij 기본 UI(`tab-bar`·`status-bar` plugin) 를 감싼다 — 하단 키힌트 바 표시용 (실측) |
 | `tab.name` / `focus` | `tab name="edit" focus=true { … }` |
 | `tab.split` | 탭의 자식이 여럿일 때 감싸는 `pane split_direction="…"` |
 | `pane.command` (str) | `shlex.split` → `command="make"` + `args "-j8"` |
@@ -134,13 +135,21 @@ shell = "bash"                   # 명령 없는 pane 의 셸 (생략 시 zellij
 | `pane.cwd` | `cwd="<abs>"` |
 | `pane.name` | `name="logs"` |
 
-문자열 값은 KDL 이스케이프(`\` `"`)를 적용한다. 렌더 결과 예:
+문자열 값은 KDL 이스케이프(`\` `"`)를 적용한다. 렌더 결과 예 (첫 탭에만 UI plugin 감쌈):
 
 ```kdl
 layout {
     cwd "/home/me/src/qt-app"
     tab name="edit" focus=true {
-        pane command="bash"
+        pane size=1 borderless=true {
+            plugin location="tab-bar"
+        }
+        pane {
+            pane command="bash"
+        }
+        pane size=1 borderless=true {
+            plugin location="status-bar"
+        }
     }
     tab name="build" {
         pane split_direction="vertical" {

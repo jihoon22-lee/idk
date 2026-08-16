@@ -1,7 +1,10 @@
 """Workspace 모델 → zellij KDL 문자열 (순수 함수).
 
 부작용이 없어 테스트가 쉽고, `idk ws up --print-layout` 이 이 함수의 출력을 그대로 보여준다
-(docs/spec-ws-run.md §3). 명세 §3 의 KDL 예시가 골든 테스트로 강제된다.
+(docs/spec-ws-run.md §3).
+
+zellij 기본 레이아웃처럼 **첫 탭에 `tab-bar`·`status-bar` plugin pane 을 감싼다** —
+이게 없으면 하단 키힌트 바가 보이지 않는다 (zellij 0.44.3 실측).
 """
 
 from __future__ import annotations
@@ -72,31 +75,57 @@ def _render_pane(pane: Pane, *, shell: str | None) -> list[str]:
     return [line]
 
 
-def _render_tab(tab: Tab, *, shell: str | None) -> list[str]:
+def _tab_content(tab: Tab, *, shell: str | None) -> list[str]:
+    """탭의 pane 들을 감싸지 않고 그대로 나열한다 (split 은 split_direction container 로)."""
+    if len(tab.panes) > 1 and tab.split is not None:
+        container = f'pane split_direction="{_escape(tab.split)}"'
+        inner: list[str] = []
+        for pane in tab.panes:
+            inner += _render_pane(pane, shell=shell)
+        return [container + " {", *_indent(inner, 1), "}"]
+    children: list[str] = []
+    for pane in tab.panes:
+        children += _render_pane(pane, shell=shell)
+    return children
+
+
+def _render_tab(tab: Tab, *, shell: str | None, ui: bool = False) -> list[str]:
+    """ui=True 면 이 탭에 tab-bar/status-bar plugin 을 함께 넣는다 (첫 탭 전용)."""
     header = "tab"
     if tab.name:
         header += f' name="{_escape(tab.name)}"'
     if tab.focus:
         header += " focus=true"
 
-    children: list[str] = []
-    if len(tab.panes) > 1 and tab.split is not None:
-        container = f'pane split_direction="{_escape(tab.split)}"'
-        inner: list[str] = []
-        for pane in tab.panes:
-            inner += _render_pane(pane, shell=shell)
-        children = [container + " {", *_indent(inner, 1), "}"]
+    if ui:
+        children = [
+            "pane size=1 borderless=true {",
+            '    plugin location="tab-bar"',
+            "}",
+            "pane {",
+            *_indent(_tab_content(tab, shell=shell), 1),
+            "}",
+            "pane size=1 borderless=true {",
+            '    plugin location="status-bar"',
+            "}",
+        ]
     else:
-        for pane in tab.panes:
-            children += _render_pane(pane, shell=shell)
+        children = _tab_content(tab, shell=shell)
     return [header + " {", *_indent(children, 1), "}"]
 
 
 def render(workspace: Workspace) -> str:
-    """Workspace 를 zellij KDL 문자열로 렌더링한다. 끝에 개행 하나."""
+    """Workspace 를 zellij KDL 문자열로 렌더링한다. 끝에 개행 하나.
+
+    첫 탭에만 tab-bar/status-bar 를 감싼다 — plugin 은 전 탭에 걸쳐 전역으로 그려지므로
+    다른 탭을 봐도 하단 키힌트가 유지된다 (실측 확인).
+    """
     lines = ["layout {"]
     lines.append(f'    cwd "{_escape(str(workspace.cwd))}"')
-    for tab in workspace.tabs:
+    tabs = workspace.tabs or (Tab(),)
+    first, *rest = tabs
+    lines += _indent(_render_tab(first, shell=workspace.shell, ui=True), 1)
+    for tab in rest:
         lines += _indent(_render_tab(tab, shell=workspace.shell), 1)
     lines.append("}")
     return "\n".join(lines) + "\n"

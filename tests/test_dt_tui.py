@@ -20,12 +20,24 @@ def test_tui_runs_a_tool():
     asyncio.run(scenario())
 
 
+def test_tui_run_button_runs_tool():
+    async def scenario() -> None:
+        app = dt_tui.DtApp()
+        async with app.run_test() as pilot:
+            app.query_one("#input", TextArea).text = '{"a":1}'
+            await pilot.click("#run")
+            out = app.query_one("#output", TextArea).text
+            assert '"a": 1' in out
+
+    asyncio.run(scenario())
+
+
 def test_tui_error_is_shown_in_output():
     async def scenario() -> None:
         app = dt_tui.DtApp()
         async with app.run_test() as pilot:
             app.query_one("#input", TextArea).text = "{bad"
-            await pilot.press("ctrl+enter")
+            await pilot.press("f2")
             out = app.query_one("#output", TextArea).text
             assert out.startswith("오류:")
 

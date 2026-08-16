@@ -100,14 +100,19 @@ def test_up_conflict_when_running(monkeypatch):
     assert result.exit_code == 3
 
 
-def test_up_conflict_when_exited_mentions_purge(monkeypatch):
+def test_up_auto_purges_exited_and_recreates(monkeypatch):
     _write_ws('[[workspace]]\nname = "demo"\n')
     monkeypatch.setattr(
         cli.zellij, "list_sessions", lambda: [zellij.Session("demo", "exited", "1s ago")]
     )
+    killed = []
+    monkeypatch.setattr(cli.zellij, "kill", lambda name, purge=False: killed.append((name, purge)))
+    created = []
+    monkeypatch.setattr(cli.zellij, "new_session", lambda *a, **k: created.append((a, k)) or 0)
     result = runner.invoke(cli.ws_app, ["up", "demo"])
-    assert result.exit_code == 3
-    assert "purge" in result.output
+    assert result.exit_code == 0
+    assert killed == [("demo", True)]
+    assert created[0][1]["attach"] is True
 
 
 def test_up_unknown_workspace_is_conflict():
@@ -184,3 +189,25 @@ def test_kill_purge(monkeypatch):
     result = runner.invoke(cli.ws_app, ["kill", "demo", "--purge"])
     assert result.exit_code == 0
     assert calls == [("demo", True)]
+
+
+def test_init_creates_starter_config():
+    result = runner.invoke(cli.ws_app, ["init"])
+    assert result.exit_code == 0
+    path = config.config_path("workspaces.toml")
+    assert path.exists()
+    text = path.read_text(encoding="utf-8")
+    assert "[[workspace]]" in text
+
+
+def test_init_refuses_to_overwrite():
+    config.save("workspaces.toml", {"workspace": []})
+    result = runner.invoke(cli.ws_app, ["init"])
+    assert result.exit_code == 3
+
+
+def test_init_force_overwrites():
+    config.save("workspaces.toml", {"workspace": []})
+    result = runner.invoke(cli.ws_app, ["init", "--force"])
+    assert result.exit_code == 0
+    assert "[[workspace]]" in config.config_path("workspaces.toml").read_text(encoding="utf-8")

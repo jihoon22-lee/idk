@@ -81,9 +81,9 @@ def test_kill_and_purge(monkeypatch):
     zellij.kill("demo")
     zellij.kill("demo", purge=True)
     assert calls[0] == [ZBIN, "kill-session", "demo"]
-    # purge 는 detached 세션 quirk 대응으로 kill-session → delete-session 2단계
+    # purge 는 kill-session → delete-session --force 2단계 (EXITED 흔적 제거)
     assert calls[1] == [ZBIN, "kill-session", "demo"]
-    assert calls[2] == [ZBIN, "delete-session", "demo"]
+    assert calls[2] == [ZBIN, "delete-session", "demo", "--force"]
 
 
 def test_new_pane_builds_args(monkeypatch):

@@ -122,6 +122,49 @@ def list_snippets(tag: str | None = None) -> list[model.Snippet]:
     return snippets
 
 
+STARTER_SNIPPETS = """\
+# idk run 스니펫 정의 — ~/.config/idk/snippets.toml
+# 필수: name, cmd. 선택: desc, cwd, tags, params.
+# {{param}} 은 기본 shlex.quote 로 인용된다. 자세한 내용은 docs/GUIDE.md 참고.
+
+[[snippet]]
+name = "build"
+desc = "빌드 + 로그"
+cmd  = "make -j{{jobs}} 2>&1 | tee build.log"
+cwd  = "~"
+tags = ["build", "make"]
+
+  [snippet.params.jobs]
+  default = "8"
+  desc    = "병렬 작업 수"
+
+[[snippet]]
+name = "deploy"
+desc = "배포"
+cmd  = "ssh {{host}} 'systemctl restart {{svc}}'"
+tags = ["deploy"]
+
+  [snippet.params.host]
+  desc = "대상 호스트"
+
+  [snippet.params.svc]
+  default = "myapp"
+  desc    = "서비스 이름"
+"""
+
+
+def _init_snippets(force: bool) -> None:
+    target = config.config_path("snippets.toml")
+    if target.exists() and not force:
+        typer.echo(f"이미 있습니다: {target}  (덮어쓰려면 --force)", err=True)
+        raise typer.Exit(EXIT_CONFLICT)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(STARTER_SNIPPETS, encoding="utf-8")
+    typer.echo(
+        f"작성: {target}\nidk run ls 로 확인, idk run build -p jobs=4 --print 로 확인하세요."
+    )
+
+
 def _list(tag: str | None, as_json: bool) -> None:
     snippets = list_snippets(tag)
     rows = [
@@ -173,6 +216,9 @@ def run_cmd(
         return
     if name == "ls":
         _list(tag, as_json)
+        return
+    if name == "init":
+        _init_snippets(force=False)
         return
     snippet = _find(name)
     values = _parse_params(list(param or ()))

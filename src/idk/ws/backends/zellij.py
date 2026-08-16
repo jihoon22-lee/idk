@@ -127,7 +127,9 @@ def _new_session_detached(name: str, layout_path: Path) -> None:
     try:
         deadline = time.monotonic() + _DETACH_TIMEOUT
         while time.monotonic() < deadline:
-            if any(s.name == name for s in list_sessions()):
+            # EXITED 세션은 생성이 아니라 "살아있는" 세션일 때만 성공으로 본다.
+            # 이름만 보면 EXITED 잔재를 새로 만든 것으로 오판해 재생성이 조용히 실패한다.
+            if any(s.name == name and s.state == "running" for s in list_sessions()):
                 return
             time.sleep(_DETACH_POLL)
         raise ZellijError(f"세션 '{name}' 생성 실패 (타임아웃)")
@@ -146,10 +148,20 @@ def _new_session_detached(name: str, layout_path: Path) -> None:
 
 
 def new_session(name: str, layout_path: Path, *, attach: bool = True) -> int:
-    """레이아웃으로 새 세션을 만든다. attach=True 면 사용자 터미널을 물려받아 attach 한다."""
+    """레이아웃으로 새 세션을 만든다. attach=True 면 사용자 터미널을 물려받아 attach 한다.
+
+    attach 는 터미널 UI 가 필요해 출력을 캡처하지 않는다. zellij 가 실패하면 (예: 이름 충돌)
+    사용자 화면에 에러가 이미 보이므로, 여기선 실패 사실만 알린다 — 조용히 넘어가면
+    "생성했다"고 속이는 꼴이 된다 (실사용 피드백으로 발견).
+    """
     if attach:
         path = _binary()
-        return subprocess.run([path, "-n", str(layout_path), "-s", name]).returncode
+        proc = subprocess.run([path, "-n", str(layout_path), "-s", name])
+        if proc.returncode != 0:
+            raise ZellijError(
+                f"zellij 가 세션 '{name}' 을 만들지 못했습니다 (exit {proc.returncode})"
+            )
+        return proc.returncode
     _new_session_detached(name, layout_path)
     return 0
 
@@ -162,12 +174,12 @@ def attach(name: str) -> None:
 
 def kill(name: str, *, purge: bool = False) -> None:
     if purge:
-        # delete-session --force 는 attached 세션만 정리하고 detached(클라이언트 없는)
-        # 세션에는 "not found" 를 내는 0.44.3 quirk 가 있다. kill-session 은 둘 다
-        # 처리하므로 먼저 kill-session 으로 죽이고, 남은 EXITED 흔적을 delete-session
-        # 으로 지운다. "not found"(이미 없음)는 무시한다.
+        # 여러 zellij 버전/세션 상태에 대응하는 2단계:
+        #  - kill-session 으로 세션을 죽인다 (없으면 무시)
+        #  - delete-session --force 로 EXITED 흔적까지 제거 (detached 세션의
+        #    "not found" quirk 는 --force 여부와 무관하므로 check=False 로 무시)
         _run(["kill-session", name], check=False)
-        _run(["delete-session", name], check=False)
+        _run(["delete-session", name, "--force"], check=False)
     else:
         _run(["kill-session", name])
 
@@ -187,5 +199,7 @@ def new_pane(
 
 
 def tab_names(session: str) -> list[str]:
-    proc = _run(["-s", session, "action", "query-tab-names"])
+    # 죽어가는 세션에 query-tab-names 가 매달리지 않도록 짧은 타임아웃을 쓴다.
+    # 실패는 호출자(_tab_count)가 None 으로 받아 "TABS" 칸을 "-" 로 처리한다.
+    proc = _run(["-s", session, "action", "query-tab-names"], timeout=5.0)
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
