@@ -338,6 +338,14 @@ def jwt_cmd(
     _out(_render_jwt(token))
 
 
+@dt_app.command("tui")
+def dt_tui_cmd() -> None:
+    """대화형 입력/출력 모드."""
+    from idk import dt_tui
+
+    dt_tui.run()
+
+
 dt_app.add_typer(json_app, name="json")
 dt_app.add_typer(b64_app, name="b64")
 dt_app.add_typer(url_app, name="url")
