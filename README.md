@@ -5,7 +5,7 @@
 
 ```bash
 $ idk doctor --brief
-idk 0.1.0 brief
+idk 0.1.1 brief
 os      rhel-8.10  glibc=2.28  kernel=4.18.0-553.el8_10.x86_64  arch=x86_64  wsl=no
 shell   /bin/tcsh  TERM=xterm-256color  COLORTERM=-  LANG=en_US.UTF-8  utf8=yes
 python  running=3.10.4  IDK_PYTHON=/opt/python3.10/bin/python3.10

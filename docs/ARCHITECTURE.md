@@ -164,7 +164,16 @@ src/idk/
 ├─ config.py       ~/.config/idk/*.toml 로드·저장 (XDG, tomli)
 ├─ env.py          환경 판별 — os-release, glibc, WSL, python 후보 탐색
 ├─ httpc.py        stdlib urllib HTTP 클라이언트 (netrc, 시스템 CA)
-└─ doctor.py       진단 — Check 목록을 모아 표/JSON/brief 로 렌더
+├─ doctor.py       진단 — Check 목록을 모아 표/JSON/brief 로 렌더
+├─ cli_dt.py       `idk dt` CLI 배선 (typer). 공통 I/O 규약 담당
+├─ dt_tui.py       `idk dt tui` — 입력/출력 2패널 (textual)
+├─ ws/             `idk ws` — workspace/tab/pane 모델·검증, KDL 렌더러, CLI, TUI
+│  ├─ model.py  layout.py  cli.py  tui.py
+│  └─ backends/zellij.py   zellij 호출의 유일한 지점 (AGENTS.md 규약)
+├─ snip/           `idk run` — snippets.toml 모델·치환·CLI·TUI
+│  └─ model.py  render.py  cli.py  tui.py
+└─ dt/             `idk dt` 변환 로직 — **stdlib 만 (의존성 0)**
+   └─ jsonfmt/encoding/timestamp/case/security/regexq/textdiff/jwt
 ```
 
 | 모듈 | 책임 | 주의할 점 |
@@ -173,6 +182,10 @@ src/idk/
 | `httpc.py` | HTTP 전부. **4xx/5xx 도 예외 없이 `Response` 로 반환** | 미러 조회·진단은 404/401 자체가 정보다. 실패로 다루려면 `.raise_for_status()` |
 | `config.py` | TOML 로드/저장. 없는 파일은 빈 dict | 저장은 임시파일 → `os.replace` 로 원자적 |
 | `doctor.py` | `collect()` 가 `Check` 목록을 만들고 렌더러 셋이 소비 | 진단 도구라 기본 exit 0. `--strict` 일 때만 fail → 1 |
+| `ws/layout.py` | 모델 → zellij KDL 순수 함수 | 첫 탭에 `tab-bar`/`status-bar` plugin 을 감싼다 (키힌트 바) |
+| `ws/backends/zellij.py` | zellij 프로세스 호출 전부 | 이 파일 밖에서 zellij 를 부르지 않는다 |
+| `dt/` | 변환 순수 함수 (문자열↔문자열) | **typer/rich/textual import 금지** — AST 테스트로 강제 |
+| `dt_tui.py` | 대화형 도구 TUI | dt 로직은 `dt/` 를 호출만 한다 |
 
 ### 버전은 한 곳에만
 
@@ -229,6 +242,9 @@ Phase 1~5 의 앱들은 모두 이 절차를 따른다.
 | 런처 ↔ `env.py` 후보 목록 일치 | `tests/test_launcher.py` |
 | 폐쇄망에서 런처가 동작 | `scripts/smoke.sh` 가 가짜 PATH 로 재현 |
 | 산출물이 3.10 에서 동작 | `smoke.sh` 가 3.10 으로 직접 실행 |
+| `dt/` 는 stdlib 만 | `tests/test_dt_stdlib_only.py` 가 AST 로 import 강제 |
+| zellij 호출은 `ws/backends/zellij.py` 만 | `ws/` 외에서 호출되면 리뷰에서 걸린다 |
+| zellij 실제 동작 | `tests/test_ws_zellij_integration.py` (`-m zellij`, CI integration 잡) |
 
 ---
 

@@ -9,6 +9,10 @@
 
 ## [Unreleased]
 
+---
+
+## [0.1.1] - 2026-08-16
+
 ### Fixed
 - **`idk ws` 세션이 EXITED 로 남아 재생성이 막히는 문제** — 같은 이름의 EXITED(부활 가능한
   죽은) 세션이 있으면 `zellij -n` 이 "already exists" 로 실패하고, detached 생성은 이를
@@ -84,10 +88,12 @@
 3. 태그를 밀면 `.github/workflows/release.yml` 이 나머지를 한다.
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.1.1 && git push origin v0.1.1
 ```
 
 워크플로가 태그와 `__version__` 이 일치하는지 확인하고, 빌드·스모크를 돌린 뒤
 `idk.pyz` 와 `idk.pyz.sha256` 을 릴리스에 붙이고 이 파일의 해당 섹션을 릴리스 노트로 쓴다.
 
+[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/jihoon22-lee/idk/releases/tag/v0.1.1
 [0.1.0]: https://github.com/jihoon22-lee/idk/releases/tag/v0.1.0
