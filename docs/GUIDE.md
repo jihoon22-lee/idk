@@ -100,6 +100,8 @@ mirror  skip  미설정  ~/.config/idk/mirror.toml
 | `skip` | 확인하지 않았다 (설정이 없거나 `--net` 미지정) |
 
 `--net` 을 주면 `mirror.toml` 의 아티팩토리에 실제로 접속해 본다. 기본은 네트워크를 건드리지 않는다.
+네트워크 검사에서 2xx는 `ok`, 401/403은 인증 실패 `fail`, 그 밖의 HTTP 상태는 `warn`,
+전송·URL·인증 설정 오류는 `fail`이다.
 
 ## `idk config check` — 설정 검사
 
@@ -110,9 +112,10 @@ idk config check --strict    # workspace cwd 경고도 실패로 처리
 ```
 
 `workspaces.toml`, `snippets.toml`, `mirror.toml`, `logview.toml`을 항상 같은 순서로 검사한다.
-없는 파일은 `skip`이며 오류가 아니다. 정상 파일은 `ok`, 존재하지 않는 workspace `cwd`는 별도
-`warn` 행, TOML/schema 오류는 `fail` 행이다. 기본 exit는 `fail`만 1이고, `--strict`에서는
-`warn`도 1이 된다. `--json` 출력에는 표나 경고 문구를 섞지 않는다.
+각 행은 `{"file":"...","status":"...","detail":"..."}` 세 필드이며, 실제로 없는 파일이나
+설정 디렉터리만 `skip`으로 보고 오류로 보지 않는다. 정상 파일은 `ok`, 존재하지 않는 workspace
+`cwd`는 별도 `warn` 행, TOML/schema 오류는 `fail` 행이다. 기본 exit는 `fail`만 1이고,
+`--strict`에서는 `warn`도 1이 된다. `--json` 출력에는 표나 경고 문구를 섞지 않는다.
 
 ---
 
@@ -161,10 +164,12 @@ auth     = "netrc"          # 또는 token_env = "ARTIFACTORY_TOKEN"
 hostname이 있는 `http://` 또는 `https://` URL이어야 한다. URL에는 공백·제어문자·사용자
 정보(`user:password@`)·잘못된 percent escape를 넣을 수 없고, hostname과 port도 URI 규칙에
 맞아야 한다. URL은 printable ASCII(`0x21`–`0x7e`)만 직접 허용하므로 비ASCII 문자는 UTF-8
-percent encoding으로 적는다. 설정 디렉터리가 없을 때만 `config check`가 `skip`으로 보고하며,
-디렉터리가 아닌 경로·FIFO·끊긴 심볼릭 링크·접근할 수 없는 디렉터리/부모·읽기 오류는 `fail`이다.
+percent encoding으로 적는다. 설정 파일이나 설정 디렉터리가 실제로 없을 때만 `config check`가
+`skip`으로 보고하며, 디렉터리가 아닌 경로·FIFO·끊긴 심볼릭 링크·접근할 수 없는 디렉터리/부모·
+읽기 오류는 `fail`이다.
 설정 파일은 regular file인지 확인한 뒤 nonblocking open과 `fstat`으로 재확인하므로 특수 파일을
-검사 중 열어 대기하지 않는다. regular file을 가리키는 심볼릭 링크는 허용한다.
+검사 중 열어 대기하지 않는다. regular file을 가리키는 심볼릭 링크는 허용한다. 잘못된 URL이나
+인증값 검증 실패도 원래 URL·토큰을 오류 상세에 재출력하지 않는다.
 
 > HTTP 는 stdlib `urllib` 로만 나간다. `requests`/`httpx` 는 `certifi` 번들 CA 를 쓰기 때문에
 > 사내 TLS 인터셉션 환경에서 접속이 깨진다. 시스템 CA 를 쓰는 것이 이 도구의 전제다.
@@ -227,8 +232,9 @@ purge한 뒤 그 정의로 재생성하고 붙는다. 정의가 없는 orphan EX
 않으며 exit 3과 `idk ws kill <name> --purge` 복구 안내를 낸다.
 
 zellij의 `list-sessions`는 정확히 `No active zellij sessions found.`를 낸 경우에만 빈 목록으로
-처리한다. purge도 zellij가 보고한 대상 없음 문구만 멱등 성공으로 처리하며, 권한·소켓 등 다른
-실패는 명령 인자와 exit code, zellij 진단을 보여 주고 exit 1로 끝난다.
+처리한다. `--purge`는 `kill-session` 뒤 `delete-session --force`를 실행하며, 두 단계 모두
+zellij가 보고한 대상 없음 문구만 멱등 성공으로 처리한다. 권한·소켓 등 다른 실패는 명령 인자와
+exit code, zellij 진단을 보여 주고 exit 1로 끝난다.
 
 ## `idk run` — 명령 런처(스니펫)
 
@@ -291,9 +297,9 @@ idk dt tui              # 대화형 입력/출력
 | 기타 | `regex`, `diff`, `jwt` |
 
 입력은 위치 인자 → `--file` → stdin 순서. 출력은 stdout 한 줄씩, 장식이 없다.
-`b64 dec`는 ASCII 공백·탭·개행이 섞인 입력과 빠진 패딩을 허용하지만, Base64 알파벳
-이외의 문자는 `올바른 base64가 아닙니다` 오류로 거부한다. `--url-safe`를 쓰면 `-`·`_`
-알파벳만 사용하며 표준 `+`·`/` 문자는 거부한다.
+`b64 dec`는 ASCII whitespace(공백·탭·개행 등)가 섞인 입력과 빠진 패딩을 허용하지만,
+모드별 Base64 알파벳 이외의 문자는 `올바른 base64가 아닙니다` 오류로 거부한다. 기본 모드는
+영숫자와 표준 `+`·`/`, `--url-safe`는 영숫자와 `-`·`_`만 사용하며 서로의 알파벳을 섞을 수 없다.
 
 `hash --file`은 파일을 1 MiB 청크로 스트리밍하므로 대용량 파일도 전체를 메모리에 올리지 않는다.
 `ts`의 상대 시각은 미래 입력을 `5초 후`, `1분 후`처럼 표시하고, 현재와 5초 미만 차이면

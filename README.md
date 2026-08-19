@@ -63,9 +63,9 @@ idk doctor
 | 명령 | 상태 | 설명 |
 |---|---|---|
 | `idk doctor` | ✅ | 환경 진단. `--brief`(전사용) / `--json`(diff용) / `--net`(미러 접속) |
-| `idk config check` | ✅ | 모든 TOML 설정의 schema·workspace 경로 검사 (`--json` / `--strict`) |
+| `idk config check` | ✅ | 알려진 TOML을 고정 순서로 검사 (`skip`/`ok`/`warn`/`fail`, `--json` / `--strict`) |
 | `idk env` | ✅ | 셸 환경파일에 넣을 `PATH`·`IDK_PYTHON` 줄 생성 (`--csh` / `--sh`) |
-| `idk ws` | ✅ | 워크스페이스·터미널 매니저 (zellij 백엔드) |
+| `idk ws` | ✅ | 워크스페이스·터미널 매니저 (확인 modal, EXITED 재생성, zellij 백엔드) |
 | `idk run` | ✅ | 명령 런처(스니펫) |
 | `idk dt` | ✅ | 개발 도구 모음 (JSON·Base64·hash·JWT·diff…) |
 | `idk build` | 📋 Phase 3 | 빌드 에러 네비게이터 |
