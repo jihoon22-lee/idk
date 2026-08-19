@@ -22,7 +22,9 @@
 ### Build / Supply chain
 - **잠긴 재현 가능 zipapp 빌드** — runtime 의존성은 커밋된 `uv.lock`에서 frozen export하고
   해시를 강제한다. wheel·shiv도 잠긴 build group에서 실행하며, checkout과 분리된 Linux
-  native 임시 staging을 사용해 `/mnt/*`에서도 ZIP 권한을 안전하게 만든다.
+  native 임시 staging을 사용해 `/mnt/*`에서도 ZIP 권한을 안전하게 만든다. 같은 committed
+  source·lockfile뿐 아니라 Python 대상과 build toolchain이 같은 경우의 재현성을 CI가 같은
+  job의 두 빌드 SHA-256 비교로 확인한다.
 - **아티팩트 게이트 강화** — `smoke.sh`가 ZIP의 group/other writable entry와 손상을 거부하고,
   CI artifact job이 새 staging에서 두 번 빌드한 SHA-256을 비교한다. 최종 `dist/idk.pyz`만
   원자적으로 게시한다.
@@ -62,7 +64,8 @@
   - 접속이 끊겨도 세션이 살아 재접속하면 그대로 복구 (ETX 끊김 복원).
   - detached 생성은 사설 pty + SIGTERM(zellij 기본 `on_force_close "detach"`)으로 구현.
 - **`idk run`** — 명령 런처(스니펫). `snippets.toml` 의 명령을 `{{param}}` 치환으로 실행.
-  - 기본 `shlex.quote()` (인젝션 방지), `raw=true` 만 인용 생략. `--pane` 으로 zellij 새 pane 실행.
+  - 기본 `shlex.quote()`로 local shell의 한 argv 경계를 보호하고, `raw=true`만 인용을 생략한다.
+    `--pane` 으로 zellij 새 pane 에서 실행.
   - 퍼지 검색 TUI (부분문자열→subsequence).
 - **`idk dt`** — 개발 도구 모음. json fmt/min, b64, url, ts, case 4종, hash 4종, uuid, regex, diff, jwt + TUI.
   - `src/idk/dt/` 는 **의존성 0(stdlib 만)** — 폐쇄망에서 그 디렉터리만 꺼내 아무 python 으로 돌릴 수 있다.
@@ -82,7 +85,8 @@
   탈출구로 `IDK_PYTHON` 환경변수를 지원한다.
 - **`scripts/build-pyz.sh`** — 3.10 을 대상으로 의존성을 풀어 `shiv` zipapp 생성.
   네이티브 확장·플랫폼 종속 휠·`certifi` 가 섞이면 빌드를 실패시킨다.
-  빌드 경로·시각 흔적을 제거해 **같은 파일시스템에서 반복 빌드하면 바이트 단위로 동일**하다.
+  빌드 경로·시각 흔적을 제거해 **동일한 toolchain·target과 같은 파일시스템에서 반복 빌드하면
+  바이트 단위로 동일**하다.
 - **`scripts/smoke.sh`** — 반입 전 게이트. 가짜 PATH 로 폐쇄망 상황(기본 `python3` 가 구버전)을
   재현해 런처의 거부·`IDK_PYTHON` 탈출구·3.10 선택을 검증한다.
 - **`scripts/fetch-vendor.sh`** — zellij(musl 정적) + xclip 소스를 `vendor/` 로 받고

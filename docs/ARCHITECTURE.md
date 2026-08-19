@@ -25,8 +25,10 @@
 
 - **파일 1개.** 의존성이 전부 들어 있어 사내 PyPI 미러 상태와 무관하다.
 - **인터프리터를 스스로 찾는다.** `.csh` 를 source 하지 않은 컨텍스트에서도 동작한다.
-- **재현 가능하다.** 같은 소스와 `uv.lock`을 native staging에서 빌드하면 같은 바이트가 된다.
-  CI는 두 번 빌드한 SHA-256을 비교하고, smoke는 ZIP 권한과 무결성을 검사한다.
+- **재현 가능하다.** committed source와 `uv.lock`은 필요한 입력이지만, 같은 Python 대상과
+  uv/shiv/hatchling 등 build toolchain, native staging 조건도 맞아야 같은 바이트를 기대할 수
+  있다. CI는 같은 job에서 새 staging으로 두 번 빌드한 SHA-256을 비교하고, smoke는 ZIP 권한과
+  무결성을 검사한다.
 
 ---
 
@@ -124,8 +126,9 @@ wheel의 해시를 확인한다. 개발은 더 최신 파이썬에서 하더라�
 
 ### 3.3 빌드 흔적 제거 — 재현성
 
-정규화하지 않으면 **같은 소스인데 빌드할 때마다 체크섬이 달라진다.** uv와 wheel 빌드가
-남기는 경로·시각·권한 흔적을 zip에 넣지 않는다.
+동일한 source·`uv.lock`·Python 대상·build toolchain·native staging인데도 정규화하지 않으면
+빌드할 때마다 체크섬이 달라질 수 있다. uv와 wheel 빌드가 남기는 경로·시각·권한 흔적을 zip에
+넣지 않는다.
 
 | 흔적 | 무엇이 들어 있었나 |
 |---|---|
@@ -292,7 +295,7 @@ Phase 1~5 의 앱들은 모두 이 절차를 따른다.
 | 네이티브 확장 금지 | `build-pyz.sh` 순수성 검사 |
 | 산출물 의존성 고정 | `uv.lock` frozen export + runtime `--require-hashes` + locked build group |
 | ZIP 권한·무결성 | `scripts/smoke.sh` 가 group/other writable entry와 손상된 zip을 거부 |
-| 산출물 재현성 | CI artifact job이 native staging에서 두 번 빌드한 SHA-256을 비교 |
+| 산출물 재현성 | CI artifact job이 같은 job의 native staging 두 번 빌드 SHA-256을 비교 |
 | vendor 입력 고정 | `scripts/vendor-checksums.txt`와 `fetch-vendor.sh`가 zellij/xclip을 검증 |
 | Actions 공급망 고정 | CI/release workflow의 외부 action을 immutable commit SHA로 pin |
 | 런처 ↔ `env.py` 후보 목록 일치 | `tests/test_launcher.py` |
