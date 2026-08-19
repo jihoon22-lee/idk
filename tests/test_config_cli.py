@@ -5,7 +5,7 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from idk import config
+from idk import cli_config, config
 from idk.__main__ import app
 
 runner = CliRunner()
@@ -158,6 +158,97 @@ def test_config_check_never_outputs_bearer_token(monkeypatch):
     assert result.exit_code == 0, result.stdout
     assert secret not in result.stdout
     assert secret not in json.dumps(rows, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
+    "token", ["secret\nheader", "secret\rheader", "secret\theader", "secret\x7fheader"]
+)
+def test_config_check_rejects_header_invalid_bearer_token_without_output(monkeypatch, token):
+    monkeypatch.setenv("MIRROR_TOKEN", token)
+    _write(
+        "mirror.toml",
+        '[artifactory]\nbase_url = "https://mirror.example"\ntoken_env = "MIRROR_TOKEN"\n',
+    )
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+    assert "bearer" in rows[2]["detail"]
+    assert token not in result.stdout
+    assert token not in rows[2]["detail"]
+
+
+@pytest.mark.parametrize("token_value", [None, ""])
+def test_config_check_rejects_missing_or_empty_token_env_without_fallback(monkeypatch, token_value):
+    if token_value is None:
+        monkeypatch.delenv("MIRROR_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("MIRROR_TOKEN", token_value)
+    _write(
+        "mirror.toml",
+        "[artifactory]\n"
+        'base_url = "https://mirror.example"\n'
+        'auth = "netrc"\n'
+        'token_env = "MIRROR_TOKEN"\n',
+    )
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+    assert "token_env" in rows[2]["detail"]
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "ftp://mirror.example/simple",
+        "https://",
+        "https://mirror.example:bad/simple",
+        "https://mirror.example:65536/simple",
+        "https://[bad/simple",
+    ],
+)
+def test_config_check_rejects_invalid_mirror_urls(base_url):
+    _write("mirror.toml", f'[artifactory]\nbase_url = "{base_url}"\n')
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+    assert "base_url" in rows[2]["detail"]
+
+
+def test_config_check_existing_directory_is_failure():
+    path = config.config_path("mirror.toml")
+    path.mkdir(parents=True)
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2] == {
+        "file": "mirror.toml",
+        "status": "fail",
+        "detail": "설정 경로가 일반 파일이 아닙니다",
+    }
+
+
+def test_config_check_converts_validator_filesystem_errors_to_safe_failure(monkeypatch):
+    secret = "validator-secret"
+
+    def fail():
+        raise PermissionError(f"permission denied: {secret}")
+
+    monkeypatch.setitem(cli_config.VALIDATORS, "mirror.toml", fail)
+    _write("mirror.toml", '[artifactory]\nbase_url = "https://mirror.example"\n')
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+    assert rows[2]["detail"] == "설정 검사 중 파일/모델 오류"
+    assert secret not in result.stdout
 
 
 def test_config_check_table_output_is_not_used_for_json():

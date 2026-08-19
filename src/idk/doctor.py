@@ -162,23 +162,48 @@ def _mirror_checks(*, net: bool) -> list[Check]:
     try:
         mirror = mirror_model.load()
     except config.ConfigError as exc:
-        return [Check("mirror", "mirror.toml", FAIL, "파싱 실패", str(exc))]
+        detail = (
+            "미러 설정을 읽지 못했습니다"
+            if isinstance(exc.__cause__, (OSError, RuntimeError))
+            else str(exc)
+        )
+        return [Check("mirror", "mirror.toml", FAIL, "파싱 실패", detail)]
+    except (OSError, RuntimeError):
+        return [Check("mirror", "mirror.toml", FAIL, "설정 오류", "미러 설정을 읽지 못했습니다")]
     if mirror is None:
         return [Check("mirror", "base_url", SKIP, "미설정", "~/.config/idk/mirror.toml (Phase 5)")]
-    base_url = mirror.base_url
+    try:
+        base_url = mirror.base_url
+        if not isinstance(base_url, str):
+            raise ValueError
+        mirror_model._validate_base_url(base_url, "mirror.toml.artifactory.base_url")
+        auth = mirror.auth_for_request()
+    except config.ConfigError as exc:
+        return [Check("mirror", "base_url", FAIL, "설정 오류", str(exc))]
+    except (OSError, RuntimeError, ValueError):
+        return [
+            Check("mirror", "base_url", FAIL, "설정 오류", "미러 URL/인증 설정이 올바르지 않습니다")
+        ]
     if not net:
         return [Check("mirror", "base_url", SKIP, str(base_url), "--net 을 주면 접속까지 확인한다")]
     try:
-        resp = httpc.request(str(base_url), timeout=5.0, auth=mirror.auth_for_request())
-    except (httpc.HttpError, ValueError) as exc:
-        return [Check("mirror", "base_url", FAIL, str(base_url), str(exc))]
-    if 200 <= resp.status < 300:
+        resp = httpc.request(base_url, timeout=5.0, auth=auth)
+    except Exception:
+        return [Check("mirror", "base_url", FAIL, base_url, "미러 접속 실패")]
+    try:
+        status = resp.status
+    except Exception:
+        return [Check("mirror", "base_url", FAIL, base_url, "미러 응답 상태가 올바르지 않습니다")]
+    if type(status) is not int or not 100 <= status <= 599:
+        return [Check("mirror", "base_url", FAIL, base_url, "미러 응답 상태가 올바르지 않습니다")]
+    status_code = status
+    if 200 <= status < 300:
         status = OK
-    elif resp.status in {401, 403}:
+    elif status in {401, 403}:
         status = FAIL
     else:
         status = WARN
-    return [Check("mirror", "base_url", status, str(base_url), f"HTTP {resp.status}")]
+    return [Check("mirror", "base_url", status, base_url, f"HTTP {status_code}")]
 
 
 def collect(*, net: bool = False) -> list[Check]:

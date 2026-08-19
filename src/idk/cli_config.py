@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
@@ -40,7 +41,9 @@ def _validate_snippets() -> list[str]:
 
 
 def _validate_mirror() -> list[str]:
-    mirror_model.load()
+    mirror = mirror_model.load()
+    if mirror is not None:
+        mirror.auth_for_request()
     return []
 
 
@@ -63,13 +66,29 @@ def collect_checks() -> list[ConfigCheck]:
     """알려진 설정을 고정된 순서로 검사한다."""
     checks: list[ConfigCheck] = []
     for filename, validator in VALIDATORS.items():
-        if not config.config_path(filename).is_file():
-            checks.append(ConfigCheck(filename, SKIP, "파일 없음"))
+        try:
+            path = config.config_path(filename)
+            if not os.path.lexists(path):
+                checks.append(ConfigCheck(filename, SKIP, "파일 없음"))
+                continue
+            if not path.is_file():
+                checks.append(ConfigCheck(filename, FAIL, "설정 경로가 일반 파일이 아닙니다"))
+                continue
+        except (OSError, RuntimeError, ValueError):
+            checks.append(ConfigCheck(filename, FAIL, "설정 검사 중 파일/모델 오류"))
             continue
         try:
             warnings = validator()
         except config.ConfigError as exc:
-            checks.append(ConfigCheck(filename, FAIL, str(exc)))
+            detail = (
+                "설정 검사 중 파일/모델 오류"
+                if isinstance(exc.__cause__, (OSError, RuntimeError))
+                else str(exc)
+            )
+            checks.append(ConfigCheck(filename, FAIL, detail))
+            continue
+        except (OSError, RuntimeError, ValueError):
+            checks.append(ConfigCheck(filename, FAIL, "설정 검사 중 파일/모델 오류"))
             continue
         checks.append(ConfigCheck(filename, OK, "정상"))
         checks.extend(ConfigCheck(filename, WARN, detail) for detail in warnings)

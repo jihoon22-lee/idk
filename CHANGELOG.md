@@ -16,6 +16,10 @@
 - **mirror 설정·doctor 접속 판정 강화** — `artifactory`/`base_url`/`auth`/`token_env` 타입과
   netrc 전용 인증을 공통 모델로 검증한다. token_env bearer 값은 요청에만 사용하며 출력하지
   않고, doctor는 2xx를 ok, 401/403을 fail, 그 밖의 HTTP 오류를 warn, 전송 실패를 fail로 보고한다.
+- **mirror 인증·경로 오류의 안전한 실패** — 비어 있거나 헤더에 넣을 수 없는 token_env는
+  netrc로 폴백하지 않고 generic 오류로 실패한다. base_url의 HTTP(S)/hostname/port와 설정
+  경로의 일반 파일 여부를 검사하며, doctor와 config check는 파일·응답 shape 오류를
+  secret-bearing 예외 문자열 없이 fail 행으로 보고한다.
 - **설정 타입 오류를 일관되게 보고** — 문자열 불리언과 배열이 아닌 중첩 컬렉션을 설정 로드
   시 위치가 포함된 `ConfigError`로 거부하고, workspace 명령의 닫히지 않은 인용문도 조기에
   검증한다.

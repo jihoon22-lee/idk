@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 from idk import config
 
@@ -25,14 +26,23 @@ class MirrorConfig:
     def auth_for_request(self) -> str | tuple[str, str] | None:
         """httpc가 이해하는 인증 값.
 
-        token 환경변수가 없거나 빈 값이면 기존 netrc 인증으로 폴백한다. 이 메서드는 요청
+        token_env가 지정되면 유효한 bearer token이 반드시 있어야 한다. 이 메서드는 요청
         직전에 호출되며 반환 tuple의 token을 출력 문자열에 넣어서는 안 된다.
         """
-        if self.token_env:
+        if self.token_env is not None:
             token = os.environ.get(self.token_env)
-            if token:
-                return ("bearer", token)
-        # 기존 doctor 동작과 같이 auth를 생략해도 사용자 netrc를 시도한다.
+            if not token:
+                raise _error(
+                    "mirror.toml.artifactory.token_env",
+                    "환경변수가 없거나 비어 있습니다",
+                )
+            if not _valid_bearer_token(token):
+                raise _error(
+                    "mirror.toml.artifactory.token_env",
+                    "bearer token이 올바르지 않습니다",
+                )
+            return ("bearer", token)
+        # token_env가 없을 때만 기존 doctor 동작처럼 사용자 netrc를 시도한다.
         return self.auth or "netrc"
 
     request_auth = auth_for_request
@@ -43,6 +53,26 @@ Mirror = MirrorConfig
 
 def _error(where: str, message: str) -> config.ConfigError:
     return config.ConfigError(f"{where}: {message}")
+
+
+def _valid_bearer_token(token: str) -> bool:
+    """HTTP 헤더에 넣을 수 있는 가시 ASCII bearer token인지 확인한다."""
+    return bool(token) and all(0x21 <= ord(char) <= 0x7E for char in token)
+
+
+def _validate_base_url(value: str, where: str) -> str:
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise _error(where, "HTTP(S) URL이어야 합니다")
+    try:
+        parsed = urlsplit(value)
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+        _ = parsed.port
+    except ValueError as exc:
+        raise _error(where, "HTTP(S) URL의 host/port가 올바르지 않습니다") from exc
+    if scheme not in {"http", "https"} or not hostname:
+        raise _error(where, "HTTP(S) URL이며 hostname이 필요합니다")
+    return value
 
 
 def _string(raw: dict[str, Any], key: str, where: str, *, required: bool = False) -> str | None:
@@ -76,11 +106,15 @@ def load() -> MirrorConfig | None:
 
     where = "mirror.toml.artifactory"
     base_url = _string(artifactory, "base_url", where, required=True)
+    assert base_url is not None
+    _validate_base_url(base_url, f"{where}.base_url")
     auth = _string(artifactory, "auth", where)
     if auth not in (None, "netrc"):
         raise _error(f"{where}.auth", '생략하거나 "netrc"만 사용할 수 있습니다')
     token_env = _string(artifactory, "token_env", where)
     if token_env is not None and not token_env:
         raise _error(f"{where}.token_env", "빈 문자열일 수 없습니다")
-    assert base_url is not None
-    return MirrorConfig(base_url=base_url, auth=auth, token_env=token_env)
+    mirror = MirrorConfig(base_url=base_url, auth=auth, token_env=token_env)
+    if token_env is not None:
+        mirror.auth_for_request()
+    return mirror

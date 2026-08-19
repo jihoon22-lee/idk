@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from contextlib import redirect_stdout
+from io import StringIO
+from types import SimpleNamespace
 
 import pytest
 
@@ -189,7 +192,141 @@ def test_mirror_net_transport_failure_is_fail(monkeypatch):
     check = next(c for c in doctor.collect(net=True) if c.section == "mirror")
 
     assert check.status == doctor.FAIL
-    assert "network unavailable" in check.detail
+    assert check.detail == "미러 접속 실패"
+
+
+def test_mirror_request_exception_never_leaks_secret_in_any_doctor_output(monkeypatch):
+    secret = "header-secret-token"
+    config.save(
+        "mirror.toml",
+        {
+            "artifactory": {
+                "base_url": "https://mirror.example/simple",
+            }
+        },
+    )
+
+    def fail(*args, **kwargs):
+        raise ValueError(f"invalid header value: {secret}")
+
+    monkeypatch.setattr(httpc, "request", fail)
+    checks = doctor.collect(net=True)
+    mirror = next(c for c in checks if c.section == "mirror")
+    assert mirror.status == doctor.FAIL
+    assert secret not in mirror.value
+    assert secret not in mirror.detail
+
+    json_output = StringIO()
+    with redirect_stdout(json_output):
+        assert doctor.main(as_json=True, net=True) == 0
+    assert secret not in json_output.getvalue()
+
+    brief_output = StringIO()
+    with redirect_stdout(brief_output):
+        assert doctor.main(as_brief=True, net=True) == 0
+    assert secret not in brief_output.getvalue()
+
+    table_output = StringIO()
+    with redirect_stdout(table_output):
+        assert doctor.main(net=True) == 0
+    assert secret not in table_output.getvalue()
+
+
+@pytest.mark.parametrize("token_value", [None, ""])
+def test_mirror_missing_or_empty_token_env_is_fail_without_request_or_netrc(
+    monkeypatch, token_value
+):
+    if token_value is None:
+        monkeypatch.delenv("MIRROR_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("MIRROR_TOKEN", token_value)
+    config.save(
+        "mirror.toml",
+        {
+            "artifactory": {
+                "base_url": "https://mirror.example/simple",
+                "auth": "netrc",
+                "token_env": "MIRROR_TOKEN",
+            }
+        },
+    )
+    calls = []
+
+    def request(*args, **kwargs):
+        calls.append(kwargs)
+        return httpc.Response(204, args[0], {}, b"")
+
+    monkeypatch.setattr(httpc, "request", request)
+
+    check = next(c for c in doctor.collect(net=True) if c.section == "mirror")
+
+    assert check.status == doctor.FAIL
+    assert calls == []
+    assert "token_env" in check.detail
+
+
+def test_mirror_without_token_env_keeps_default_netrc_policy(monkeypatch):
+    config.save(
+        "mirror.toml",
+        {"artifactory": {"base_url": "https://mirror.example/simple"}},
+    )
+    calls = []
+
+    def request(*args, **kwargs):
+        calls.append(kwargs)
+        return httpc.Response(204, args[0], {}, b"")
+
+    monkeypatch.setattr(httpc, "request", request)
+
+    check = next(c for c in doctor.collect(net=True) if c.section == "mirror")
+
+    assert check.status == doctor.OK
+    assert calls[0]["auth"] == "netrc"
+
+
+def test_mirror_invalid_response_status_is_fail_without_crashing(monkeypatch):
+    config.save(
+        "mirror.toml",
+        {"artifactory": {"base_url": "https://mirror.example/simple"}},
+    )
+    monkeypatch.setattr(
+        httpc,
+        "request",
+        lambda *args, **kwargs: SimpleNamespace(status="200"),
+    )
+
+    check = next(c for c in doctor.collect(net=True) if c.section == "mirror")
+
+    assert check.status == doctor.FAIL
+    assert check.detail == "미러 응답 상태가 올바르지 않습니다"
+
+
+def test_mirror_invalid_url_is_fail_in_doctor(monkeypatch):
+    config.save(
+        "mirror.toml",
+        {"artifactory": {"base_url": "ftp://mirror.example/simple"}},
+    )
+
+    check = next(c for c in doctor.collect(net=True) if c.section == "mirror")
+
+    assert check.status == doctor.FAIL
+    assert "base_url" in check.detail
+
+
+def test_workspace_symlink_loop_is_a_config_failure(tmp_path):
+    loop = tmp_path / "loop"
+    loop.symlink_to(loop, target_is_directory=True)
+    config.save(
+        "workspaces.toml",
+        {"workspace": [{"name": "loop", "cwd": str(loop)}]},
+    )
+
+    from idk.cli_config import collect_checks
+
+    checks = [check for check in collect_checks() if check.file == "workspaces.toml"]
+
+    assert checks[0].status == "fail"
+    assert checks[0].detail == "설정 검사 중 파일/모델 오류"
 
 
 def test_mirror_token_env_is_sent_as_bearer_without_being_reported(monkeypatch):
