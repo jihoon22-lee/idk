@@ -8,6 +8,10 @@ import textwrap
 import urllib.parse
 
 _ASCII_WHITESPACE = " \t\n\r\v\f"
+_BASE64_ALPHABET = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+_BASE64_URLSAFE_ALPHABET = frozenset(
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_="
+)
 
 
 def b64_encode(data: bytes, *, url_safe: bool = False, wrap: int = 0) -> str:
@@ -26,6 +30,9 @@ def b64_decode(text: str, *, url_safe: bool = False) -> bytes:
         cleaned_bytes = cleaned.encode("ascii")
     except UnicodeEncodeError as exc:
         raise ValueError("올바른 base64가 아닙니다") from exc
+    alphabet = _BASE64_URLSAFE_ALPHABET if url_safe else _BASE64_ALPHABET
+    if any(char not in alphabet for char in cleaned_bytes):
+        raise ValueError("올바른 base64가 아닙니다")
     cleaned_bytes += b"=" * (-len(cleaned_bytes) % 4)
     try:
         return base64.b64decode(

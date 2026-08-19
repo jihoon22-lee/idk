@@ -61,9 +61,18 @@ def test_b64_rejects_non_ascii_characters():
         encoding.b64_decode("aGVsbG8 한글")
 
 
-def test_b64_url_safe_uses_its_alphabet():
+@pytest.mark.parametrize("text", ["+//+", "/w=="])
+def test_b64_url_safe_rejects_standard_alphabet(text):
     with pytest.raises(ValueError, match="base64"):
-        encoding.b64_decode("-__-")
+        encoding.b64_decode(text, url_safe=True)
+
+
+def test_b64_standard_accepts_standard_alphabet():
+    assert encoding.b64_decode("+//+") == b"\xfb\xff\xfe"
+    assert encoding.b64_decode("/w==") == b"\xff"
+
+
+def test_b64_url_safe_uses_its_alphabet():
     assert encoding.b64_decode("-__-", url_safe=True) == b"\xfb\xff\xfe"
 
 
