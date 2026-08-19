@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import ast
 import sys
+from io import BytesIO
 from pathlib import Path
+
+from idk.dt import security
 
 DT_DIR = Path(__file__).resolve().parents[1] / "src" / "idk" / "dt"
 
@@ -44,3 +47,10 @@ def test_dt_imports_are_stdlib_only():
                 assert top in sys.stdlib_module_names, (
                     f"{path.name}: '{node.module}' 는 stdlib 가 아니다"
                 )
+
+
+def test_stream_hash_stays_available_at_stdlib_boundary():
+    assert (
+        security.hash_stream(BytesIO(b"abc"), "sha256")
+        == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    )

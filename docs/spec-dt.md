@@ -111,6 +111,9 @@ idk dt b64 dec [--url-safe]
 
 - `--wrap` 기본 0(줄바꿈 없음). `76` 이면 MIME 스타일
 - `dec` 는 패딩이 빠진 입력도 받아준다 (JWT 조각을 그대로 붙여넣는 경우가 많다)
+- `dec` 는 ASCII 공백·탭·개행을 입력 중간에서도 무시하지만, 알파벳 밖의 문자는 엄격히
+  거부하고 `올바른 base64가 아닙니다`로 exit 1을 반환한다. `--url-safe`는 `-`·`_`를
+  허용한다.
 - 디코드 결과가 UTF-8 이 아니면 안내 후 exit 1 (`--raw` 로 바이트 그대로 출력 허용)
 
 ### 4.3 `idk dt url`
@@ -135,6 +138,7 @@ idk dt ts <입력> [--utc | --local] [--ms]
 - 입력이 정수로 파싱되면 epoch, 아니면 ISO 8601 로 간주한다
 - 자릿수로 초/밀리초를 추정하고, `--ms` 로 강제할 수 있다
 - 기본 출력은 **양쪽 다** — 헷갈릴 일이 없다
+- 상대 시각은 현재보다 미래면 같은 단위로 `후`를 붙이고, 절댓값이 5초 미만이면 `방금`이다.
 
 ```
 epoch    1755302400
@@ -166,7 +170,8 @@ idk dt hash sha256 --file a.bin
 idk dt hash sha256 --file a.bin --check <expected>
 ```
 
-- 파일은 청크로 읽는다(대용량 대비)
+- 파일은 1 MiB 청크로 스트리밍해 읽는다(대용량 대비); 문자열·stdin 입력은 기존 바이트 경로를
+  사용한다
 - `--check` 는 대소문자 무시 비교. 일치 0, 불일치 1
 - 출력은 소문자 hex 한 줄
 
@@ -252,15 +257,16 @@ src/idk/
 │  ├─ encoding.py         b64/url 인코딩·디코딩
 │  ├─ timestamp.py        parse_input, to_epoch, to_iso, relative
 │  ├─ case.py             tokenize + 4종 변환
-│  ├─ security.py         hash_bytes, gen_uuid
+│  ├─ security.py         hash_bytes, hash_stream, gen_uuid
 │  ├─ regexq.py           search, replace
 │  ├─ textdiff.py         unified
 │  └─ jwt.py              decode (검증 없음)
 └─ cli_dt.py              typer 배선 + TUI
 ```
 
-모든 함수는 **문자열/바이트를 받아 문자열을 돌려주는 순수 함수**로 만든다.
-파일 읽기·stdin·출력은 전부 `cli_dt.py` 가 한다.
+변환 함수는 **문자열/바이트를 받아 문자열을 돌려주는 순수 함수**로 만든다. 예외적으로
+`hash_stream`은 열린 바이너리 스트림을 받아 digest 문자열을 돌려준다. 파일 열기·stdin·출력은
+전부 `cli_dt.py` 가 담당한다.
 
 ---
 
@@ -270,8 +276,9 @@ src/idk/
 |---|---|
 | 각 변환 함수 | 표 기반 케이스. devbox `transformers.test.ts` 와 `tools.rs` 의 테스트 벡터를 옮긴다 |
 | hash | 알려진 벡터(`""`, `"abc"`)로 4종 전부 |
+| 대용량 hash | 3 MiB 파일의 알려진 digest와 1 MiB 청크 스트리밍, `Path.read_bytes` 미호출 |
 | case | §4.5 표를 그대로 파라미터화 |
-| 왕복 | b64/url: `dec(enc(x)) == x` (한글·이모지·바이너리 포함) |
+| 왕복 | b64/url: `dec(enc(x)) == x` (한글·이모지·바이너리 포함), ASCII whitespace·strict alphabet |
 | jwt | 패딩 없는 조각, 세 조각 아님, payload 가 JSON 아님 |
 | ts | epoch↔ISO 왕복, 초/밀리초 추정 경계 |
 | I/O 규약 | 위치 인자/`--file`/stdin 우선순위, 중복 지정 시 exit 2, TTY 에서 입력 없을 때 |

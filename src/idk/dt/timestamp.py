@@ -47,23 +47,25 @@ def local(epoch: float) -> str:
 def relative(epoch: float, now: float) -> str:
     """epoch → '3일 전' 식 상대 표현."""
     delta = int(now - epoch)
-    if delta < 5:
+    seconds = abs(delta)
+    if seconds < 5:
         return "방금"
-    if delta < 60:
-        return f"{delta}초 전"
-    minutes = delta // 60
+    suffix = "후" if delta < 0 else "전"
+    if seconds < 60:
+        return f"{seconds}초 {suffix}"
+    minutes = seconds // 60
     if minutes < 60:
-        return f"{minutes}분 전"
+        return f"{minutes}분 {suffix}"
     hours = minutes // 60
     if hours < 24:
-        return f"{hours}시간 전"
+        return f"{hours}시간 {suffix}"
     days = hours // 24
     if days < 30:
-        return f"{days}일 전"
+        return f"{days}일 {suffix}"
     months = days // 30
     if months < 12:
-        return f"{months}개월 전"
-    return f"{months // 12}년 전"
+        return f"{months}개월 {suffix}"
+    return f"{months // 12}년 {suffix}"
 
 
 def format_output(epoch: float, *, now: float | None = None) -> str:

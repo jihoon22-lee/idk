@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from typer.testing import CliRunner
 
 from idk import cli_dt
@@ -81,6 +83,12 @@ def test_b64_dec_non_utf8_is_exit_1():
     assert result.exit_code == 1
 
 
+def test_b64_dec_invalid_alphabet_is_friendly_error():
+    result = _invoke(["b64", "dec", "!!!"])
+    assert result.exit_code == 1
+    assert "base64" in result.stderr
+
+
 # --- url ---
 
 
@@ -140,6 +148,12 @@ def test_hash_known_vector():
     )
 
 
+def test_hash_stdin_uses_byte_input():
+    result = _invoke(["hash", "sha256"], input="abc")
+    expected = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    assert result.stdout.strip() == expected
+
+
 def test_hash_check_match():
     result = _invoke(
         [
@@ -161,6 +175,21 @@ def test_hash_check_mismatch_is_exit_1():
 
 def test_hash_bad_algorithm_is_exit_1():
     assert _invoke(["hash", "crc32", "abc"]).exit_code == 1
+
+
+def test_hash_file_streams_large_input_without_read_bytes(tmp_path, monkeypatch):
+    file = tmp_path / "large.bin"
+    file.write_bytes(b"0123456789abcdef" * (3 * 1024 * 1024 // 16))
+
+    def fail_read_bytes(_path):
+        raise AssertionError("hash --file must stream instead of calling Path.read_bytes")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+    result = _invoke(["hash", "sha256", "--file", str(file)])
+
+    assert result.exit_code == 0, result.stderr
+    expected = "5bcd44e1ae4d34173b36402d6b2f1ecdb3460aac1d66937a5fcc92beb5ec6779"
+    assert result.stdout.strip() == expected
 
 
 # --- uuid ---
