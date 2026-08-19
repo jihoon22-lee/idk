@@ -1,0 +1,8 @@
+In file included from include/vector.hpp:4,
+                 from src/main.cpp:1:
+In instantiation of 'void append(const T&) [with T = int]':
+include/vector.hpp:21:5: required from here
+include/vector.hpp:30:9: error: no matching function for call to 'append'
+src/main.cpp:7:5: note: candidate function is not viable
+
+build finished
