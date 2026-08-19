@@ -11,9 +11,6 @@
 
 ## [0.2.0] - 2026-08-20
 
-> 이 섹션은 `v0.2.0` 릴리스 후보 준비 내용이다. 통합 검증과 문서 정리는 끝났지만, 아직
-> `v0.2.0` 태그나 GitHub Release는 만들지 않았다.
-
 ### Added
 - **`idk build` CLI MVP** — 합성 fixture 경계를 전제로 gcc/clang·CMake·make·Qt 로그를 파일 또는
   stdin에서 streaming parser로 읽고, 위치·context를 보존한 plain/JSON 결과를 출력한다. `--severity`
@@ -130,7 +127,7 @@
   로그인 셸을 보고 문법을 자동 선택한다.
 - **`/bin/sh` 런처 폴리글롯** — zipapp 앞에 셸 스크립트를 붙여 python 3.10+ 를 스스로 찾아
   자기 자신을 실행한다. zip 은 끝에서부터 읽히므로 앞에 바이트가 붙어도 유효하다.
-  덕분에 반입 파일이 1개로 유지되고, `.csh` source 여부와 무관하게 동작한다.
+  덕분에 핵심 실행 아티팩트가 1개로 유지되고, `.csh` source 여부와 무관하게 동작한다.
   탈출구로 `IDK_PYTHON` 환경변수를 지원한다.
 - **`scripts/build-pyz.sh`** — 3.10 을 대상으로 의존성을 풀어 `shiv` zipapp 생성.
   네이티브 확장·플랫폼 종속 휠·`certifi` 가 섞이면 빌드를 실패시킨다.

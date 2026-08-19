@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dist/idk.pyz 를 만든다 — 반입 파일 1개.
+# dist/idk.pyz 를 만든다 — 필수 핵심 실행 아티팩트 1개.
 #
 #   1) 3.10 을 대상으로 uv.lock 에서 의존성을 풀어 native tmp 에 설치
 #   2) 네이티브 확장이 섞이지 않았는지 검사 (AGENTS.md 규약의 기계적 강제)

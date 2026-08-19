@@ -6,7 +6,7 @@
 기여하기 전에 [§6 새 서브커맨드 추가](#6-새-서브커맨드-추가)와 [AGENTS.md](../AGENTS.md)를 읽으면 된다.
 
 > 상태 (2026-08-20): Phase 0~3과 v0.2.0 보안·안정성 작업이 통합되어 릴리스 후보를 준비 중이다.
-> `dist/idk.pyz`는 빌드 스크립트가 만드는 단일 실행 아티팩트이며, 아직 `v0.2.0` 태그나
+> `dist/idk.pyz`는 빌드 스크립트가 만드는 하나의 필수 핵심 실행 아티팩트이며, 아직 `v0.2.0` 태그나
 > GitHub Release는 만들지 않았다.
 
 ---
@@ -27,7 +27,8 @@
 
 핵심 성질 셋:
 
-- **파일 1개.** 의존성이 전부 들어 있어 사내 PyPI 미러 상태와 무관하다.
+- **핵심 파일 1개.** 의존성이 전부 들어 있어 사내 PyPI 미러 상태와 무관하다. `ws`/`run --pane`의
+  zellij와 `copy_on_select`의 xclip은 별도 선택 vendor 입력이다.
 - **인터프리터를 스스로 찾는다.** `.csh` 를 source 하지 않은 컨텍스트에서도 동작한다.
 - **재현 가능하다.** committed source와 `uv.lock`은 필요한 입력이지만, 같은 Python 대상과
   uv/shiv/hatchling 등 build toolchain, native staging 조건도 맞아야 같은 바이트를 기대할 수
@@ -36,9 +37,9 @@
 
 ---
 
-## 2. 단일 파일 배포 — sh/zip 폴리글롯
+## 2. 핵심 단일 파일 배포 — sh/zip 폴리글롯
 
-`idk.pyz` 는 셸 스크립트이면서 동시에 zip 아카이브다.
+핵심 아티팩트 `idk.pyz` 는 셸 스크립트이면서 동시에 zip 아카이브다.
 
 ```
 ┌─────────────────────────────────────┐  offset 0
@@ -187,6 +188,13 @@ upload 전에 실패한다. 이 세 게이트가 권한·재현성·무결성을
 zellij가 정적 링크인지 검사한다. `full` 등 다른 zellij flavor는 다운로드 전에 거부한다.
 즉, 현재 지원 경계는 내장 웹서버가 없는 검토된 `no-web` 빌드이며 flavor를 늘리려면 새
 manifest 승인이 필요하다.
+
+`fetch-vendor.sh` 실행은 두 선택 구성요소의 vendor 파일을 `vendor/`에 정확히 3개
+준비한다:
+zellij 아카이브, xclip 아카이브, 그리고 두 아카이브의 무결성을 확인하는
+`vendor/SHA256SUMS`. 여기에 필수 핵심 `dist/idk.pyz`를 더한 전체 준비 bundle은 4개 파일이다.
+zellij 아카이브는 `idk ws`와 `idk run --pane`에, xclip 아카이브는 `copy_on_select`에만
+필요하며, `SHA256SUMS`는 어떤 vendor 아카이브와도 분리해 반입하지 않는다.
 
 GitHub Actions의 `checkout`, `setup-uv`, `upload-artifact`는 workflow에 immutable commit
 SHA로 고정하고, 사람이 읽는 upstream 버전은 주석으로만 병기한다. 버전 갱신은 별도 검토에서
@@ -344,5 +352,5 @@ Phase 1~5 의 앱들은 모두 이 절차를 따른다.
 | `TMPDIR`를 비-native 경로로 덮어쓴다 | ZIP entry 퍼미션이 달라질 수 있다. 기본 native `/tmp`를 유지하거나 Linux native 경로를 지정 |
 | 첫 실행에 `~/.shiv` 압축 해제 비용 | 1회성. NFS 홈이면 `SHIV_ROOT` 로 이동 |
 | 런처가 `$0` 에 의존 | `sh idk.pyz` 처럼 상대 경로로 부르는 특수한 경우 취약. PATH·절대경로 실행은 정상 |
-| zellij 는 별도 반입 | musl 정적 바이너리라 rustc 없이도 동작하지만, `idk.pyz` 안에는 못 넣는다 |
+| zellij 는 별도 선택 반입 | musl 정적 바이너리라 rustc 없이도 동작하지만, `idk.pyz` 안에는 못 넣는다. 두 vendor를 모두 준비하면 핵심 1개 + vendor 3개다 |
 | 루트 커밋 `3642e9b` 가 lint 실패 | 한 줄이 100자를 넘는다. 후속 통합 커밋에서 해소됐고 릴리스 후보 검증에서 다시 확인한다 |

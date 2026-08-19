@@ -10,12 +10,18 @@
 
 ## 설치
 
-`idk.pyz` 파일 하나면 된다. root 권한이 필요 없다.
+핵심 CLI와 `idk build`에는 `idk.pyz` 파일 하나면 된다. `idk ws`/`idk run --pane`에는
+zellij vendor가, `copy_on_select`에는 xclip vendor가 추가로 필요하다. root 권한은 필요 없다.
 
 ```bash
 mkdir -p ~/.local/bin
 cp idk.pyz ~/.local/bin/idk && chmod +x ~/.local/bin/idk
 ```
+
+`fetch-vendor.sh` 실행은 두 선택 구성요소의 vendor 파일 3개(zellij 아카이브,
+xclip 아카이브, `vendor/SHA256SUMS`)를 만든다. 핵심 `idk.pyz`까지 더한 전체 준비 bundle은
+4개 파일이며, `SHA256SUMS`는 vendor 아카이브와 함께 반입한다. 자세한 필요 조건과 설치는
+[closed-network-setup.md](closed-network-setup.md)를 따른다.
 
 셸 환경파일에 PATH 를 추가한다. `idk env` 가 그 줄을 만들어 준다:
 

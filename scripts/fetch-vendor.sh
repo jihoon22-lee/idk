@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# 선택 vendor 세트를 vendor/ 에 모은다 — 핵심 반입 아티팩트는 별도의 idk.pyz 한 개다.
+# 두 선택 vendor 아카이브와 SHA256SUMS를 vendor/ 에 모은다 — 핵심 반입 아티팩트는 별도의
+# idk.pyz 한 개다. 이 스크립트가 준비하는 vendor 파일은 항상 3개다.
 #
 #   vendor/zellij-*-musl.tar.gz   정적 링크 바이너리 (RHEL 8 의 glibc 2.28 과 무관하게 동작)
 #   vendor/xclip-*.tar.gz         폐쇄망에서 현지 빌드할 소스 (rustc 가 없어도 되는 C 코드)
@@ -156,8 +157,10 @@ echo "  버전 확인: $("$tmp/zellij" --version 2>&1 | head -1)"
 ( cd "$VENDOR" && sha256sum ./*.tar.gz > SHA256SUMS )
 
 echo
-echo "반입 세트 (vendor/):"
-ls -1sh "$VENDOR" | sed 's/^/  /'
+echo "반입 준비 결과 (vendor/ 파일 3개):"
+echo "  1. vendor/${zellij_name}.tar.gz (idk ws/run --pane용 선택 zellij)"
+echo "  2. vendor/xclip-${XCLIP_VERSION}.tar.gz (copy_on_select용 선택 xclip)"
+echo "  3. vendor/SHA256SUMS (위 두 아카이브와 함께 반입할 무결성 파일)"
 echo
-echo "필요하면 여기에 dist/idk.pyz 를 더해 반입한다. 핵심 아티팩트는 idk.pyz 한 개이며,"
-echo "vendor 파일은 ws/클립보드 기능을 사용할 때만 선택한다. 설치는 docs/closed-network-setup.md 참조."
+echo "핵심만 반입: dist/idk.pyz 1개. 위 vendor 3개까지 더한 전체 준비 bundle: 4개 파일."
+echo "설치와 선택 구성요소 필요 조건은 docs/closed-network-setup.md 를 참조한다."

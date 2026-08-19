@@ -20,7 +20,8 @@
 - Python 하한은 3.10이며 3.11+ 문법을 사용하지 않는다.
 - 런타임 의존성은 `py3-none-any` 순수 Python만 허용한다.
 - HTTP는 `src/idk/httpc.py`의 stdlib `urllib`만 사용한다.
-- 산출물은 `dist/idk.pyz` 한 파일이며 root 권한을 요구하지 않는다.
+- 필수 핵심 산출물은 `dist/idk.pyz` 한 파일이며 root 권한을 요구하지 않는다. ws/run pane의
+  zellij와 copy_on_select의 xclip은 선택 vendor 입력이다.
 - 모든 수정은 실패하는 회귀 테스트를 먼저 추가한다.
 
 ---

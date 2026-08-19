@@ -15,7 +15,7 @@
 ```bash
 ./scripts/build-pyz.sh     # dist/idk.pyz
 ./scripts/smoke.sh         # 반입 전 게이트 — 반드시 통과시킬 것
-./scripts/fetch-vendor.sh  # 선택: ws/클립보드용 vendor/ 준비
+./scripts/fetch-vendor.sh  # 선택: ws/클립보드용 vendor/ 3개 파일 준비
 ```
 
 checkout이 `/mnt/*`에 있어도 `build-pyz.sh`는 project root의 `build/` 대신
@@ -31,15 +31,20 @@ Linux native 경로를 사용한다. 최종 파일은 `dist/idk.pyz.tmp`를 거�
 native staging 조건도 같을 때 바이트 재현성을 기대할 수 있으며, 반입한 파일은 `sha256sum`으로
 대조할 수 있다.
 
-반입 세트는 **핵심 아티팩트 1개**이며, `ws`/클립보드가 필요할 때만 선택 vendor를 더한다:
+핵심만 쓰는 반입 세트는 `dist/idk.pyz` **1개**다. 두 선택 구성요소를 모두 준비하는
+`fetch-vendor.sh`는 vendor 디렉터리에 정확히 3개 파일을 만든다. 즉 zellij 아카이브,
+xclip 아카이브, 두 아카이브의 체크섬을 담은 `vendor/SHA256SUMS`다. 핵심 아티팩트까지
+더한 전체 준비 bundle은 **4개 파일**이다. zellij는 `idk ws`와 `idk run --pane`에,
+xclip은 `copy_on_select`에만 필요하며, `SHA256SUMS`는 vendor 아카이브와 반드시 함께 반입한다:
 
 | 파일 | 용도 |
 |---|---|
 | `dist/idk.pyz` (필수) | 도구 본체 (의존성 내장, 사내 PyPI 미러 상태와 무관) |
-| `vendor/zellij-no-web-x86_64-unknown-linux-musl.tar.gz` (선택) | 멀티플렉서. musl 정적 링크라 glibc 2.28 과 무관 |
-| `vendor/xclip-0.13.tar.gz` (선택) | 클립보드 브릿지 소스 (현지 빌드) |
+| `vendor/zellij-no-web-x86_64-unknown-linux-musl.tar.gz` (선택 1/3) | `ws`/`run --pane` 멀티플렉서. musl 정적 링크라 glibc 2.28 과 무관 |
+| `vendor/xclip-0.13.tar.gz` (선택 2/3) | `copy_on_select` 클립보드 브릿지 소스 (현지 빌드) |
+| `vendor/SHA256SUMS` (vendor를 반입하면 필수 3/3) | 위 두 아카이브와 함께 반입하는 무결성 파일 |
 
-`vendor/SHA256SUMS` 로 반입 후 무결성을 확인한다.
+전체 vendor 세트를 반입한 뒤 `(cd vendor && sha256sum -c SHA256SUMS)`로 무결성을 확인한다.
 
 > zellij 는 committed checksum manifest가 승인한 **no-web** 빌드만 받는다. 내장 웹서버가 없어
 > 반입 심사에서 설명하기 쉽고 4MB 작다. `ZELLIJ_FLAVOR=full`을 포함한 다른 flavor는
@@ -53,8 +58,11 @@ native staging 조건도 같을 때 바이트 재현성을 기대할 수 있으�
 ```bash
 mkdir -p ~/.local/bin
 cp idk.pyz ~/.local/bin/idk && chmod +x ~/.local/bin/idk
-# ws를 사용할 때만 선택 vendor를 설치한다:
+# vendor 세트를 함께 반입했다면 먼저 무결성을 확인한다:
+# (cd vendor && sha256sum -c SHA256SUMS)
+# ws/run --pane을 사용할 때만 선택 zellij vendor를 설치한다:
 # tar xzf zellij-*-musl.tar.gz -C ~/.local/bin
+# copy_on_select를 사용할 때만 xclip vendor를 현지 빌드한다 (아래 §4 참조).
 ```
 
 tcsh 환경파일(기존에 python3.10 PATH 를 넣어둔 그 파일)에 다음 두 줄을 추가한다.

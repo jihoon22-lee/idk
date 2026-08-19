@@ -24,7 +24,9 @@
 
 **실사용 비중은 폐쇄망이 압도적**이다. WSL은 주로 개발·빌드 머신 역할.
 
-목표: **반입 파일 하나로 양쪽에 동일하게 배포되는 CLI/TUI 도구 모음.**
+목표: **필수 핵심 실행 아티팩트 하나로 양쪽에 동일하게 배포되는 CLI/TUI 도구 모음.**
+`idk ws`/`idk run --pane`에는 선택 zellij vendor가, `copy_on_select`에는 선택 xclip vendor가
+필요하다.
 
 devbox(Tauri/Windows)와는 별도 저장소이며 코드를 공유하지 않는다. 단 `developer-toolbox`의
 도구 목록은 기능 명세로 참고한다.
@@ -37,11 +39,11 @@ devbox(Tauri/Windows)와는 별도 저장소이며 코드를 공유하지 않는
 |---|---|---|
 | **GUI 앱 안 만듦** | CLI/TUI 전용 | RHEL 8에 `libsoup3`/`webkit2gtk-4.1` 부재로 Tauri v2 구동 불가. ETX(X11 리모팅)에서 WebView는 체감 지연이 큼 |
 | **언어: Python 3.10 하한** | `requires-python = ">=3.10"` | 폐쇄망 설치 버전이 3.10. `tomllib`(3.11+) 금지 → `tomli` 사용. ruff `target-version = "py310"` 으로 문법 위반 차단 |
-| **배포: 단일 zipapp** | `shiv` 로 `idk.pyz` 생성 | 반입 파일 1개, 의존성 내장이라 사내 PyPI 미러 상태와 무관. **폐쇄망 안에서 소스를 풀어 긴급 수정 가능** — RHEL에 rustc가 없어 musl 바이너리는 현지 재빌드가 불가능한 것이 결정타 |
+| **배포: 핵심 단일 zipapp** | `shiv` 로 `idk.pyz` 생성 | 필수 핵심 반입 아티팩트 1개, 의존성 내장이라 사내 PyPI 미러 상태와 무관. ws/run pane/clipboard용 vendor는 선택 반입한다. **폐쇄망 안에서 소스를 풀어 긴급 수정 가능** — RHEL에 rustc가 없어 musl 바이너리는 현지 재빌드가 불가능한 것이 결정타 |
 | **순수 파이썬 의존성만** | `textual`, `rich`, `typer`, `tomli`, `tomli-w` | 전부 `py3-none-any` 휠. 아키텍처·glibc 무관 |
 | **HTTP는 stdlib `urllib`** | `requests`/`httpx` 금지 | 이 둘은 `certifi` 번들 CA를 사용해 **사내 TLS 인터셉션 CA를 신뢰하지 않아 아티팩토리 접속이 깨진다.** stdlib은 시스템 CA를 사용 |
 | **멀티플렉서: zellij** | musl 정적 바이너리 반입 (승인됨) | 양쪽 버전 완전 일치. tmux는 RHEL8=2.7 / Ubuntu=3.4 로 6년 차이라 설정 분기 비용이 큼. 레이아웃이 KDL 선언 파일이라 작성할 코드가 거의 없고 세션 매니저 UI가 내장 |
-| **umbrella CLI `idk`** | `idk <subcommand>` 단일 진입점 | 반입 아티팩트를 1개로 유지하기 위함 |
+| **umbrella CLI `idk`** | `idk <subcommand>` 단일 진입점 | 필수 핵심 실행 아티팩트를 1개로 유지하기 위함 |
 
 ---
 
@@ -134,20 +136,24 @@ exit 1
                         [사내 WSL 에서 빌드]
                           ./scripts/build-pyz.sh
                           ./scripts/fetch-vendor.sh  # 선택 vendor (ws/클립보드용)
-                              ↓ 반입 (핵심 아티팩트 1개 + 선택 vendor)
-                        [폐쇄망]  idk.pyz  (+ zellij/xclip 선택 반입)
+                              ↓ 반입 (core only: 1개; 두 vendor 포함 full bundle: 4개)
+                        [폐쇄망]  idk.pyz  (+ zellij 아카이브 + xclip 아카이브 + SHA256SUMS)
 ```
 
 공개 GitHub pull이 가능하므로 **소스 반입 절차가 통째로 사라진다.** `build-pyz.sh`는
-`dist/idk.pyz` 한 개만 만든다. `fetch-vendor.sh`가 준비하는 zellij musl tarball과 xclip
-소스는 `ws` 또는 클립보드 기능을 사용할 때만 필요한 선택 vendor 입력이다.
+필수 핵심 실행 아티팩트 `dist/idk.pyz` 한 개만 만든다. `fetch-vendor.sh`는 두 선택
+구성요소의 vendor 파일 3개(zellij tarball, xclip 소스 아카이브,
+`vendor/SHA256SUMS`)를 준비한다. 따라서 핵심 `idk.pyz`까지 포함한 full bundle은 4개 파일이다.
+zellij는 `ws`/`run --pane`에, xclip은 `copy_on_select`에만 필요한 선택 vendor 입력이며,
+`SHA256SUMS`는 vendor 아카이브와 함께 반입한다.
 
 **폐쇄망 설치**
 ```bash
 mkdir -p ~/.local/bin
 cp idk.pyz ~/.local/bin/idk && chmod +x ~/.local/bin/idk
-# ws를 사용할 때만 선택 vendor를 설치한다:
+# ws/run --pane을 사용할 때만 선택 zellij vendor를 설치한다:
 # tar xzf zellij-*-musl.tar.gz -C ~/.local/bin
+# copy_on_select를 사용할 때만 xclip vendor를 현지 빌드한다 (closed-network-setup.md 참조).
 # tcsh 환경파일에: setenv PATH "$HOME/.local/bin:$PATH"
 idk doctor
 ```
@@ -431,7 +437,8 @@ WSL Ubuntu 24.04 와 폐쇄망 RHEL 8.10(ETX 접속) 양쪽에서 동일하게 �
 - **HTTP는 stdlib `urllib`(src/idk/httpc.py) 만 사용.** requests/httpx 금지 —
   certifi 번들 CA 때문에 사내 TLS 인터셉션 환경에서 접속이 깨진다.
 - **GUI 금지.** CLI/TUI(textual)만.
-- 산출물은 `shiv` 단일 zipapp `dist/idk.pyz` 하나. 반입 파일 수를 늘리지 않는다.
+- 산출물은 `shiv` 단일 zipapp `dist/idk.pyz` 하나(필수 핵심 실행 아티팩트)다. zellij/xclip은
+  필요한 기능에서만 별도 vendor로 반입한다.
 - zellij 호출은 `src/idk/ws/backends/zellij.py` 에만 존재한다.
 - 설정은 `~/.config/idk/*.toml` (XDG). root 권한을 요구하는 동작 금지.
 

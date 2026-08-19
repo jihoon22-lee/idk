@@ -131,7 +131,11 @@ dnf list available xclip xsel libX11-devel libXmu-devel autoconf automake libtoo
 ### C-4. 반입 절차 자체
 
 - [ ] 반입에 승인이 필요한가, 얼마나 걸리는가
-- [ ] 한 번에 여러 파일을 넣을 수 있는가 (핵심 아티팩트 1개, 선택 vendor 최대 2개)
+- [ ] 한 번에 여러 파일을 넣을 수 있는가 (핵심만 1개; `fetch-vendor.sh`의 두 vendor를 모두
+      포함한 전체 준비 bundle은 핵심 1개 + vendor 3개 = 4개)
+- [ ] `idk ws` 또는 `idk run --pane`을 쓸 경우 zellij 아카이브를 반입할 수 있는가
+- [ ] `copy_on_select`를 쓸 경우 xclip 아카이브와 현지 빌드 의존성을 준비할 수 있는가
+- [ ] vendor를 반입할 때 `vendor/SHA256SUMS`를 두 아카이브와 함께 넣을 수 있는가
 - [ ] `~/.local/bin` 에 실행 파일을 두고 실행하는 데 제약이 있는가 (noexec 마운트 등)
 
 ---
