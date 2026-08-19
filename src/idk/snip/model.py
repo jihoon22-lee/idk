@@ -93,28 +93,22 @@ def _err(where: str, message: str) -> config.ConfigError:
     return config.ConfigError(f"{where}: {message}")
 
 
-def _strict_bool(value: Any, where: str) -> bool:
-    if type(value) is not bool:
-        raise _err(where, "raw 는 true 또는 false 여야 합니다")
-    return value
-
-
 def _parse_params(raw: Any, where: str) -> dict[str, Param]:
     if raw is None:
         return {}
     if not isinstance(raw, dict):
-        raise _err(where, "params 는 테이블이어야 합니다")
+        raise _err(where, "테이블이어야 합니다")
     out: dict[str, Param] = {}
     for key, value in raw.items():
         if not isinstance(value, dict):
-            raise _err(where, f"params.{key} 는 테이블이어야 합니다")
+            raise _err(f"{where}.{key}", "테이블이어야 합니다")
         default = value.get("default")
         if default is not None and not isinstance(default, str):
-            raise _err(where, f"params.{key}.default 는 문자열이어야 합니다")
+            raise _err(f"{where}.{key}.default", "문자열이어야 합니다")
         desc = value.get("desc", "")
         if not isinstance(desc, str):
-            raise _err(where, f"params.{key}.desc 는 문자열이어야 합니다")
-        raw_flag = _strict_bool(value.get("raw", False), f"{where}.params.{key}.raw")
+            raise _err(f"{where}.{key}.desc", "문자열이어야 합니다")
+        raw_flag = config.require_bool(value.get("raw"), f"{where}.{key}.raw")
         out[str(key)] = Param(default=default, desc=desc, raw=raw_flag)
     return out
 
@@ -124,40 +118,43 @@ def _parse_snippet(raw: Any, where: str) -> Snippet:
         raise _err(where, "snippet 은 테이블이어야 합니다")
     name = raw.get("name")
     if not isinstance(name, str) or not name:
-        raise _err(where, "name 은 필수 문자열입니다")
+        raise _err(f"{where}.name", "필수 문자열입니다")
     cmd = raw.get("cmd")
     if not isinstance(cmd, str) or not cmd.strip():
-        raise _err(where, "cmd 는 필수 문자열입니다")
+        raise _err(f"{where}.cmd", "필수 문자열입니다")
     desc = raw.get("desc", "")
     if not isinstance(desc, str):
-        raise _err(where, "desc 는 문자열이어야 합니다")
+        raise _err(f"{where}.desc", "문자열이어야 합니다")
 
-    params = _parse_params(raw.get("params"), f"{where}[{name}]")
+    params = _parse_params(raw.get("params"), f"{where}.params")
     for key in placeholders(cmd):
         if key not in params:
-            raise _err(where, f"cmd 의 플레이스홀더 {{{{{key}}}}} 가 params 에 선언되지 않았습니다")
+            raise _err(
+                f"{where}.cmd",
+                f"플레이스홀더 {{{{{key}}}}} 가 params 에 선언되지 않았습니다",
+            )
     for key in quoted_placeholders(cmd):
         if not params[key].raw:
             raise _err(
-                where,
-                f"cmd 의 플레이스홀더 {{{{{key}}}}} 를 인용문 안에서 사용할 수 없습니다 "
+                f"{where}.cmd",
+                f"플레이스홀더 {{{{{key}}}}} 를 인용문 안에서 사용할 수 없습니다 "
                 "(raw = true 는 신뢰한 고정값에만 사용하세요)",
             )
 
     cwd = raw.get("cwd")
     cwd_path: Path | None = None
-    if cwd:
+    if cwd is not None:
         if not isinstance(cwd, str):
-            raise _err(where, "cwd 는 문자열이어야 합니다")
+            raise _err(f"{where}.cwd", "문자열이어야 합니다")
         cwd_path = Path(cwd).expanduser()
         if not cwd_path.is_absolute():
             cwd_path = (Path.cwd() / cwd_path).resolve()
         else:
             cwd_path = cwd_path.resolve()
 
-    tags = raw.get("tags", [])
-    if not isinstance(tags, list) or any(not isinstance(t, str) for t in tags):
-        raise _err(where, "tags 는 문자열 리스트여야 합니다")
+    tags = config.require_list(raw.get("tags", []), f"{where}.tags")
+    if any(not isinstance(t, str) for t in tags):
+        raise _err(f"{where}.tags", "문자열만 허용합니다")
 
     return Snippet(
         name=name,
@@ -172,9 +169,7 @@ def _parse_snippet(raw: Any, where: str) -> Snippet:
 def load() -> list[Snippet]:
     """snippets.toml 을 읽어 검증된 Snippet 목록을 돌려준다. 파일이 없으면 빈 목록."""
     data = config.load("snippets.toml")
-    raw_snippets = data.get("snippet", [])
-    if not isinstance(raw_snippets, list):
-        raise _err("snippets.toml", '"snippet" 는 배열이어야 합니다')
+    raw_snippets = config.require_list(data.get("snippet", []), "snippets.toml.snippet")
     seen: set[str] = set()
     out: list[Snippet] = []
     for index, raw in enumerate(raw_snippets):

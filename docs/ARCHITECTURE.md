@@ -225,7 +225,7 @@ src/idk/
 |---|---|---|
 | `env.py` | 두 환경의 **차이를 만드는 값**만 읽는다 (glibc, 셸, locale, python 후보) | `PYTHON_CANDIDATES` 는 `launcher.sh` 와 동기화 |
 | `httpc.py` | HTTP 전부. **4xx/5xx 도 예외 없이 `Response` 로 반환** | `Authorization`은 동일 origin redirect에서만 유지하고, origin 변경 시 제거한다. HTTPS→HTTP downgrade는 `HttpError`로 거부한다 |
-| `config.py` | TOML 로드/저장. 없는 파일은 빈 dict | 저장은 임시파일 → `os.replace` 로 원자적 |
+| `config.py` | TOML 로드/저장과 엄격한 타입 helper. 없는 파일은 빈 dict | 불리언/배열 타입과 오류 위치를 공통 검증하고, 저장은 임시파일 → `os.replace` 로 원자적 |
 | `doctor.py` | `collect()` 가 `Check` 목록을 만들고 렌더러 셋이 소비 | 진단 도구라 기본 exit 0. `--strict` 일 때만 fail → 1 |
 | `ws/layout.py` | 모델 → zellij KDL 순수 함수 | 첫 탭에 `tab-bar`/`status-bar` plugin 을 감싼다 (키힌트 바) |
 | `ws/backends/zellij.py` | zellij 프로세스 호출 전부 | 이 파일 밖에서 zellij 를 부르지 않는다 |
