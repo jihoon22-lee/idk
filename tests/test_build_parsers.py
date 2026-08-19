@@ -105,6 +105,101 @@ def test_keeps_windows_drive_colons_and_supports_missing_column():
     )
 
 
+def test_accepts_relative_absolute_space_and_windows_path_variants():
+    result = parse(
+        [
+            "README:1: error: extensionless relative path",
+            "relative path/main.cpp:2:3: error: relative path",
+            "/tmp/build dir/main.cpp:4: warning: absolute path",
+            r"C:\build dir\main.cpp:6: note: windows path",
+        ]
+    )
+
+    assert result.diagnostics == (
+        Diagnostic(
+            path="README",
+            line=1,
+            column=None,
+            severity="error",
+            message="extensionless relative path",
+            context=(),
+            tool="compiler",
+        ),
+        Diagnostic(
+            path="relative path/main.cpp",
+            line=2,
+            column=3,
+            severity="error",
+            message="relative path",
+            context=(),
+            tool="compiler",
+        ),
+        Diagnostic(
+            path="/tmp/build dir/main.cpp",
+            line=4,
+            column=None,
+            severity="warning",
+            message="absolute path",
+            context=(),
+            tool="compiler",
+        ),
+        Diagnostic(
+            path=r"C:\build dir\main.cpp",
+            line=6,
+            column=None,
+            severity="note",
+            message="windows path",
+            context=(),
+            tool="compiler",
+        ),
+    )
+
+
+def test_ignores_source_code_strings_and_arbitrary_from_context():
+    result = parse(
+        [
+            'std::string s = "src/main.cpp:12:7: error: fake";',
+            "from cache:42",
+            'from "cache":42',
+            "src/main.cpp:13:1: warning: real diagnostic",
+        ]
+    )
+
+    assert result.diagnostics == (
+        Diagnostic(
+            path="src/main.cpp",
+            line=13,
+            column=1,
+            severity="warning",
+            message="real diagnostic",
+            context=(),
+            tool="compiler",
+        ),
+    )
+    assert result.total_lines == 4
+
+
+def test_parse_consumes_a_one_shot_iterator_once():
+    class OneShotLines:
+        def __init__(self):
+            self.iterated = False
+
+        def __iter__(self):
+            if self.iterated:
+                raise AssertionError("the parser must not replay the input")
+            self.iterated = True
+            yield "main.cpp:3:2: error: boom"
+            yield "unrecognized build output"
+
+    lines = OneShotLines()
+    result = parse(lines)
+
+    assert lines.iterated is True
+    assert result.total_lines == 2
+    assert result.diagnostics[0].path == "main.cpp"
+    assert result.diagnostics[0].line == 3
+
+
 def test_pending_context_is_reset_by_blank_lines_and_new_primary_diagnostics():
     result = parse(
         [
