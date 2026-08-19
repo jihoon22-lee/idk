@@ -138,15 +138,26 @@ def _terminal_checks(info: env.SystemInfo) -> list[Check]:
 
 
 def _config_checks() -> list[Check]:
-    directory = config.config_dir()
-    directory_exists = directory.exists()
-    directory_check = Check(
-        "config",
-        "dir",
-        OK if directory_exists else SKIP,
-        str(directory),
-        "존재" if directory_exists else "아직 없음 (기본값으로 동작)",
-    )
+    try:
+        directory_path = config.config_dir()
+        directory = config.config_directory()
+    except config.ConfigError:
+        return [
+            Check("config", "dir", FAIL, "설정 오류", "설정 디렉터리를 확인할 수 없습니다"),
+            Check("config", "files", FAIL, "설정 오류", "설정 파일을 확인할 수 없습니다"),
+        ]
+    if directory is None:
+        return [
+            Check(
+                "config",
+                "dir",
+                SKIP,
+                str(directory_path),
+                "아직 없음 (기본값으로 동작)",
+            ),
+            Check("config", "files", SKIP, "(없음)"),
+        ]
+    directory_check = Check("config", "dir", OK, str(directory_path), "존재")
     try:
         present = [p.name for p in config.existing_configs()]
     except config.ConfigError:

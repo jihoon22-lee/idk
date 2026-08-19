@@ -250,7 +250,20 @@ def test_config_check_rejects_unsafe_mirror_urls_without_echoing_value(base_url)
     assert result.exit_code == 1
     assert rows[2]["status"] == "fail"
     assert "base_url" in rows[2]["detail"]
+    assert base_url not in result.stdout
     assert "sentinel-password" not in result.stdout
+
+
+@pytest.mark.parametrize("bad_char", ["\x80", "\x9f"])
+def test_config_check_rejects_c1_url_characters_without_echoing_them(bad_char):
+    base_url = f"https://mirror.example/path{bad_char}sentinel"
+    _write("mirror.toml", f'[artifactory]\nbase_url = "{base_url}"\n')
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+    assert base_url not in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -261,6 +274,7 @@ def test_config_check_rejects_unsafe_mirror_urls_without_echoing_value(base_url)
         "http://127.0.0.1:1/",
         "https://[::1]:443/simple",
         "https://example.com./simple",
+        "https://mirror.example/%E2%9C%93",
     ],
 )
 def test_config_check_accepts_valid_http_urls(base_url):
@@ -293,6 +307,36 @@ def test_config_check_existing_directory_is_failure():
         "status": "fail",
         "detail": "설정 경로가 일반 파일이 아닙니다",
     }
+
+
+def test_config_check_invalid_config_directory_is_not_skipped():
+    directory = config.config_dir()
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    directory.write_text("not a directory", encoding="utf-8")
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert [row["status"] for row in rows] == ["fail"] * 4
+
+
+def test_config_check_inaccessible_config_directory_is_not_skipped(monkeypatch):
+    directory = config.config_dir()
+    directory.mkdir(parents=True)
+    original_scandir = config.os.scandir
+
+    def deny(path):
+        if Path(path) == directory:
+            raise PermissionError("directory-secret")
+        return original_scandir(path)
+
+    monkeypatch.setattr(config.os, "scandir", deny)
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert [row["status"] for row in rows] == ["fail"] * 4
+    assert "directory-secret" not in result.stdout
 
 
 def test_config_check_rejects_fifo_without_blocking():
@@ -348,14 +392,14 @@ def test_config_check_converts_config_read_errors_to_safe_failure(monkeypatch):
     secret = "read-secret"
     _write("mirror.toml", '[artifactory]\nbase_url = "https://mirror.example"\n')
     path = config.config_path("mirror.toml")
-    original_read_bytes = Path.read_bytes
+    original_open = config.os.open
 
-    def fail_read(file_path):
-        if file_path == path:
+    def fail_read(file_path, flags, *args, **kwargs):
+        if Path(file_path) == path:
             raise PermissionError(secret)
-        return original_read_bytes(file_path)
+        return original_open(file_path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", fail_read)
+    monkeypatch.setattr(config.os, "open", fail_read)
 
     result, rows = _json_result()
 

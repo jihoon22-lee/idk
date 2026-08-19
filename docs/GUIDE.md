@@ -160,8 +160,11 @@ auth     = "netrc"          # 또는 token_env = "ARTIFACTORY_TOKEN"
 헤더에 넣을 수 없는 값이면 netrc로 폴백하지 않고 설정 오류로 보고한다. `base_url`은
 hostname이 있는 `http://` 또는 `https://` URL이어야 한다. URL에는 공백·제어문자·사용자
 정보(`user:password@`)·잘못된 percent escape를 넣을 수 없고, hostname과 port도 URI 규칙에
-맞아야 한다. 설정 경로가 없을 때만 `config check`가 `skip`으로 보고하며, 디렉터리·FIFO·끊긴
-심볼릭 링크·접근할 수 없는 부모·읽기 오류는 `fail`이다. 특수 파일은 검사 중 열지 않는다.
+맞아야 한다. URL은 printable ASCII(`0x21`–`0x7e`)만 직접 허용하므로 비ASCII 문자는 UTF-8
+percent encoding으로 적는다. 설정 디렉터리가 없을 때만 `config check`가 `skip`으로 보고하며,
+디렉터리가 아닌 경로·FIFO·끊긴 심볼릭 링크·접근할 수 없는 디렉터리/부모·읽기 오류는 `fail`이다.
+설정 파일은 regular file인지 확인한 뒤 nonblocking open과 `fstat`으로 재확인하므로 특수 파일을
+검사 중 열어 대기하지 않는다. regular file을 가리키는 심볼릭 링크는 허용한다.
 
 > HTTP 는 stdlib `urllib` 로만 나간다. `requests`/`httpx` 는 `certifi` 번들 CA 를 쓰기 때문에
 > 사내 TLS 인터셉션 환경에서 접속이 깨진다. 시스템 CA 를 쓰는 것이 이 도구의 전제다.

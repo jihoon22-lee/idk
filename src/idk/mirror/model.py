@@ -115,7 +115,7 @@ def _validate_base_url(value: str, where: str) -> str:
         not isinstance(value, str)
         or not value
         or not _valid_percent_escapes(value)
-        or any(char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+        or any(not 0x21 <= ord(char) <= 0x7E for char in value)
     ):
         raise _error(where, "HTTP(S) URL이어야 합니다")
     try:

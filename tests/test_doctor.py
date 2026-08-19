@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from contextlib import redirect_stdout
 from io import StringIO
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -336,6 +337,23 @@ def test_mirror_rejected_userinfo_never_reaches_doctor_outputs():
         assert secret not in output.getvalue()
 
 
+@pytest.mark.parametrize("bad_char", ["\x80", "\x9f"])
+def test_mirror_rejected_c1_url_characters_never_reach_doctor_outputs(bad_char):
+    bad_url = f"https://mirror.example/path{bad_char}sentinel"
+    config.save("mirror.toml", {"artifactory": {"base_url": bad_url}})
+
+    check = next(c for c in doctor.collect(net=True) if c.section == "mirror")
+    assert check.status == doctor.FAIL
+    assert bad_url not in check.value
+    assert bad_url not in check.detail
+
+    for kwargs in ({"as_json": True}, {"as_brief": True}, {}):
+        output = StringIO()
+        with redirect_stdout(output):
+            assert doctor.main(net=True, **kwargs) == 0
+        assert bad_url not in output.getvalue()
+
+
 def test_doctor_json_is_deterministic_for_rejected_mirror_url():
     config.save(
         "mirror.toml",
@@ -404,6 +422,52 @@ def test_doctor_response_value_error_is_safe(monkeypatch):
     assert check.detail == "미러 응답 상태가 올바르지 않습니다"
     assert secret not in check.value
     assert secret not in check.detail
+
+
+def test_doctor_config_checks_use_shared_directory_classifier(monkeypatch):
+    class NoExistsPath:
+        def exists(self):
+            raise AssertionError("doctor used raw Path.exists")
+
+        def __str__(self):
+            return "config-dir"
+
+    monkeypatch.setattr(config, "config_directory", lambda: None, raising=False)
+    monkeypatch.setattr(config, "config_dir", lambda: NoExistsPath())
+
+    checks = doctor._config_checks()
+
+    assert [check.status for check in checks] == [doctor.SKIP, doctor.SKIP]
+
+
+def test_doctor_invalid_config_directory_is_fail_and_mirror_does_not_skip():
+    directory = config.config_dir()
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    directory.write_text("not a directory", encoding="utf-8")
+
+    checks = doctor._config_checks()
+    assert [check.status for check in checks] == [doctor.FAIL, doctor.FAIL]
+
+    mirror = next(c for c in doctor.collect() if c.section == "mirror")
+    assert mirror.status == doctor.FAIL
+
+
+def test_doctor_inaccessible_config_directory_is_fail(monkeypatch):
+    directory = config.config_dir()
+    directory.mkdir(parents=True)
+    original_scandir = config.os.scandir
+
+    def deny(path):
+        if Path(path) == directory:
+            raise PermissionError("directory-secret")
+        return original_scandir(path)
+
+    monkeypatch.setattr(config.os, "scandir", deny)
+
+    checks = doctor._config_checks()
+
+    assert [check.status for check in checks] == [doctor.FAIL, doctor.FAIL]
+    assert all("directory-secret" not in check.detail for check in checks)
 
 
 def test_workspace_symlink_loop_is_a_config_failure(tmp_path):
