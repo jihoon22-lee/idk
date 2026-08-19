@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import json
+import os
 import sys
+from contextlib import suppress
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -29,6 +32,49 @@ class SeverityFilter(str, Enum):
 def _usage(message: str) -> NoReturn:
     typer.echo(message, err=True)
     raise typer.Exit(2)
+
+
+def _redirect_stdout_to_devnull() -> None:
+    """Prevent interpreter-shutdown flush from repeating a broken-pipe error."""
+    try:
+        stdout_fd = sys.stdout.fileno()
+    except (AttributeError, OSError, ValueError):
+        stdout_fd = None
+
+    if stdout_fd is not None:
+        try:
+            devnull_fd = os.open(os.devnull, os.O_WRONLY)
+        except OSError:
+            devnull_fd = None
+        if devnull_fd is not None:
+            redirected = False
+            try:
+                os.dup2(devnull_fd, stdout_fd)
+                redirected = True
+            except OSError:
+                pass
+            finally:
+                with suppress(OSError):
+                    os.close(devnull_fd)
+            if redirected:
+                return
+
+    try:
+        replacement = os.fdopen(os.open(os.devnull, os.O_WRONLY), "w")
+    except OSError:
+        replacement = io.StringIO()
+    old_stdout = sys.stdout
+    with suppress(AttributeError, OSError, ValueError):
+        old_stdout.detach()
+    sys.stdout = replacement
+
+
+def _emit(text: str, *, newline: bool) -> None:
+    try:
+        typer.echo(text, nl=newline)
+    except BrokenPipeError:
+        _redirect_stdout_to_devnull()
+        raise typer.Exit(0) from None
 
 
 def _select_diagnostics(
@@ -62,7 +108,15 @@ def _parse_input(file: Path | None) -> ParseResult:
 
 def build_cmd(
     file: Annotated[
-        Path | None, typer.Option("--file", help="빌드 로그 파일 (없으면 stdin 파이프)")
+        Path | None,
+        typer.Option(
+            "--file",
+            help="빌드 로그 파일 (없으면 stdin 파이프)",
+            exists=False,
+            file_okay=True,
+            dir_okay=True,
+            readable=False,
+        ),
     ] = None,
     output_format: Annotated[
         OutputFormat,
@@ -82,9 +136,9 @@ def build_cmd(
     diagnostics = _select_diagnostics(result.diagnostics, severity)
 
     if output_format is OutputFormat.json:
-        typer.echo(json.dumps(to_payload(result, diagnostics), ensure_ascii=False))
+        _emit(json.dumps(to_payload(result, diagnostics), ensure_ascii=False), newline=True)
     else:
-        typer.echo(render_plain(diagnostics), nl=False)
+        _emit(render_plain(diagnostics), newline=False)
 
     if exit_code and any(item.severity in {"fatal error", "error"} for item in result.diagnostics):
         raise typer.Exit(1)

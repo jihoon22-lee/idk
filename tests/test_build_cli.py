@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -186,3 +188,146 @@ def test_build_opens_file_as_replacement_decoding_stream(
 
     assert result.exit_code == 0, result.stderr
     assert seen["first_line"] == "main.cpp:1:1: error: �\n"
+
+
+def test_build_missing_file_is_runtime_error_not_click_usage(tmp_path: Path):
+    missing = tmp_path / "missing.log"
+
+    result = tty_runner.invoke(app, ["build", "--file", str(missing)], input="")
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "빌드 로그를 읽을 수 없습니다" in result.stderr
+    assert "Invalid value" not in result.stderr
+
+
+def test_build_directory_path_is_reported_as_runtime_error(tmp_path: Path):
+    result = tty_runner.invoke(app, ["build", "--file", str(tmp_path)], input="")
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "빌드 로그를 읽을 수 없습니다" in result.stderr
+
+
+def test_build_unreadable_file_is_runtime_error_when_mode_bits_are_enforced(tmp_path: Path):
+    log = tmp_path / "unreadable.log"
+    log.write_text("main.cpp:1:1: error: boom\n", encoding="utf-8")
+    log.chmod(0)
+    try:
+        if os.access(log, os.R_OK):
+            pytest.skip("filesystem does not enforce unreadable mode bits")
+        result = tty_runner.invoke(app, ["build", "--file", str(log)], input="")
+    finally:
+        log.chmod(0o600)
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "빌드 로그를 읽을 수 없습니다" in result.stderr
+    assert "Invalid value" not in result.stderr
+
+
+def test_build_reports_open_error_from_parser_input(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    log = tmp_path / "build.log"
+    log.write_text("main.cpp:1:1: error: boom\n", encoding="utf-8")
+
+    def fail_open(_path, *_args, **_kwargs):
+        raise PermissionError("synthetic permission failure")
+
+    monkeypatch.setattr(Path, "open", fail_open)
+    result = tty_runner.invoke(app, ["build", "--file", str(log)], input="")
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "빌드 로그를 읽을 수 없습니다" in result.stderr
+    assert "synthetic permission failure" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize("output_format", ["plain", "json"])
+def test_build_handles_broken_pipe_for_each_output_format(
+    monkeypatch: pytest.MonkeyPatch, output_format: str
+):
+    import idk.cli_build as cli_build
+
+    def fail_echo(*_args, **_kwargs):
+        raise BrokenPipeError
+
+    monkeypatch.setattr(cli_build.typer, "echo", fail_echo)
+    result = runner.invoke(
+        app,
+        ["build", "--format", output_format],
+        input="main.cpp:1:1: error: boom\n",
+    )
+
+    assert result.exit_code == 0
+    assert result.stderr == ""
+    assert result.exception is None
+
+
+def test_build_subprocess_exits_cleanly_when_pipe_reader_closes():
+    repo = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo / "src") + os.pathsep + env.get("PYTHONPATH", "")
+
+    producer_code = (
+        "import sys; "
+        "sys.stdout.write(''.join(f'main.cpp:{line}:1: error: boom\\n' "
+        "for line in range(1, int(sys.argv[1]) + 1)))"
+    )
+    producer = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            producer_code,
+            "5000",
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert producer.stdout is not None
+    consumer = subprocess.Popen(
+        [sys.executable, "-m", "idk", "build"],
+        cwd=repo,
+        env=env,
+        stdin=producer.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    producer.stdout.close()
+    assert consumer.stdout is not None
+    reader = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.write(sys.stdin.readline())",
+        ],
+        stdin=consumer.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    consumer.stdout.close()
+
+    try:
+        first_output, reader_stderr = reader.communicate(timeout=10)
+        return_code = consumer.wait(timeout=10)
+        assert consumer.stderr is not None
+        stderr = consumer.stderr.read()
+    finally:
+        if reader.poll() is None:
+            reader.kill()
+        if consumer.poll() is None:
+            consumer.kill()
+        if producer.poll() is None:
+            producer.kill()
+        reader.wait(timeout=10)
+        consumer.wait(timeout=10)
+        producer.wait(timeout=10)
+
+    assert return_code == 0
+    assert first_output == "main.cpp:1:1: error: boom\n"
+    assert reader_stderr == ""
+    assert stderr == ""
