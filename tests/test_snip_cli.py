@@ -98,3 +98,27 @@ def test_run_init_refuses_to_overwrite():
     _write('[[snippet]]\nname = "x"\ncmd = "y"\n')
     result = runner.invoke(__main__.app, ["run", "init"])
     assert result.exit_code == 3
+
+
+def test_run_init_force_overwrites_existing_config():
+    _write('[[snippet]]\nname = "old"\ncmd = "old"\n')
+    result = runner.invoke(__main__.app, ["run", "init", "--force"])
+    assert result.exit_code == 0
+    text = config.config_path("snippets.toml").read_text(encoding="utf-8")
+    assert 'name = "build"' in text
+    assert 'name = "old"' not in text
+
+
+def test_run_force_for_non_init_is_usage_error():
+    _write('[[snippet]]\nname = "build"\ncmd = "make"\n')
+    result = runner.invoke(__main__.app, ["run", "build", "--force"])
+    assert result.exit_code == 2
+    assert "init" in result.output
+
+
+def test_starter_deploy_uses_fixed_remote_service():
+    result = runner.invoke(__main__.app, ["run", "init"])
+    assert result.exit_code == 0
+    text = config.config_path("snippets.toml").read_text(encoding="utf-8")
+    assert 'cmd  = "ssh {{host}} systemctl restart myapp"' in text
+    assert "{{svc}}" not in text

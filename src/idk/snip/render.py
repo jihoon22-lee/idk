@@ -2,7 +2,8 @@
 
 `{{k}}` 를 값으로 치환할 때 기본은 `shlex.quote()` — `svc` 에 `foo; rm -rf ~` 를 넣어도
 한 덩어리 인자가 된다. 값 자체가 셸 조각이어야 하는 경우만 `raw = true` 로 선언한다
-(docs/spec-ws-run.md §7.1).
+(docs/spec-ws-run.md §7.1). `raw = true` 는 신뢰한 고정값에만 사용해야 하며, `ssh` 나
+`sh -c` 처럼 입력을 다시 해석하는 중첩 셸까지 보호하지 않는다.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ class RenderError(ValueError):
 
 
 def render(snippet: Snippet, values: dict[str, str]) -> str:
-    """cmd 의 플레이스홀더를 values 로 치환한다 (기본 shlex.quote, raw=true 는 그대로)."""
+    """cmd 를 치환한다 (기본 shlex.quote, raw=true 는 신뢰한 조각 그대로)."""
 
     def repl(match) -> str:
         key = match.group(1)

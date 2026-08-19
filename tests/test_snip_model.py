@@ -66,6 +66,121 @@ def test_undeclared_placeholder_rejected():
         model.load()
 
 
+def test_placeholder_inside_single_quotes_is_rejected():
+    _write(
+        """[[snippet]]
+name = "x"
+cmd = "echo '{{value}}'"
+[snippet.params.value]
+"""
+    )
+    with pytest.raises(config.ConfigError, match="인용문"):
+        model.load()
+
+
+def test_placeholder_inside_double_quotes_is_rejected():
+    _write(
+        """[[snippet]]
+name = "x"
+cmd = 'echo "{{value}}"'
+[snippet.params.value]
+"""
+    )
+    with pytest.raises(config.ConfigError, match="인용문"):
+        model.load()
+
+
+def test_escaped_quote_does_not_quote_placeholder():
+    command = 'cmd = "echo ' + ("\\" * 3) + '"{{value}}' + ("\\" * 3) + '""'
+    _write('[[snippet]]\nname = "x"\n' + command + "\n[snippet.params.value]\n")
+    [snippet] = model.load()
+    assert snippet.cmd == r"echo \"{{value}}\""
+
+
+def test_multiple_placeholders_report_each_quoted_context():
+    _write(
+        """[[snippet]]
+name = "x"
+cmd = '''echo '{{single}}' "{{double}}" {{plain}}'''
+[snippet.params.single]
+raw = true
+[snippet.params.double]
+raw = true
+[snippet.params.plain]
+"""
+    )
+    [snippet] = model.load()
+    assert snippet.params["single"].raw is True
+    assert snippet.params["double"].raw is True
+    assert snippet.params["plain"].raw is False
+
+
+def test_raw_must_be_boolean():
+    _write(
+        """[[snippet]]
+name = "x"
+cmd = "echo {{value}}"
+[snippet.params.value]
+raw = "false"
+"""
+    )
+    with pytest.raises(config.ConfigError, match="raw"):
+        model.load()
+
+
+def test_raw_integer_must_be_boolean():
+    _write(
+        """[[snippet]]
+name = "x"
+cmd = "echo {{value}}"
+[snippet.params.value]
+raw = 0
+"""
+    )
+    with pytest.raises(config.ConfigError, match="raw"):
+        model.load()
+
+
+def test_raw_true_allows_quoted_placeholder():
+    _write(
+        """[[snippet]]
+name = "x"
+cmd = "echo '{{value}}'"
+[snippet.params.value]
+raw = true
+"""
+    )
+    [snippet] = model.load()
+    assert snippet.params["value"].raw is True
+
+
+def test_quoted_placeholders_tracks_shell_quote_states():
+    command = r"""echo '{{single}}' "{{double}}" {{plain}}"""
+    assert model.quoted_placeholders(command) == ["single", "double"]
+
+
+def test_quoted_placeholders_ignores_escaped_quotes():
+    command = r"""echo \"{{value}}\""""
+    assert model.quoted_placeholders(command) == []
+
+
+def test_backslash_before_brace_in_double_quotes_is_still_quoted():
+    command = r'''printf "%s" "\{{value}}"'''
+    assert model.quoted_placeholders(command) == ["value"]
+
+
+def test_command_substitution_context_is_rejected():
+    _write(
+        """[[snippet]]
+name = "x"
+cmd = 'printf "%s" "\\{{value}}"'
+[snippet.params.value]
+"""
+    )
+    with pytest.raises(config.ConfigError, match="인용문"):
+        model.load()
+
+
 def test_placeholders_extracted_in_order():
     assert model.placeholders("a {{x}} b {{y}} c {{x}}") == ["x", "y"]
 
