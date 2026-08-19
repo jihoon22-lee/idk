@@ -317,6 +317,10 @@ OS/커널/glibc/Python/컴파일러/zellij/xclip/locale/TERM + 미러 접속 가
 
 ## 구현 순서
 
+> 2026-08-19 전체 검토에서 나온 보안·신뢰성 보강과 Phase 3의 실제 PR 순서는
+> [즉시 실행 로드맵](superpowers/plans/2026-08-19-immediate-roadmap.md)에 정리했다.
+> 폐쇄망 환경 확인을 기다리지 않는 작업과 확인 뒤 결정할 작업을 분리해 두었다.
+
 | Phase | 내용 | 비고 |
 |---|---|---|
 | **0** ✅ | 저장소 스캐폴딩, `pyproject.toml`, `config.py`/`env.py`/`httpc.py`, `idk doctor`, `idk env`, `build-pyz.sh`/`smoke.sh`/`fetch-vendor.sh`, CI | 완료. sh 프리앰블 폴리글롯 검증 통과 — 2파일 분리 불필요 |
