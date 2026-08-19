@@ -10,6 +10,12 @@
 ## [Unreleased]
 
 ### Fixed
+- **`idk config check` 추가** — 알려진 TOML 설정을 고정된 순서로 검사해 `skip`/`ok`/`warn`/`fail`
+  행과 JSON 출력을 제공한다. 없는 파일은 정상으로 건너뛰고, `--strict`에서만 workspace cwd
+  경고를 exit 1로 올린다.
+- **mirror 설정·doctor 접속 판정 강화** — `artifactory`/`base_url`/`auth`/`token_env` 타입과
+  netrc 전용 인증을 공통 모델로 검증한다. token_env bearer 값은 요청에만 사용하며 출력하지
+  않고, doctor는 2xx를 ok, 401/403을 fail, 그 밖의 HTTP 오류를 warn, 전송 실패를 fail로 보고한다.
 - **설정 타입 오류를 일관되게 보고** — 문자열 불리언과 배열이 아닌 중첩 컬렉션을 설정 로드
   시 위치가 포함된 `ConfigError`로 거부하고, workspace 명령의 닫히지 않은 인용문도 조기에
   검증한다.

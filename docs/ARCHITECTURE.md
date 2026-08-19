@@ -210,8 +210,11 @@ src/idk/
 ├─ env.py          환경 판별 — os-release, glibc, WSL, python 후보 탐색
 ├─ httpc.py        stdlib urllib HTTP 클라이언트 (netrc, 시스템 CA)
 ├─ doctor.py       진단 — Check 목록을 모아 표/JSON/brief 로 렌더
+├─ cli_config.py   `idk config check` CLI 배선 (검사 registry, JSON/표 출력)
 ├─ cli_dt.py       `idk dt` CLI 배선 (typer). 공통 I/O 규약 담당
 ├─ dt_tui.py       `idk dt tui` — 입력/출력 2패널 (textual)
+├─ mirror/         mirror.toml 최소 모델·인증 해석
+│  └─ model.py
 ├─ ws/             `idk ws` — workspace/tab/pane 모델·검증, KDL 렌더러, CLI, TUI
 │  ├─ model.py  layout.py  cli.py  tui.py
 │  └─ backends/zellij.py   zellij 호출의 유일한 지점 (AGENTS.md 규약)
@@ -227,6 +230,8 @@ src/idk/
 | `httpc.py` | HTTP 전부. **4xx/5xx 도 예외 없이 `Response` 로 반환** | `Authorization`은 동일 origin redirect에서만 유지하고, origin 변경 시 제거한다. HTTPS→HTTP downgrade는 `HttpError`로 거부한다 |
 | `config.py` | TOML 로드/저장과 엄격한 타입 helper. 없는 파일은 빈 dict | 불리언/배열 타입과 오류 위치를 공통 검증하고, 저장은 임시파일 → `os.replace` 로 원자적 |
 | `doctor.py` | `collect()` 가 `Check` 목록을 만들고 렌더러 셋이 소비 | 진단 도구라 기본 exit 0. `--strict` 일 때만 fail → 1 |
+| `cli_config.py` | `config check`의 고정된 설정 validator registry와 JSON/표 출력 | JSON 경로는 Rich를 import하지 않으며, 없는 파일은 `skip`, cwd 문제는 별도 `warn` 행으로 낸다 |
+| `mirror/model.py` | `mirror.toml`의 artifactory/base_url/auth/token_env 검증과 요청 인증 값 해석 | `auth`는 netrc만 허용하고 token_env bearer 값은 모델·출력에 저장하지 않는다 |
 | `ws/layout.py` | 모델 → zellij KDL 순수 함수 | 첫 탭에 `tab-bar`/`status-bar` plugin 을 감싼다 (키힌트 바) |
 | `ws/backends/zellij.py` | zellij 프로세스 호출 전부 | 이 파일 밖에서 zellij 를 부르지 않는다. `list-sessions`의 정확한 세션 없음 문구와 purge의 확인된 대상 없음만 멱등 성공으로 허용하고, 나머지 nonzero는 명령 인자·exit code·출력과 함께 `ZellijError`로 올린다 |
 | `snip/model.py`·`snip/render.py` | `snippets.toml` 검증·placeholder 치환 | non-raw placeholder를 기존 single/double quote 안에서 거부한다. raw는 신뢰된 고정 셸 조각 전용이며, `shlex.quote()`의 경계는 한 번의 local shell이다 |
@@ -274,6 +279,10 @@ Phase 1~5 의 앱들은 모두 이 절차를 따른다.
 4. **테스트를 쓴다** — 순수 함수(파서·렌더러)는 단위 테스트로, CLI 는 `typer.testing.CliRunner`.
 5. **무거운 import 는 함수 안에서** 한다. `doctor.render()` 가 `rich` 를 함수 안에서 import 하는
    이유다 — 파이프로 쓰는 명령의 기동 시간을 지키기 위해서다.
+
+`config check`처럼 표와 JSON을 함께 제공하는 명령은 JSON 출력 함수가 Rich를 import하지 않게
+하고, 표 렌더 함수 안에서만 Rich를 가져온다. 설정 검사는 `VALIDATORS` registry의 파일 순서를
+고정해 사람이 읽는 표와 자동화용 JSON의 행 순서를 일치시킨다.
 
 ### 지켜야 할 경계
 

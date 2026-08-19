@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from idk import config, doctor
+from idk import config, doctor, httpc
 
 
 @pytest.fixture(autouse=True)
@@ -119,3 +119,102 @@ def test_exit_code_is_zero_unless_strict():
 def test_strict_exit_zero_when_only_warnings():
     checks = [doctor.Check("tools", "xclip", doctor.WARN, "미설치")]
     assert doctor.exit_code(checks, strict=True) == 0
+
+
+@pytest.mark.parametrize("status", [200, 204, 299])
+def test_mirror_net_2xx_is_ok(monkeypatch, status):
+    config.save(
+        "mirror.toml",
+        {"artifactory": {"base_url": "https://mirror.example/simple"}},
+    )
+    monkeypatch.setattr(
+        httpc,
+        "request",
+        lambda *args, **kwargs: httpc.Response(status, args[0], {}, b""),
+    )
+
+    check = next(c for c in doctor.collect(net=True) if c.section == "mirror")
+
+    assert check.status == doctor.OK
+    assert check.detail == f"HTTP {status}"
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_mirror_net_auth_failures_are_fail(monkeypatch, status):
+    config.save(
+        "mirror.toml",
+        {"artifactory": {"base_url": "https://mirror.example/simple"}},
+    )
+    monkeypatch.setattr(
+        httpc,
+        "request",
+        lambda *args, **kwargs: httpc.Response(status, args[0], {}, b""),
+    )
+
+    check = next(c for c in doctor.collect(net=True) if c.section == "mirror")
+
+    assert check.status == doctor.FAIL
+    assert check.detail == f"HTTP {status}"
+
+
+@pytest.mark.parametrize("status", [400, 404, 429, 500, 503])
+def test_mirror_net_other_http_errors_are_warn(monkeypatch, status):
+    config.save(
+        "mirror.toml",
+        {"artifactory": {"base_url": "https://mirror.example/simple"}},
+    )
+    monkeypatch.setattr(
+        httpc,
+        "request",
+        lambda *args, **kwargs: httpc.Response(status, args[0], {}, b""),
+    )
+
+    check = next(c for c in doctor.collect(net=True) if c.section == "mirror")
+
+    assert check.status == doctor.WARN
+    assert check.detail == f"HTTP {status}"
+
+
+def test_mirror_net_transport_failure_is_fail(monkeypatch):
+    config.save(
+        "mirror.toml",
+        {"artifactory": {"base_url": "https://mirror.example/simple"}},
+    )
+
+    def fail(*args, **kwargs):
+        raise httpc.HttpError("network unavailable", url=args[0])
+
+    monkeypatch.setattr(httpc, "request", fail)
+
+    check = next(c for c in doctor.collect(net=True) if c.section == "mirror")
+
+    assert check.status == doctor.FAIL
+    assert "network unavailable" in check.detail
+
+
+def test_mirror_token_env_is_sent_as_bearer_without_being_reported(monkeypatch):
+    secret = "doctor-secret-token"
+    monkeypatch.setenv("MIRROR_TOKEN", secret)
+    config.save(
+        "mirror.toml",
+        {
+            "artifactory": {
+                "base_url": "https://mirror.example/simple",
+                "token_env": "MIRROR_TOKEN",
+            }
+        },
+    )
+    calls = []
+
+    def request(*args, **kwargs):
+        calls.append(kwargs)
+        return httpc.Response(204, args[0], {}, b"")
+
+    monkeypatch.setattr(httpc, "request", request)
+
+    check = next(c for c in doctor.collect(net=True) if c.section == "mirror")
+
+    assert check.status == doctor.OK
+    assert calls[0]["auth"] == ("bearer", secret)
+    assert secret not in check.value
+    assert secret not in check.detail

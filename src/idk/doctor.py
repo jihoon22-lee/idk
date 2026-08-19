@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from . import MIN_PYTHON, __version__, config, env, httpc
+from .mirror import model as mirror_model
 
 OK = "ok"
 WARN = "warn"
@@ -159,19 +160,24 @@ def _config_checks() -> list[Check]:
 def _mirror_checks(*, net: bool) -> list[Check]:
     """mirror.toml 의 base_url 에 실제로 닿는지. 파일이 없으면 조용히 skip."""
     try:
-        cfg = config.load("mirror.toml")
+        mirror = mirror_model.load()
     except config.ConfigError as exc:
         return [Check("mirror", "mirror.toml", FAIL, "파싱 실패", str(exc))]
-    base_url = (cfg.get("artifactory") or {}).get("base_url")
-    if not base_url:
+    if mirror is None:
         return [Check("mirror", "base_url", SKIP, "미설정", "~/.config/idk/mirror.toml (Phase 5)")]
+    base_url = mirror.base_url
     if not net:
         return [Check("mirror", "base_url", SKIP, str(base_url), "--net 을 주면 접속까지 확인한다")]
     try:
-        resp = httpc.request(str(base_url), timeout=5.0, auth="netrc")
-    except httpc.HttpError as exc:
+        resp = httpc.request(str(base_url), timeout=5.0, auth=mirror.auth_for_request())
+    except (httpc.HttpError, ValueError) as exc:
         return [Check("mirror", "base_url", FAIL, str(base_url), str(exc))]
-    status = OK if resp.status < 500 else WARN
+    if 200 <= resp.status < 300:
+        status = OK
+    elif resp.status in {401, 403}:
+        status = FAIL
+    else:
+        status = WARN
     return [Check("mirror", "base_url", status, str(base_url), f"HTTP {resp.status}")]
 
 

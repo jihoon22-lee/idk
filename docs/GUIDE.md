@@ -101,6 +101,19 @@ mirror  skip  미설정  ~/.config/idk/mirror.toml
 
 `--net` 을 주면 `mirror.toml` 의 아티팩토리에 실제로 접속해 본다. 기본은 네트워크를 건드리지 않는다.
 
+## `idk config check` — 설정 검사
+
+```bash
+idk config check             # 사람용 표
+idk config check --json      # 장식 없는 JSON 배열
+idk config check --strict    # workspace cwd 경고도 실패로 처리
+```
+
+`workspaces.toml`, `snippets.toml`, `mirror.toml`, `logview.toml`을 항상 같은 순서로 검사한다.
+없는 파일은 `skip`이며 오류가 아니다. 정상 파일은 `ok`, 존재하지 않는 workspace `cwd`는 별도
+`warn` 행, TOML/schema 오류는 `fail` 행이다. 기본 exit는 `fail`만 1이고, `--strict`에서는
+`warn`도 1이 된다. `--json` 출력에는 표나 경고 문구를 섞지 않는다.
+
 ---
 
 ## `idk env` — 셸 환경 설정 줄 생성
@@ -142,6 +155,8 @@ auth     = "netrc"          # 또는 token_env = "ARTIFACTORY_TOKEN"
 ```
 
 인증은 `~/.netrc` 를 읽는다. 별도 토큰 파일을 만들지 않는다.
+`token_env`를 쓰면 해당 환경변수의 값이 bearer token으로 요청에만 사용되며 `doctor`와
+`config check`의 출력에는 token 값이 포함되지 않는다.
 
 > HTTP 는 stdlib `urllib` 로만 나간다. `requests`/`httpx` 는 `certifi` 번들 CA 를 쓰기 때문에
 > 사내 TLS 인터셉션 환경에서 접속이 깨진다. 시스템 CA 를 쓰는 것이 이 도구의 전제다.
