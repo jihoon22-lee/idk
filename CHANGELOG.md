@@ -9,6 +9,11 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-20
+
+> 이 섹션은 `v0.2.0` 릴리스 후보 준비 내용이다. 통합 검증과 문서 정리는 끝났지만, 아직
+> `v0.2.0` 태그나 GitHub Release는 만들지 않았다.
+
 ### Added
 - **`idk build` CLI MVP** — 합성 fixture 경계를 전제로 gcc/clang·CMake·make·Qt 로그를 파일 또는
   stdin에서 streaming parser로 읽고, 위치·context를 보존한 plain/JSON 결과를 출력한다. `--severity`
@@ -154,10 +159,11 @@
 
 1. `src/idk/__init__.py` 의 `__version__` 을 올린다.
 2. 이 파일의 `[Unreleased]` 내용을 `## [x.y.z] - YYYY-MM-DD` 섹션으로 옮긴다.
-3. 태그를 밀면 `.github/workflows/release.yml` 이 나머지를 한다.
+3. 폐쇄망 acceptance와 최종 승인이 끝난 뒤 태그를 밀면 `.github/workflows/release.yml` 이 나머지를 한다.
 
 ```bash
-git tag v0.1.1 && git push origin v0.1.1
+# 릴리스 후보 acceptance와 최종 승인 뒤에만 실행한다.
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
 워크플로가 태그와 `__version__` 이 일치하는지 확인하고, 빌드·스모크를 돌린 뒤

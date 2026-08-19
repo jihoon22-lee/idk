@@ -2,6 +2,9 @@
 
 폐쇄망(RHEL 8.10, ETX 접속, tcsh)에 `idk` 를 올리는 절차. **전 과정에서 root 권한이 필요 없다.**
 
+> 상태 (2026-08-20): `v0.2.0` 릴리스 후보의 반입 절차다. `dist/idk.pyz` 빌드·smoke와
+> 문서 정리는 준비됐지만, 아직 `v0.2.0` 태그나 GitHub Release는 만들지 않았다.
+
 > **환경 정보를 확인해 오는 것이 목적이라면** [env-survey.md](env-survey.md) 를 볼 것.
 > 이 문서는 설치 절차만 다룬다.
 
@@ -12,7 +15,7 @@
 ```bash
 ./scripts/build-pyz.sh     # dist/idk.pyz
 ./scripts/smoke.sh         # 반입 전 게이트 — 반드시 통과시킬 것
-./scripts/fetch-vendor.sh  # vendor/ 에 zellij musl + xclip 소스
+./scripts/fetch-vendor.sh  # 선택: ws/클립보드용 vendor/ 준비
 ```
 
 checkout이 `/mnt/*`에 있어도 `build-pyz.sh`는 project root의 `build/` 대신
@@ -28,13 +31,13 @@ Linux native 경로를 사용한다. 최종 파일은 `dist/idk.pyz.tmp`를 거�
 native staging 조건도 같을 때 바이트 재현성을 기대할 수 있으며, 반입한 파일은 `sha256sum`으로
 대조할 수 있다.
 
-반입 파일 **3개**:
+반입 세트는 **핵심 아티팩트 1개**이며, `ws`/클립보드가 필요할 때만 선택 vendor를 더한다:
 
 | 파일 | 용도 |
 |---|---|
-| `dist/idk.pyz` | 도구 본체 (의존성 내장, 사내 PyPI 미러 상태와 무관) |
-| `vendor/zellij-no-web-x86_64-unknown-linux-musl.tar.gz` | 멀티플렉서. musl 정적 링크라 glibc 2.28 과 무관 |
-| `vendor/xclip-0.13.tar.gz` | 클립보드 브릿지 소스 (현지 빌드, 선택) |
+| `dist/idk.pyz` (필수) | 도구 본체 (의존성 내장, 사내 PyPI 미러 상태와 무관) |
+| `vendor/zellij-no-web-x86_64-unknown-linux-musl.tar.gz` (선택) | 멀티플렉서. musl 정적 링크라 glibc 2.28 과 무관 |
+| `vendor/xclip-0.13.tar.gz` (선택) | 클립보드 브릿지 소스 (현지 빌드) |
 
 `vendor/SHA256SUMS` 로 반입 후 무결성을 확인한다.
 
@@ -50,7 +53,8 @@ native staging 조건도 같을 때 바이트 재현성을 기대할 수 있으�
 ```bash
 mkdir -p ~/.local/bin
 cp idk.pyz ~/.local/bin/idk && chmod +x ~/.local/bin/idk
-tar xzf zellij-*-musl.tar.gz -C ~/.local/bin
+# ws를 사용할 때만 선택 vendor를 설치한다:
+# tar xzf zellij-*-musl.tar.gz -C ~/.local/bin
 ```
 
 tcsh 환경파일(기존에 python3.10 PATH 를 넣어둔 그 파일)에 다음 두 줄을 추가한다.
@@ -72,6 +76,7 @@ idk doctor
 
 ## 3. 확인 항목
 
+- `idk --version` 이 `idk 0.2.0` → 후보 아티팩트와 문서 버전이 일치한다는 뜻
 - `idk doctor` 의 `python / running` 이 3.10 이상 → 런처가 올바른 인터프리터를 골랐다는 뜻
 - `terminal / locale` 이 UTF-8 → 아니면 TUI 박스 문자가 깨진다
 - `tools / zellij` 가 ok

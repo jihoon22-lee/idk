@@ -3,6 +3,10 @@
 > **이 저장소의 작업 계획서(정본)다.** Phase 0부터 순서대로 진행한다.
 > 규약은 `AGENTS.md` 에 요약되어 있고, 상세 근거는 이 문서에 있다.
 
+> 상태 (2026-08-20): Phase 0~3과 v0.2.0 보안·안정성 작업은 통합 브랜치에 반영되어
+> 릴리스 후보를 준비 중이다. 핵심 실행 아티팩트는 `dist/idk.pyz` 한 개이며, 아직
+> `v0.2.0` 태그나 GitHub Release는 만들지 않았다.
+
 ## Context
 
 두 개의 개발 환경을 오가며 작업 중이고, 양쪽에서 **똑같이 동작하는** 개발 편의 도구가 없다.
@@ -129,19 +133,21 @@ exit 1
                               ↓ git pull          (사내 PC WSL — pull만 가능, push 차단이라 무관)
                         [사내 WSL 에서 빌드]
                           ./scripts/build-pyz.sh
-                          ./scripts/fetch-vendor.sh
-                              ↓ 반입 (파일 3개)
-                        [폐쇄망]  idk.pyz · zellij(musl) · xclip 소스
+                          ./scripts/fetch-vendor.sh  # 선택 vendor (ws/클립보드용)
+                              ↓ 반입 (핵심 아티팩트 1개 + 선택 vendor)
+                        [폐쇄망]  idk.pyz  (+ zellij/xclip 선택 반입)
 ```
 
-공개 GitHub pull이 가능하므로 **소스 반입 절차가 통째로 사라진다.** `fetch-vendor.sh` 가
-zellij musl tarball과 xclip 소스를 `vendor/` 로 받아 반입 세트를 한 번에 준비한다.
+공개 GitHub pull이 가능하므로 **소스 반입 절차가 통째로 사라진다.** `build-pyz.sh`는
+`dist/idk.pyz` 한 개만 만든다. `fetch-vendor.sh`가 준비하는 zellij musl tarball과 xclip
+소스는 `ws` 또는 클립보드 기능을 사용할 때만 필요한 선택 vendor 입력이다.
 
 **폐쇄망 설치**
 ```bash
 mkdir -p ~/.local/bin
 cp idk.pyz ~/.local/bin/idk && chmod +x ~/.local/bin/idk
-tar xzf zellij-*-musl.tar.gz -C ~/.local/bin
+# ws를 사용할 때만 선택 vendor를 설치한다:
+# tar xzf zellij-*-musl.tar.gz -C ~/.local/bin
 # tcsh 환경파일에: setenv PATH "$HOME/.local/bin:$PATH"
 idk doctor
 ```
@@ -333,12 +339,13 @@ OS/커널/glibc/Python/컴파일러/zellij/xclip/locale/TERM + 미러 접속 가
 | **0** ✅ | 저장소 스캐폴딩, `pyproject.toml`, `config.py`/`env.py`/`httpc.py`, `idk doctor`, `idk env`, `build-pyz.sh`/`smoke.sh`/`fetch-vendor.sh`, CI | 완료. sh 프리앰블 폴리글롯 검증 통과 — 2파일 분리 불필요 |
 | **1** ✅ | `idk ws` + `idk run` | 완료 (v0.1.0~0.1.1). 모델·KDL·백엔드·CLI·TUI. 상세 명세: [spec-ws-run.md](spec-ws-run.md) |
 | **2** ✅ | `idk dt` | 완료 (v0.1.0~0.1.1). 13개 도구 + TUI. `src/idk/dt/` 의존성 0. 상세 명세: [spec-dt.md](spec-dt.md) |
-| **3** ✅ | `idk build` CLI MVP | 파일/stdin streaming parser + plain/JSON + 필터/exit code |
+| **3** ✅ | `idk build` CLI MVP | 파일/stdin streaming parser + plain/JSON + 필터/exit code (v0.2.0 릴리스 후보 준비 완료) |
 | **4** | `idk log` | |
 | **5** | `idk mirror` | 실제 아티팩토리 URL·repo key 확보 후 |
 
-**Phase 0~3을 다음 1차 반입 후보로 삼고**, 폐쇄망에서 실제로 써본 뒤 4~5의 우선순위를 조정한다.
-(Phase 1·2 는 `v0.1.0` 으로 반입 가능했고, 실사용 피드백 반영분은 `v0.1.1`이다.)
+**Phase 0~3을 `v0.2.0` 1차 반입 후보로 삼고**, 폐쇄망에서 실제로 써본 뒤 4~5의 우선순위를
+조정한다. Phase 1·2의 초기 반입은 `v0.1.0`/`v0.1.1`에서 끝났고, 이번 후보는 보안·안정성
+보강과 `idk build` MVP를 함께 포함한다. 태그와 GitHub Release는 반입 검증 뒤에 별도로 만든다.
 
 ---
 
@@ -386,13 +393,14 @@ idk ws up demo --print-layout            # 생성된 KDL 육안 검증
 ## 폐쇄망 사전 확인 항목
 
 **→ `docs/env-survey.md` 로 이동했다.** (Phase 0 진입 전 수집이 원래 계획이었으나, Phase 0 은
-수집 없이 완료됐고 남은 항목들은 Phase 3·5 의 착수 조건이다.)
+수집 없이 완료됐다. 남은 항목은 폐쇄망 acceptance와 Phase 5의 착수 조건이며, Phase 3 CLI
+MVP의 구현을 막지는 않는다.)
 
 핵심 제약이 하나 바뀌었다: **폐쇄망은 파일 반출이 불가능하다.** 버전·환경 정보를 사람이
 읽고 옮겨 적는 것만 가능하다. 그래서
 - `doctor --json` 양쪽 diff 전략 → `doctor --brief` 를 손으로 옮겨 적는 방식으로 대체
-- Phase 3 의 빌드 로그 fixture → 실제 로그를 꺼낼 수 없으므로 합성 로그로 시작하고,
-  파싱 정확도는 현지에서 `idk build --file` 로 확인
+- Phase 3 의 빌드 로그 fixture → CLI MVP는 합성 로그로 구현했으며, 실제 로그의 파싱 정확도는
+  현지에서 `idk build --file` 로 acceptance 확인
 - Phase 5 의 repo key 등 → 손으로 적어 오거나, 민감하면 형태만 확인
 
 ---

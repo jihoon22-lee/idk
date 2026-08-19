@@ -4,6 +4,10 @@
 > 보안·신뢰성 이슈와, 폐쇄망 실측 전에도 개발 가능한 신규 기능을 실제 PR과 릴리스 단위로
 > 분해한 실행용 보조 계획이다.
 
+> 상태 (2026-08-20): 계획의 10개 작업군은 통합 브랜치에 반영됐다. GitHub에서는 PR #15~#26의
+> 12개 병합(PR #19와 #24는 문서 통합 게이트)으로 구현·문서 작업이 완료되었고, 현재는
+> `v0.2.0` 릴리스 후보를 준비 중이다. 태그와 GitHub Release는 아직 만들지 않았다.
+
 ## 목표
 
 폐쇄망 환경 조사 결과를 기다리는 동안 다음 세 가지를 순서대로 달성한다.
@@ -34,22 +38,25 @@
 경계와 리뷰 게이트는 그대로 유지하되 중간 버전 태그나 릴리스 산출물은 만들지 않는다. 모든
 작업과 통합 검증이 통과한 뒤 문서 전체를 최신화하고 한 번만 `v0.2.0`으로 배포한다.
 
-## PR 단위
+## PR/작업군 단위
 
-| PR | 범위 | 선행 조건 | 병합 게이트 |
-|---|---|---|---|
-| 1 | `run`: 인용문 안 플레이스홀더 거부, 엄격한 boolean, 안전한 starter | 없음 | 공격 문자열 회귀 테스트 + 전체 테스트 |
-| 2 | `httpc`: cross-origin 인증 제거, HTTPS downgrade 차단 | 없음 | 2개 로컬 서버 리다이렉트 테스트 |
-| 3 | 빌드: `uv.lock` 소비, ext4 임시 staging, zip 권한 검사 | 없음 | 두 번 빌드 SHA 일치 + smoke |
-| 4 | vendor checksum·CI action 불변 pin | PR 3 | 변조 fixture 실패 + integration |
-| 5 | 설정 모델 엄격화 | PR 1 | 잘못된 TOML 타입이 모두 `ConfigError`로 종료 |
-| 6 | `ws`: kill/purge 확인, EXITED 재생성, zellij 오류 처리 | PR 5 | Textual pilot + backend 오류 fixture |
-| 7 | `dt`: strict Base64, streaming hash, 미래 시각 | PR 5 | 단위/CLI/대용량 파일 테스트 |
-| 8 | `idk config check` + doctor mirror 설정 강건성 | PR 5~7 | 모든 기존 설정의 표/JSON/exit code 테스트 |
-| 9 | `idk build` 모델·파서 | PR 8 | 합성 로그 golden fixture |
-| 10 | `idk build` CLI·문서 | PR 9 | stdin/file/plain/JSON/exit code + pyz smoke |
+| 계획 작업군 | 범위 | 선행 조건 | 병합 게이트 | 상태 |
+|---|---|---|---|---|
+| 1 | `run`: 인용문 안 플레이스홀더 거부, 엄격한 boolean, 안전한 starter | 없음 | 공격 문자열 회귀 테스트 + 전체 테스트 | ✅ 통합 PR #15 |
+| 2 | `httpc`: cross-origin 인증 제거, HTTPS downgrade 차단 | 없음 | 2개 로컬 서버 리다이렉트 테스트 | ✅ 통합 PR #16 |
+| 3 | 빌드: `uv.lock` 소비, ext4 임시 staging, zip 권한 검사 | 없음 | 두 번 빌드 SHA 일치 + smoke | ✅ 통합 PR #17 |
+| 4 | vendor checksum·CI action 불변 pin | PR 3 | 변조 fixture 실패 + integration | ✅ 통합 PR #18 |
+| 5 | 설정 모델 엄격화 | PR 1 | 잘못된 TOML 타입이 모두 `ConfigError`로 종료 | ✅ 통합 PR #20 |
+| 6 | `ws`: kill/purge 확인, EXITED 재생성, zellij 오류 처리 | PR 5 | Textual pilot + backend 오류 fixture | ✅ 통합 PR #21 |
+| 7 | `dt`: strict Base64, streaming hash, 미래 시각 | PR 5 | 단위/CLI/대용량 파일 테스트 | ✅ 통합 PR #22 |
+| 8 | `idk config check` + doctor mirror 설정 강건성 | PR 5~7 | 모든 기존 설정의 표/JSON/exit code 테스트 | ✅ 통합 PR #23 |
+| 9 | `idk build` 모델·파서 | PR 8 | 합성 로그 golden fixture | ✅ 통합 PR #25 |
+| 10 | `idk build` CLI·문서 | PR 9 | stdin/file/plain/JSON/exit code + pyz smoke | ✅ 통합 PR #26 |
 
-각 PR은 기능 코드, 해당 테스트, 사용자 문서, `CHANGELOG.md`의 `[Unreleased]` 항목을 함께 갖는다.
+PR #19(보안 문서)와 PR #24(안정성 문서)는 위 작업군 사이의 전용 문서 통합 게이트다. 따라서
+계획상 10개 작업군이 실제로는 12개 GitHub PR로 병합됐다. 각 작업군/통합 PR은 기능 코드,
+해당 테스트, 사용자 문서, changelog 항목을 함께 갖췄고, 최종 릴리스 준비에서 항목을
+`CHANGELOG.md`의 `[0.2.0]` 섹션으로 이동했다.
 서로 다른 PR의 리팩터링을 한꺼번에 섞지 않는다.
 
 ## `v0.2.0` 사용 후 재검토할 `idk log` MVP 진입 조건

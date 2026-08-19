@@ -4,6 +4,9 @@
 화면을 보고 손으로 옮겨 적는 것이 유일한 경로다. 그래서 이 문서는 **옮겨 적을 양을 최소화**하는
 데 초점을 맞춘다 — 꼭 필요한 것만 있고, 각 항목이 무엇을 풀어주는지 이유가 붙어 있다.
 
+> 상태 (2026-08-20): 이 양식은 `v0.2.0` 릴리스 후보의 폐쇄망 acceptance용이다. 후보
+> 아티팩트와 문서는 준비됐지만, 아직 `v0.2.0` 태그나 GitHub Release는 만들지 않았다.
+
 아래 **A → B → C** 순서로 진행하고, 마지막 [답변 양식](#답변-양식)만 채워 오면 된다.
 
 ---
@@ -17,12 +20,12 @@
 설치는 [closed-network-setup.md](closed-network-setup.md) 참조. 설치 후:
 
 ```bash
-idk --version          # idk 0.1.1 이 나오면 런처 성공
+idk --version          # idk 0.2.0 이 나오면 런처 성공
 ```
 
 | 결과 | 의미 | 적어올 것 |
 |---|---|---|
-| `idk 0.1.1` | 런처 정상 | "OK" 한 마디면 충분 |
+| `idk 0.2.0` | 런처 정상 | "OK" 한 마디면 충분 |
 | `idk: python 3.10+ 를 찾지 못했습니다` | 탐색 실패 (설계상 예상 가능한 실패) | 아래 A-1 을 수행 |
 | 그 외 에러 | **예상 못 한 실패** | 에러 메시지 첫 3줄을 그대로 |
 
@@ -62,7 +65,7 @@ idk doctor --brief
 **손으로 옮겨 적기 좋게** 줄 수와 글자 수를 줄여 놓았다. 출력 예시(WSL 에서 뽑은 것):
 
 ```
-idk 0.1.1 brief
+idk 0.2.0 brief
 os      wsl:ubuntu-26.04  glibc=2.43  kernel=6.18.33.1-microsoft-standard-WSL2  arch=x86_64  wsl=yes
 shell   /bin/bash  TERM=xterm-256color  COLORTERM=-  LANG=C.UTF-8  utf8=yes
 python  running=3.10.21  IDK_PYTHON=-
@@ -103,9 +106,10 @@ curl -sS -o /dev/null -w '%{http_code}\n' <base_url>/api/pypi/<repo_key>/simple/
 `200` 이면 표준 엔드포인트가 열려 있다는 뜻이고 설계대로 진행 가능하다.
 `401/403` 이면 인증이 필요하다는 뜻이니 어떤 인증인지가 중요하다.
 
-### C-2. 빌드 로그 (Phase 3 `idk build`)
+### C-2. 빌드 로그 (Phase 3 `idk build` acceptance)
 
-**로그 파일 자체는 반출 불가**이므로, 파서 설계에 필요한 것은 "형태"뿐이다.
+`idk build` CLI MVP는 합성 fixture로 구현되어 `v0.2.0` 후보에 포함됐다. **로그 파일 자체는
+반출 불가**이므로, 이제 파서 설계에 필요한 것은 현지 acceptance를 위한 "형태"뿐이다.
 
 - [ ] 빌드 명령이 무엇인가 — `make -j8` / `cmake --build` / `qmake` 등
 - [ ] 에러 한 건의 **모양**을 한두 줄만 (경로·프로젝트명은 지우고 형식만)
@@ -113,8 +117,8 @@ curl -sS -o /dev/null -w '%{http_code}\n' <base_url>/api/pypi/<repo_key>/simple/
 - [ ] Qt `moc`/`uic` 에러가 실제로 자주 나오는가
 - [ ] 로그 언어가 영어인가 (locale 에 따라 gcc 메시지가 번역되면 파서가 달라진다)
 
-> 넷 다 몰라도 Phase 3 은 합성 로그로 시작할 수 있다. 다만 마지막 항목(로그 언어)만은
-> 파서 전제를 바꾸므로 꼭 확인해 올 것.
+> 넷 다 몰라도 후보 smoke는 합성 로그로 통과한다. 다만 마지막 항목(로그 언어)은 실제 파서
+> 정확도 판단을 바꾸므로 가능하면 확인해 올 것.
 
 ### C-3. xclip 현지 빌드 가능 여부 (선택 기능)
 
@@ -127,7 +131,7 @@ dnf list available xclip xsel libX11-devel libXmu-devel autoconf automake libtoo
 ### C-4. 반입 절차 자체
 
 - [ ] 반입에 승인이 필요한가, 얼마나 걸리는가
-- [ ] 한 번에 여러 파일을 넣을 수 있는가 (현재 반입 세트는 3개)
+- [ ] 한 번에 여러 파일을 넣을 수 있는가 (핵심 아티팩트 1개, 선택 vendor 최대 2개)
 - [ ] `~/.local/bin` 에 실행 파일을 두고 실행하는 데 제약이 있는가 (noexec 마운트 등)
 
 ---
@@ -183,6 +187,6 @@ dnf list available xclip xsel libX11-devel libXmu-devel autoconf automake libtoo
 | B `py.*` | `IDK_PYTHON` 값 확정, 런처 후보 목록을 실제 환경에 맞춤 |
 | B `shell` | locale 이 UTF-8 이 아니면 Phase 1 TUI 설계가 바뀐다 |
 | C-1 | Phase 5 `idk mirror` 착수 |
-| C-2 | Phase 3 `idk build` 파서 fixture |
+| C-2 | Phase 3 `idk build` 실제 로그 acceptance와 후속 fixture 후보 |
 | C-3 | 클립보드 경로 확정 (xclip vs Shift+드래그) |
 | C-4 | 이후 반입 주기·묶음 크기 계획 |

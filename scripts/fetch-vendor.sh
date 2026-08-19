@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 반입 세트를 vendor/ 에 모은다 — idk.pyz 외에 손으로 들고 들어가야 하는 것들.
+# 선택 vendor 세트를 vendor/ 에 모은다 — 핵심 반입 아티팩트는 별도의 idk.pyz 한 개다.
 #
 #   vendor/zellij-*-musl.tar.gz   정적 링크 바이너리 (RHEL 8 의 glibc 2.28 과 무관하게 동작)
 #   vendor/xclip-*.tar.gz         폐쇄망에서 현지 빌드할 소스 (rustc 가 없어도 되는 C 코드)
@@ -159,4 +159,5 @@ echo
 echo "반입 세트 (vendor/):"
 ls -1sh "$VENDOR" | sed 's/^/  /'
 echo
-echo "여기에 dist/idk.pyz 를 더해 총 3개 파일을 반입한다. 설치는 docs/closed-network-setup.md 참조."
+echo "필요하면 여기에 dist/idk.pyz 를 더해 반입한다. 핵심 아티팩트는 idk.pyz 한 개이며,"
+echo "vendor 파일은 ws/클립보드 기능을 사용할 때만 선택한다. 설치는 docs/closed-network-setup.md 참조."

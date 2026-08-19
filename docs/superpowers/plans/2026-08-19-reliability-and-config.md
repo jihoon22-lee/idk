@@ -10,6 +10,11 @@
 
 **Spec:** `docs/superpowers/plans/2026-08-19-immediate-roadmap.md`의 `v0.2.0` 안정성 작업군, `docs/spec-ws-run.md`, `docs/spec-dt.md`
 
+> 상태 (2026-08-20): 설정·ws·dt·`config check` 작업과 문서 통합은 완료되어 통합 브랜치에
+> 반영됐다. 아래 단계는 완료 기록으로 보존하며, changelog 항목은 최종 `[0.2.0]` 섹션으로
+> 이동했다. `v0.2.0` 태그와 GitHub Release는 아직 만들지 않았다.
+> 각 Task 제목의 상태 표기가 원래 단계별 체크리스트보다 현재 진행 상태의 기준이다.
+
 ## Global Constraints
 
 - `src/idk/dt/`는 stdlib 외 의존성을 import하지 않는다.
@@ -20,7 +25,7 @@
 
 ---
 
-### Task 1: 설정 모델의 엄격한 타입 계약
+### Task 1: 설정 모델의 엄격한 타입 계약 ✅ 완료
 
 **Files:**
 - Modify: `src/idk/config.py`
@@ -76,7 +81,7 @@ git commit -m "fix(config): reject invalid value types consistently"
 
 ---
 
-### Task 2: ws TUI 파괴 동작 확인과 EXITED 의미 통일
+### Task 2: ws TUI 파괴 동작 확인과 EXITED 의미 통일 ✅ 완료
 
 **Files:**
 - Modify: `src/idk/ws/tui.py`
@@ -124,7 +129,7 @@ git commit -m "fix(ws): confirm destructive actions and recreate exited sessions
 
 ---
 
-### Task 3: zellij nonzero 오류 가시화
+### Task 3: zellij nonzero 오류 가시화 ✅ 완료
 
 **Files:**
 - Modify: `src/idk/ws/backends/zellij.py`
@@ -160,7 +165,7 @@ git commit -m "fix(ws): surface unexpected zellij failures"
 
 ---
 
-### Task 4: dt 정확성과 대용량 입력
+### Task 4: dt 정확성과 대용량 입력 ✅ 완료
 
 **Files:**
 - Modify: `src/idk/dt/encoding.py`
@@ -219,7 +224,7 @@ git commit -m "fix(dt): validate encodings and stream file hashes"
 
 ---
 
-### Task 5: `idk config check`
+### Task 5: `idk config check` ✅ 완료
 
 **Files:**
 - Create: `src/idk/cli_config.py`
@@ -290,7 +295,7 @@ git commit -m "feat(config): add configuration validation command"
 
 ---
 
-### Task 6: 안정성 작업군 문서·회귀 게이트
+### Task 6: 안정성 작업군 문서·회귀 게이트 ✅ 완료
 
 **Files:**
 - Modify: `docs/GUIDE.md`
@@ -314,9 +319,10 @@ Run: `uvx ruff check . && uvx ruff format --check .`
 
 Run: `./scripts/build-pyz.sh && ./scripts/smoke.sh`
 
-- [ ] **Step 3: changelog의 `[Unreleased]`를 갱신하고 커밋한다**
+- [ ] **Step 3: 최종 changelog의 `[0.2.0]` 섹션을 확인하고 커밋한다**
 
-안정성·`config check` 변경을 `[Unreleased]`에 기록한다. 중간 버전과 태그는 만들지 않는다.
+안정성·`config check` 변경은 최종 릴리스 준비 단계에서 `[0.2.0]` 섹션으로 이동했다. 중간
+버전과 태그는 만들지 않는다.
 
 ```bash
 git add docs README.md CHANGELOG.md

@@ -5,6 +5,10 @@
 - 배경: [plan.md](plan.md)
 - 구현 규약: [ARCHITECTURE.md](ARCHITECTURE.md)
 
+> 상태 (2026-08-20): `idk dt`의 Phase 2 구현과 TUI는 완료되어 `v0.2.0` 릴리스 후보에
+> 포함되어 있다. 이 문서는 동작 계약을 설명하는 명세이며, 아직 `v0.2.0` 태그나 GitHub
+> Release는 만들지 않았다.
+
 ---
 
 ## 1. 원본 명세
@@ -319,10 +323,11 @@ Phase 1 과 달리 도구들이 서로 독립이라 병렬로 나가도 되지�
 | B | Phase 1 의 6~7 (`idk run`) | `--pane` 으로 ws 와 연결 |
 | C | Phase 2 의 1~7 (`idk dt`) | 13개 도구 |
 | D | Phase 1 의 8~9 + Phase 2 의 8 (TUI 3종) | |
-| E | 문서 갱신 + CHANGELOG `[0.2.0]` + 태그 | 릴리스 |
+| E | 문서 갱신 + CHANGELOG `[0.2.0]` + 버전 정합성 | ✅ 릴리스 준비 완료; 태그/Release는 반입 acceptance 뒤 |
 
 A~C 가 실사용 가치의 대부분이다. D 는 없어도 동작하므로 시간이 밀리면 뒤로 미룬다.
 E 에서 `docs/GUIDE.md` 의 "아직 없는 명령" 표를 정리하고 `README.md` 의 상태 표를 갱신한다.
 
-릴리스는 [CHANGELOG.md](../CHANGELOG.md) 의 절차대로 `__version__` → `0.2.0`,
-`[Unreleased]` → `[0.2.0]` 이동 후 `git tag v0.2.0`.
+릴리스 준비는 [CHANGELOG.md](../CHANGELOG.md)의 절차대로 `__version__` → `0.2.0`,
+`[Unreleased]` → `[0.2.0]` 이동까지 수행한다. 실제 `git tag v0.2.0` 생성과 push,
+GitHub Release 생성은 폐쇄망 acceptance와 최종 승인 뒤의 별도 단계다.

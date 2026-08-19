@@ -3,9 +3,12 @@
 개발 환경(WSL)과 **폐쇄망**(RHEL 8.10, tcsh) 양쪽에서 **똑같이 동작하는** CLI/TUI 개발 도구 모음.
 반입 파일 하나(`idk.pyz`)로 배포된다.
 
+> 현재 소스와 문서는 `v0.2.0` 릴리스 후보 준비 상태다. 통합 검증과 문서 정리는 끝났지만
+> 아직 `v0.2.0` 태그나 GitHub Release는 만들지 않았다.
+
 ```bash
 $ idk doctor --brief
-idk 0.1.1 brief
+idk 0.2.0 brief
 os      rhel-8.10  glibc=2.28  kernel=4.18.0-553.el8_10.x86_64  arch=x86_64  wsl=no
 shell   /bin/tcsh  TERM=xterm-256color  COLORTERM=-  LANG=en_US.UTF-8  utf8=yes
 python  running=3.10.4  IDK_PYTHON=/opt/python3.10/bin/python3.10
@@ -33,8 +36,9 @@ mirror  skip  미설정  ~/.config/idk/mirror.toml
 
 ## 설치
 
-[릴리스](https://github.com/jihoon22-lee/idk/releases)에서 `idk.pyz`를 받아 실행 권한만 주면 끝이다.
-root 권한이 필요 없다.
+릴리스가 게시되면 [릴리스 페이지](https://github.com/jihoon22-lee/idk/releases)에서 `idk.pyz`를
+받아 실행 권한만 주면 끝이다. 지금은 아래 소스 빌드로 같은 단일 파일을 만들 수 있다. root
+권한이 필요 없다.
 
 ```bash
 mkdir -p ~/.local/bin
@@ -68,7 +72,7 @@ idk doctor
 | `idk ws` | ✅ | 워크스페이스·터미널 매니저 (확인 modal, EXITED 재생성, zellij 백엔드) |
 | `idk run` | ✅ | 명령 런처(스니펫) |
 | `idk dt` | ✅ | 개발 도구 모음 (JSON·Base64·hash·JWT·diff…) |
-| `idk build` | ✅ MVP | 파일/stdin 빌드 로그에서 진단 추출 (plain/JSON) |
+| `idk build` | ✅ MVP (v0.2.0 준비 완료) | 파일/stdin 빌드 로그에서 진단 추출 (plain/JSON) |
 | `idk log` | 📋 Phase 4 | 멀티 로그 뷰어 |
 | `idk mirror` | 📋 Phase 5 | 사내 아티팩토리 미러 검색 |
 

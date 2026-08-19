@@ -3,6 +3,9 @@
 설치와 명령어 사용법. 폐쇄망 반입 절차는 [closed-network-setup.md](closed-network-setup.md),
 내부 구조는 [ARCHITECTURE.md](ARCHITECTURE.md).
 
+> 현재 소스와 문서는 `v0.2.0` 릴리스 후보 준비 상태다. 통합 검증은 이 문서의 절차로
+> 진행할 수 있지만, 아직 `v0.2.0` 태그나 GitHub Release는 만들지 않았다.
+
 ---
 
 ## 설치
@@ -22,7 +25,7 @@ cp idk.pyz ~/.local/bin/idk && chmod +x ~/.local/bin/idk
 ```
 
 ```csh
-# idk 0.1.1 — 아래를 셸 환경파일에 append
+# idk 0.2.0 — 아래를 셸 환경파일에 append
 # (rhel-8.10 에서 생성. 다른 머신에 붙여넣지 말 것)
 setenv PATH "/home/me/.local/bin:$PATH"
 setenv IDK_PYTHON /opt/python3.10/bin/python3.10
@@ -75,7 +78,7 @@ idk doctor --brief
 ```
 
 ```
-idk 0.1.1 brief
+idk 0.2.0 brief
 os      rhel-8.10  glibc=2.28  kernel=4.18.0-553.el8_10.x86_64  arch=x86_64  wsl=no
 shell   /bin/tcsh  TERM=xterm-256color  COLORTERM=-  LANG=en_US.UTF-8  utf8=yes
 python  running=3.10.4  IDK_PYTHON=-
