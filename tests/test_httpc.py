@@ -6,6 +6,7 @@ import os
 import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.request import Request
 
 import pytest
 
@@ -22,6 +23,11 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/echo-auth":
             body = self.headers.get("Authorization", "").encode()
             self._respond(200, body)
+        elif self.path == "/redirect-same-origin":
+            self.send_response(302)
+            self.send_header("Location", "/echo-auth")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
         elif self.path == "/echo-ua":
             self._respond(200, self.headers.get("User-Agent", "").encode())
         elif self.path == "/badjson":
@@ -40,6 +46,60 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+class TargetHandler(BaseHTTPRequestHandler):
+    last_authorization = ""
+
+    def do_GET(self):
+        type(self).last_authorization = self.headers.get("Authorization", "")
+        body = b"ok"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+class RedirectHandler(BaseHTTPRequestHandler):
+    target_url = ""
+
+    def do_GET(self):
+        if self.path == "/to-target":
+            self.send_response(302)
+            self.send_header("Location", f"{self.target_url}/echo-auth")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+class ServerHandle:
+    def __init__(self, handler):
+        self.handler = handler
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+
+    @property
+    def url(self):
+        return f"http://127.0.0.1:{self.httpd.server_address[1]}"
+
+    @property
+    def last_authorization(self):
+        return self.handler.last_authorization
+
+    def close(self):
+        self.httpd.shutdown()
+        self.thread.join()
+
+
 @pytest.fixture(scope="module")
 def server():
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -47,6 +107,21 @@ def server():
     thread.start()
     yield f"http://127.0.0.1:{srv.server_address[1]}"
     srv.shutdown()
+
+
+@pytest.fixture(scope="module")
+def target_server():
+    target = ServerHandle(TargetHandler)
+    yield target
+    target.close()
+
+
+@pytest.fixture(scope="module")
+def redirect_server(target_server):
+    RedirectHandler.target_url = target_server.url
+    redirect = ServerHandle(RedirectHandler)
+    yield redirect.url
+    redirect.close()
 
 
 def test_get_ok(server):
@@ -76,6 +151,96 @@ def test_raise_for_status_opt_in(server):
 def test_bearer_auth_header(server):
     resp = httpc.request(f"{server}/echo-auth", auth=("bearer", "tok123"))
     assert resp.text() == "Bearer tok123"
+
+
+def test_cross_origin_redirect_strips_authorization(redirect_server, target_server):
+    resp = httpc.request(
+        f"{redirect_server}/to-target",
+        auth=("bearer", "secret"),
+    )
+    assert resp.status == 200
+    assert target_server.last_authorization == ""
+
+
+def test_cross_origin_redirect_strips_caller_authorization(redirect_server, target_server):
+    resp = httpc.request(
+        f"{redirect_server}/to-target",
+        headers={"Authorization": "Bearer caller"},
+    )
+    assert resp.status == 200
+    assert target_server.last_authorization == ""
+
+
+def test_cross_origin_redirect_strips_netrc_authorization(
+    redirect_server, target_server, tmp_path, monkeypatch
+):
+    netrc_file = tmp_path / ".netrc"
+    netrc_file.write_text("machine 127.0.0.1 login alice password s3cret\n")
+    netrc_file.chmod(0o600)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NETRC", raising=False)
+
+    resp = httpc.request(f"{redirect_server}/to-target", auth="netrc")
+
+    assert resp.status == 200
+    assert target_server.last_authorization == ""
+
+
+def test_same_origin_redirect_retains_authorization(server):
+    resp = httpc.request(
+        f"{server}/redirect-same-origin",
+        auth=("bearer", "same-origin"),
+    )
+    assert resp.status == 200
+    assert resp.text() == "Bearer same-origin"
+
+
+def test_https_to_http_redirect_is_rejected():
+    req = Request("https://secure.example/start")
+    with pytest.raises(
+        httpc.HttpError,
+        match="HTTPS 요청을 HTTP로 downgrade하는 redirect를 거부했습니다",
+    ):
+        httpc.SafeRedirectHandler().redirect_request(
+            req,
+            None,
+            302,
+            "Found",
+            {},
+            "http://insecure.example/target",
+        )
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("HTTPS://Example.COM/path", ("https", "example.com", 443)),
+        ("http://Example.COM:80/path", ("http", "example.com", 80)),
+        ("http://Example.COM:0/path", ("http", "example.com", 0)),
+        ("https://Example.COM:444/path", ("https", "example.com", 444)),
+    ],
+)
+def test_origin_normalizes_scheme_hostname_and_effective_port(url, expected):
+    assert httpc.origin(url) == expected
+
+
+def test_explicit_port_zero_is_cross_origin_and_strips_authorization():
+    source = "http://example.test/"
+    target = "http://example.test:0/target"
+    assert httpc.origin(source) != httpc.origin(target)
+
+    req = Request(source, headers={"Authorization": "Bearer zero-port"})
+    redirected = httpc.SafeRedirectHandler().redirect_request(
+        req,
+        None,
+        302,
+        "Found",
+        {},
+        target,
+    )
+
+    assert redirected is not None
+    assert redirected.get_header("Authorization") is None
 
 
 def test_basic_auth_header(server):
