@@ -220,6 +220,8 @@ src/idk/
 │  └─ backends/zellij.py   zellij 호출의 유일한 지점 (AGENTS.md 규약)
 ├─ snip/           `idk run` — snippets.toml 모델·치환·CLI·TUI
 │  └─ model.py  render.py  cli.py  tui.py
+├─ build/          빌드 로그 진단 core — streaming parser와 plain/JSON renderer
+│  └─ model.py  parsers.py  render.py
 └─ dt/             `idk dt` 변환 로직 — **stdlib 만 (의존성 0)**
    └─ jsonfmt/encoding/timestamp/case/security/regexq/textdiff/jwt
 ```
@@ -238,6 +240,13 @@ src/idk/
 | `snip/model.py`·`snip/render.py` | `snippets.toml` 검증·placeholder 치환 | non-raw placeholder를 기존 single/double quote 안에서 거부한다. raw는 신뢰된 고정 셸 조각 전용이며, `shlex.quote()`의 경계는 한 번의 local shell이다 |
 | `dt/` | 변환 순수 함수와 `hash_stream` 대용량 스트림 해시 | **typer/rich/textual import 금지** — AST 테스트로 강제. Base64는 ASCII whitespace만 허용하고 모드별 알파벳을 엄격히 검증한다(표준은 영숫자와 `+/`, URL-safe는 영숫자와 `-_`) |
 | `dt_tui.py` | 대화형 도구 TUI | dt 로직은 `dt/` 를 호출만 한다 |
+
+### Build core
+
+`build/model.py`, `build/parsers.py`, and `build/render.py` form the internal build-diagnostic
+core. The parser consumes logs one line at a time; the renderer emits plain text or a
+JSON-ready payload without importing Typer, Rich, or Textual. Fixtures are synthetic by
+design because closed-network logs cannot be exported. The root CLI wiring is a later step.
 
 ### 버전은 한 곳에만
 

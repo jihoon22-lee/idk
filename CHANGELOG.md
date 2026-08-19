@@ -9,6 +9,10 @@
 
 ## [Unreleased]
 
+### Added
+- **빌드 진단 core** — 합성 fixture 경계를 전제로 gcc/clang·CMake·make·Qt 로그를 streaming parser로
+  읽고, 위치·context를 보존한 plain/JSON-ready 결과로 변환한다. root `idk build` CLI 배선은 후속 작업이다.
+
 ### Fixed
 - **`idk config check` 추가** — 알려진 TOML 설정을 고정된 순서로 검사해 `skip`/`ok`/`warn`/`fail`
   행과 `file`/`status`/`detail` JSON 출력을 제공한다. 실제로 없는 파일·설정 디렉터리는 정상으로
