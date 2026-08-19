@@ -1,0 +1,7 @@
+make[2]: Entering directory '/tmp/idk-build'
+src/main.cpp:12:7: error: use of undeclared identifier 'value'
+src/main.cpp:13:5: warning: unused variable 'result'
+src/main.cpp:14: note: consider returning result
+compiler output that is not a diagnostic
+
+build finished
