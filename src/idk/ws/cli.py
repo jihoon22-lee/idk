@@ -211,9 +211,26 @@ def list_rows() -> list[dict[str, object]]:
 def attach_or_create(name: str) -> None:
     """attach. 세션이 없으면 정의로 생성 후 attach. (attach 명령과 TUI Enter 가 공유)"""
     sessions = _sessions()
-    if name in sessions:
+    session = sessions.get(name)
+    if session is not None and session.state == "running":
         zellij.attach(name)
         return
+
+    if session is not None and session.state == "exited":
+        workspaces = _load_workspaces()
+        ws = next((workspace for workspace in workspaces if workspace.name == name), None)
+        if ws is None:
+            typer.echo(
+                f"EXITED orphan 세션 '{name}' 은 workspace 정의가 없습니다. \
+`idk ws kill {name} --purge` 로 흔적을 제거한 뒤 workspaces.toml 에 정의하세요.",
+                err=True,
+            )
+            raise typer.Exit(EXIT_CONFLICT)
+        typer.echo(f"종료된 세션 '{name}' 을 purge 하고 workspace 정의로 재생성합니다...", err=True)
+        zellij.kill(name, purge=True)
+        _do_up(name, ws, attach=True, print_layout=False)
+        return
+
     ws = _find_workspace(name)
     _do_up(name, ws, attach=True, print_layout=False)
 

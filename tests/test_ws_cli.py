@@ -159,6 +159,50 @@ def test_attach_existing_session(monkeypatch):
     assert called == ["demo"]
 
 
+def test_attach_recreates_defined_exited_session(monkeypatch):
+    _write_ws('[[workspace]]\nname = "demo"\n')
+    monkeypatch.setattr(
+        cli.zellij,
+        "list_sessions",
+        lambda: [zellij.Session("demo", "exited", "1s ago")],
+    )
+    killed = []
+    monkeypatch.setattr(cli.zellij, "kill", lambda name, purge=False: killed.append((name, purge)))
+    monkeypatch.setattr(cli.zellij, "attach", lambda name: None)
+    recreated = []
+    monkeypatch.setattr(
+        cli,
+        "_do_up",
+        lambda name, ws, *, attach, print_layout: recreated.append(
+            (name, ws.name, attach, print_layout)
+        ),
+    )
+
+    result = runner.invoke(cli.ws_app, ["attach", "demo"])
+
+    assert result.exit_code == 0
+    assert killed == [("demo", True)]
+    assert recreated == [("demo", "demo", True, False)]
+
+
+def test_attach_orphan_exited_is_conflict_with_recovery_guidance(monkeypatch):
+    monkeypatch.setattr(
+        cli.zellij,
+        "list_sessions",
+        lambda: [zellij.Session("orphan", "exited", "1s ago")],
+    )
+    killed = []
+    monkeypatch.setattr(cli.zellij, "kill", lambda name, purge=False: killed.append((name, purge)))
+    monkeypatch.setattr(cli.zellij, "attach", lambda name: None)
+
+    result = runner.invoke(cli.ws_app, ["attach", "orphan"])
+
+    assert result.exit_code == 3
+    assert killed == []
+    assert "EXITED" in result.output
+    assert "idk ws kill orphan --purge" in result.output
+
+
 def test_attach_creates_when_missing_definition(monkeypatch):
     _write_ws('[[workspace]]\nname = "demo"\n')
     _no_sessions(monkeypatch)

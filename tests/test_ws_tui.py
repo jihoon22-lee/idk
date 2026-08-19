@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Label
 
 from idk.ws import cli, tui
 
@@ -34,7 +34,7 @@ def test_tui_shows_rows_and_activates(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_tui_kill_calls_backend(monkeypatch):
+def test_tui_purge_waits_for_confirmation_and_describes_permanent_removal(monkeypatch):
     monkeypatch.setattr(cli, "list_rows", _rows)
     calls = []
     monkeypatch.setattr(
@@ -45,9 +45,57 @@ def test_tui_kill_calls_backend(monkeypatch):
         app = tui.WsApp()
         async with app.run_test() as pilot:
             await pilot.press("p")
+            assert calls == []
+            assert isinstance(app.screen, tui.ConfirmSessionAction)
+            message = "\n".join(
+                str(app.screen.query_one(f"#{id}", Label).content) for id in ("message", "warning")
+            )
+            assert "영구 제거" in message
+            assert "EXITED" in message
+            await pilot.press("enter")
 
     asyncio.run(scenario())
     assert calls == [("demo", True)]
+
+
+def test_tui_kill_copy_is_not_purge_copy(monkeypatch):
+    monkeypatch.setattr(cli, "list_rows", _rows)
+    calls = []
+    monkeypatch.setattr(
+        "idk.ws.backends.zellij.kill", lambda name, purge=False: calls.append((name, purge))
+    )
+
+    async def scenario() -> None:
+        app = tui.WsApp()
+        async with app.run_test() as pilot:
+            await pilot.press("k")
+            assert calls == []
+            assert isinstance(app.screen, tui.ConfirmSessionAction)
+            message = str(app.screen.query_one("#message", Label).content)
+            assert "종료" in message
+            assert "영구 제거" not in message
+            await pilot.press("escape")
+
+    asyncio.run(scenario())
+    assert calls == []
+
+
+@pytest.mark.parametrize("cancel_key", ["escape", "n"])
+def test_tui_confirmation_cancel_does_not_call_backend(monkeypatch, cancel_key):
+    monkeypatch.setattr(cli, "list_rows", _rows)
+    calls = []
+    monkeypatch.setattr(
+        "idk.ws.backends.zellij.kill", lambda name, purge=False: calls.append((name, purge))
+    )
+
+    async def scenario() -> None:
+        app = tui.WsApp()
+        async with app.run_test() as pilot:
+            await pilot.press("p")
+            await pilot.press(cancel_key)
+
+    asyncio.run(scenario())
+    assert calls == []
 
 
 def test_tui_refresh_reloads_rows(monkeypatch):
