@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import textwrap
 import urllib.parse
+
+_ASCII_WHITESPACE = " \t\n\r\v\f"
+_BASE64_ALPHABET = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+_BASE64_URLSAFE_ALPHABET = frozenset(
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_="
+)
 
 
 def b64_encode(data: bytes, *, url_safe: bool = False, wrap: int = 0) -> str:
@@ -18,10 +25,23 @@ def b64_encode(data: bytes, *, url_safe: bool = False, wrap: int = 0) -> str:
 
 def b64_decode(text: str, *, url_safe: bool = False) -> bytes:
     """base64 → 바이트. 패딩이 빠진 입력(JWT 조각)도 받아준다."""
-    dec = base64.urlsafe_b64decode if url_safe else base64.b64decode
-    cleaned = text.strip()
-    cleaned += "=" * (-len(cleaned) % 4)
-    return dec(cleaned)
+    cleaned = "".join(char for char in text if char not in _ASCII_WHITESPACE)
+    try:
+        cleaned_bytes = cleaned.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("올바른 base64가 아닙니다") from exc
+    alphabet = _BASE64_URLSAFE_ALPHABET if url_safe else _BASE64_ALPHABET
+    if any(char not in alphabet for char in cleaned_bytes):
+        raise ValueError("올바른 base64가 아닙니다")
+    cleaned_bytes += b"=" * (-len(cleaned_bytes) % 4)
+    try:
+        return base64.b64decode(
+            cleaned_bytes,
+            altchars=b"-_" if url_safe else None,
+            validate=True,
+        )
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("올바른 base64가 아닙니다") from exc
 
 
 def url_encode(text: str, *, component: bool = False) -> str:

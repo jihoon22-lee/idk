@@ -230,7 +230,7 @@ src/idk/
 | `ws/layout.py` | 모델 → zellij KDL 순수 함수 | 첫 탭에 `tab-bar`/`status-bar` plugin 을 감싼다 (키힌트 바) |
 | `ws/backends/zellij.py` | zellij 프로세스 호출 전부 | 이 파일 밖에서 zellij 를 부르지 않는다. `list-sessions`의 정확한 세션 없음 문구와 purge의 확인된 대상 없음만 멱등 성공으로 허용하고, 나머지 nonzero는 명령 인자·exit code·출력과 함께 `ZellijError`로 올린다 |
 | `snip/model.py`·`snip/render.py` | `snippets.toml` 검증·placeholder 치환 | non-raw placeholder를 기존 single/double quote 안에서 거부한다. raw는 신뢰된 고정 셸 조각 전용이며, `shlex.quote()`의 경계는 한 번의 local shell이다 |
-| `dt/` | 변환 순수 함수 (문자열↔문자열) | **typer/rich/textual import 금지** — AST 테스트로 강제 |
+| `dt/` | 변환 순수 함수 (문자열↔문자열), `hash_stream` 대용량 스트림 해시 | **typer/rich/textual import 금지** — AST 테스트로 강제. Base64는 ASCII whitespace만 허용하고 모드별 알파벳을 엄격히 검증한다(URL-safe는 `-_`만 허용) |
 | `dt_tui.py` | 대화형 도구 TUI | dt 로직은 `dt/` 를 호출만 한다 |
 
 ### 버전은 한 곳에만

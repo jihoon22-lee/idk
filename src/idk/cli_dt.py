@@ -221,7 +221,8 @@ def hash_cmd(
 ) -> None:
     """해시를 계산한다. --file 이면 청크 단위로 읽는다."""
     if file is not None:
-        digest = security.hash_bytes(file.read_bytes(), algorithm).strip()
+        with file.open("rb") as fh:
+            digest = security.hash_stream(fh, algorithm).strip()
     else:
         data = _read(value, None, binary=True)
         digest = security.hash_bytes(data, algorithm).strip()

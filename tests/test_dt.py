@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 
 import pytest
@@ -46,6 +47,35 @@ def test_b64_decode_accepts_missing_padding():
     assert encoding.b64_decode("aGVsbG8") == b"hello"
 
 
+def test_b64_decode_accepts_ascii_whitespace():
+    assert encoding.b64_decode(" \taGVs\n\v bG8\r\f ") == b"hello"
+
+
+def test_b64_rejects_non_alphabet_characters():
+    with pytest.raises(ValueError, match="base64"):
+        encoding.b64_decode("!!!")
+
+
+def test_b64_rejects_non_ascii_characters():
+    with pytest.raises(ValueError, match="base64"):
+        encoding.b64_decode("aGVsbG8 한글")
+
+
+@pytest.mark.parametrize("text", ["+//+", "/w=="])
+def test_b64_url_safe_rejects_standard_alphabet(text):
+    with pytest.raises(ValueError, match="base64"):
+        encoding.b64_decode(text, url_safe=True)
+
+
+def test_b64_standard_accepts_standard_alphabet():
+    assert encoding.b64_decode("+//+") == b"\xfb\xff\xfe"
+    assert encoding.b64_decode("/w==") == b"\xff"
+
+
+def test_b64_url_safe_uses_its_alphabet():
+    assert encoding.b64_decode("-__-", url_safe=True) == b"\xfb\xff\xfe"
+
+
 def test_b64_wrap():
     out = encoding.b64_encode(b"x" * 60, wrap=76)
     assert "\n" in out
@@ -84,6 +114,11 @@ def test_ts_relative():
     assert timestamp.relative(100.0, 105.0) == "5초 전"
     assert timestamp.relative(100.0, 160.0) == "1분 전"
     assert timestamp.relative(100.0, 100.0 + 86400 * 3) == "3일 전"
+
+
+def test_ts_relative_future():
+    assert timestamp.relative(160.0, 100.0) == "1분 후"
+    assert timestamp.relative(105.0, 100.0) == "5초 후"
 
 
 def test_ts_bad_input():
@@ -144,6 +179,25 @@ def test_hash_known_vectors():
 def test_hash_bad_algorithm():
     with pytest.raises(ValueError):
         security.hash_bytes(b"x", "crc32")
+
+
+class _RecordingBytesIO(io.BytesIO):
+    def __init__(self, data: bytes):
+        super().__init__(data)
+        self.read_sizes: list[int] = []
+
+    def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
+        return super().read(size)
+
+
+def test_hash_stream_reads_large_input_in_chunks():
+    stream = _RecordingBytesIO(b"0123456789abcdef" * (3 * 1024 * 1024 // 16))
+    assert (
+        security.hash_stream(stream, "sha256")
+        == "5bcd44e1ae4d34173b36402d6b2f1ecdb3460aac1d66937a5fcc92beb5ec6779"
+    )
+    assert stream.read_sizes == [1024 * 1024] * 4
 
 
 def test_uuid_v4_format():
