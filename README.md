@@ -53,8 +53,10 @@ idk doctor
 ./scripts/smoke.sh         # 반입 전 게이트
 ```
 
-`uv` 만 있으면 된다. 빌드는 **같은 파일시스템에서 반복하면 바이트 단위로 동일**하다 —
-반입한 파일이 내가 만든 그 파일인지 `sha256sum` 으로 대조할 수 있다.
+`uv` 만 있으면 된다. 빌드는 committed source와 `uv.lock`을 사용해 native 임시 staging에서
+진행한다. 같은 Python target과 uv/shiv/hatchling build toolchain을 유지하면 바이트 단위로
+재현할 수 있고, CI는 같은 실행에서 두 빌드의 SHA-256을 비교한다. 반입한 파일이 내가 만든 그
+파일인지 `sha256sum` 으로 대조할 수 있다.
 
 ## 명령어
 
