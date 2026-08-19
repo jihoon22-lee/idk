@@ -221,7 +221,9 @@ idk ws attach qt-app   # 붙기 (없으면 정의로 생성)
 idk ws kill qt-app --purge
 ```
 
-zellij 가 없으면 설치 안내 후 exit 4 로 끝난다.
+zellij가 필요한 `ws up`의 실제 세션 생성, `ws attach`, `ws kill` 경로에서 zellij가 없으면
+설치 안내 후 exit 4로 끝난다. `ws init`, `ws ls`, `ws up --print-layout`은 zellij 없이도
+각각 정의 파일 생성, 정의 목록 표시, KDL 출력을 수행한다.
 
 TUI에서 `k`(종료)와 `p`(영구 제거)를 누르면 바로 실행하지 않고 확인 modal을 연다. `Enter` 또는
 `y`로 확인하고 `Esc` 또는 `n`으로 취소한다. `p`는 EXITED 흔적까지 지우므로 복구할 수 없다는
@@ -233,8 +235,9 @@ purge한 뒤 그 정의로 재생성하고 붙는다. 정의가 없는 orphan EX
 
 zellij의 `list-sessions`는 정확히 `No active zellij sessions found.`를 낸 경우에만 빈 목록으로
 처리한다. `--purge`는 `kill-session` 뒤 `delete-session --force`를 실행하며, 두 단계 모두
-zellij가 보고한 대상 없음 문구만 멱등 성공으로 처리한다. 권한·소켓 등 다른 실패는 명령 인자와
-exit code, zellij 진단을 보여 주고 exit 1로 끝난다.
+zellij가 보고한 대상 없음 문구만 멱등 성공으로 처리한다. 결과를 캡처하는 backend 명령의
+권한·소켓 등 다른 실패는 명령 인자와 exit code를 보여 주고, 캡처된 stdout/stderr가 있을 때만
+그 진단을 덧붙여 exit 1로 끝난다.
 
 ## `idk run` — 명령 런처(스니펫)
 

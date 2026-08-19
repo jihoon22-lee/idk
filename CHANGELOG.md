@@ -37,8 +37,9 @@
   재생성한다. 정의가 없는 orphan EXITED 세션은 건드리지 않고 exit 3과 복구 안내를 낸다.
 - **zellij backend 실패를 숨기지 않음** — 세션 목록의 정확한 `No active zellij sessions found.`와
   `kill-session`→`delete-session --force` purge의 확인된 대상 없음 문구만 멱등 성공으로 인정한다.
-  권한·소켓 등 예상하지 못한 nonzero는
-  명령 인자·exit code·zellij 출력을 담은 `ZellijError`로 올라오며 ws CLI는 exit 1로 끝난다.
+  결과를 캡처하는 backend 경로에서 권한·소켓 등 예상하지 못한 nonzero는
+  명령 인자·exit code와, 캡처된 stdout/stderr가 있을 때만 그 진단을 담은 `ZellijError`로
+  올라오며 ws CLI는 exit 1로 끝난다.
 - **dt 입력 검증·대용량 해시 정확성** — Base64 디코드는 ASCII whitespace와 누락 패딩만
   허용하고 모드별 알파벳 밖의 문자를 친화적인 오류로 거부한다(URL-safe는 `-_`만 허용).
   `hash --file`은 1 MiB 스트림 청크를 사용하며, 미래 상대 시각은 `후`를 붙여 과거와

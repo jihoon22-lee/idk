@@ -190,7 +190,8 @@ layout {
 정의 로드 → 검증 → KDL 렌더 → (--print-layout 이면 출력 후 종료)
   → 세션 존재 확인
       이미 있음(live)   → "이미 있습니다. idk ws attach 로 붙으세요" 후 exit 3
-      있음(EXITED)      → purge 후 workspace 정의로 재생성 → attach
+      있음(EXITED)      → purge 후 workspace 정의로 재생성 → attach 요청이면 attach
+                           (--detached 또는 중첩 실행이면 detached 생성 후 안내)
       없음              → 임시파일에 KDL 쓰기 → zellij --new-session-with-layout … --session <name>
 ```
 
@@ -218,10 +219,12 @@ zellij 가 뱉는 `already exists` 에러에 기대지 않고 **먼저 확인해
 | 3 | 상태 충돌 — 이미 있음/없음, 중첩 attach |
 | 4 | zellij 미설치 |
 
-zellij 미설치 시 설치 안내(`docs/closed-network-setup.md` 참조)를 출력하고 exit 4.
-zellij가 예상하지 못한 nonzero를 반환하면 명령 인자·exit code·출력과 함께 exit 1이다. 세션
-목록의 정확한 `No active zellij sessions found.`와 purge의 확인된 대상 없음 문구만 멱등 성공으로
-인정한다.
+zellij가 필요한 backend 경로(`up`의 실제 생성, `attach`, `kill`)에서 미설치면 설치 안내
+(`docs/closed-network-setup.md` 참조)를 출력하고 exit 4이다. `ws init`, `ws ls`,
+`ws up --print-layout`은 zellij 없이도 각각 정의 파일 생성, 정의 목록 표시, KDL 출력을 수행한다.
+결과를 캡처하는 backend 명령이 예상하지 못한 nonzero를 반환하면 명령 인자·exit code와 함께
+exit 1이며, 캡처된 stdout/stderr가 있을 때만 그 진단을 추가한다. 세션 목록의 정확한
+`No active zellij sessions found.`와 purge의 확인된 대상 없음 문구만 멱등 성공으로 인정한다.
 
 ### 4.4 `ls` 출력
 
