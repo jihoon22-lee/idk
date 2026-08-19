@@ -9,6 +9,27 @@
 
 ## [Unreleased]
 
+### Security
+- **`idk run` placeholder 경계 강화** — 기본 `shlex.quote()`는 현재 local shell의 한 argv만
+  보호한다. `ssh`·`sh -c`·`eval`처럼 입력을 다시 해석하는 중첩 인터프리터까지 보호한다고
+  가정하면 안 된다. 기존 single/double quote 안의 non-raw placeholder는 설정 로드에서
+  거부하고, `raw=true`는 이스케이프 없는 신뢰된 고정 셸 조각에만 사용하도록 경계를
+  명확히 했다.
+- **HTTP redirect 인증 보호** — `Authorization`은 동일 origin(scheme·호스트·유효 포트)
+  redirect에서만 유지하고, cross-origin 이동에서는 제거한다. HTTPS에서 HTTP로 내려가는
+  downgrade redirect는 거부한다.
+
+### Build / Supply chain
+- **잠긴 재현 가능 zipapp 빌드** — runtime 의존성은 커밋된 `uv.lock`에서 frozen export하고
+  해시를 강제한다. wheel·shiv도 잠긴 build group에서 실행하며, checkout과 분리된 Linux
+  native 임시 staging을 사용해 `/mnt/*`에서도 ZIP 권한을 안전하게 만든다.
+- **아티팩트 게이트 강화** — `smoke.sh`가 ZIP의 group/other writable entry와 손상을 거부하고,
+  CI artifact job이 새 staging에서 두 번 빌드한 SHA-256을 비교한다. 최종 `dist/idk.pyz`만
+  원자적으로 게시한다.
+- **vendor·CI 공급망 고정** — 커밋된 `scripts/vendor-checksums.txt`로 zellij 0.44.3
+  `no-web` musl 바이너리와 xclip 0.13 source archive를 검증하고, 다른 zellij flavor는
+  지원 경계 밖으로 거부한다. CI/release의 GitHub Actions는 immutable commit SHA로 pin한다.
+
 ---
 
 ## [0.1.1] - 2026-08-16
