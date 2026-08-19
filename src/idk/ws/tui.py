@@ -23,6 +23,7 @@ class ConfirmSessionAction(ModalScreen[bool]):
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("enter", "confirm", "확인"),
+        Binding("y", "confirm", "확인"),
         Binding("escape", "cancel", "취소"),
         Binding("n", "cancel", "취소"),
     ]
@@ -149,14 +150,11 @@ class WsApp(App[None]):
         self.attach_target = str(row["name"])
         self.exit()
 
-    def _kill(self, purge: bool) -> None:
-        row = self._selected()
-        if row is None:
-            return
+    def _kill(self, session_name: str, purge: bool) -> None:
         from idk.ws.backends import zellij
 
         try:
-            zellij.kill(str(row["name"]), purge=purge)
+            zellij.kill(session_name, purge=purge)
         except zellij.ZellijError as exc:
             self.notify(str(exc), severity="error")
         self._refresh()
@@ -165,12 +163,13 @@ class WsApp(App[None]):
         row = self._selected()
         if row is None:
             return
+        session_name = str(row["name"])
 
         def on_done(confirmed: bool | None) -> None:
             if confirmed:
-                self._kill(purge)
+                self._kill(session_name, purge)
 
-        self.push_screen(ConfirmSessionAction(str(row["name"]), purge), on_done)
+        self.push_screen(ConfirmSessionAction(session_name, purge), on_done)
 
     def action_kill(self) -> None:
         self._confirm_action(purge=False)

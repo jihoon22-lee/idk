@@ -34,7 +34,8 @@ def test_tui_shows_rows_and_activates(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_tui_purge_waits_for_confirmation_and_describes_permanent_removal(monkeypatch):
+@pytest.mark.parametrize("confirm_key", ["enter", "y"])
+def test_tui_purge_waits_for_confirmation_and_describes_permanent_removal(monkeypatch, confirm_key):
     monkeypatch.setattr(cli, "list_rows", _rows)
     calls = []
     monkeypatch.setattr(
@@ -52,6 +53,25 @@ def test_tui_purge_waits_for_confirmation_and_describes_permanent_removal(monkey
             )
             assert "영구 제거" in message
             assert "EXITED" in message
+            await pilot.press(confirm_key)
+
+    asyncio.run(scenario())
+    assert calls == [("demo", True)]
+
+
+def test_tui_confirmation_targets_row_selected_when_modal_opened(monkeypatch):
+    monkeypatch.setattr(cli, "list_rows", _rows)
+    calls = []
+    monkeypatch.setattr(
+        "idk.ws.backends.zellij.kill", lambda name, purge=False: calls.append((name, purge))
+    )
+
+    async def scenario() -> None:
+        app = tui.WsApp()
+        async with app.run_test() as pilot:
+            table = app.query_one("#table", DataTable)
+            await pilot.press("p")
+            table.move_cursor(row=1, animate=False)
             await pilot.press("enter")
 
     asyncio.run(scenario())
