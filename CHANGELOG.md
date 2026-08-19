@@ -107,7 +107,7 @@
 ### Added
 - **`idk ws`** — 워크스페이스/터미널 매니저 (zellij 백엔드). `ls`/`up`/`attach`/`kill` + TUI.
   - `workspaces.toml` 을 zellij KDL 레이아웃으로 렌더링해 선언적으로 세션을 재현.
-  - 접속이 끊겨도 세션이 살아 재접속하면 그대로 복구 (ETX 끊김 복원).
+  - 접속이 끊겨도 세션이 살아 재접속하면 그대로 복구 (원격 X11 연결 끊김 복원).
   - detached 생성은 사설 pty + SIGTERM(zellij 기본 `on_force_close "detach"`)으로 구현.
 - **`idk run`** — 명령 런처(스니펫). `snippets.toml` 의 명령을 `{{param}}` 치환으로 실행.
   - 기본 `shlex.quote()`로 local shell의 한 argv 경계를 보호하고, `raw=true`만 인용을 생략한다.
@@ -156,10 +156,11 @@
 
 1. `src/idk/__init__.py` 의 `__version__` 을 올린다.
 2. 이 파일의 `[Unreleased]` 내용을 `## [x.y.z] - YYYY-MM-DD` 섹션으로 옮긴다.
-3. 폐쇄망 acceptance와 최종 승인이 끝난 뒤 태그를 밀면 `.github/workflows/release.yml` 이 나머지를 한다.
+3. PR 병합과 CI green, 최종 공개 승인이 끝난 뒤 태그를 밀면 `.github/workflows/release.yml` 이 나머지를 한다.
+   폐쇄망 field acceptance와 `env-survey.md` 확인은 publish와 분리된 후속 절차다.
 
 ```bash
-# 최종 acceptance와 승인 뒤에만 실행한다.
+# PR 병합·CI green·최종 공개 승인 뒤에만 실행한다.
 git tag v0.2.0 && git push origin v0.2.0
 ```
 

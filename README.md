@@ -27,7 +27,7 @@ mirror  skip  미설정  ~/.config/idk/mirror.toml
 | 기본 `python3`가 구버전, 3.10은 `.csh`를 source해야 잡힘 | zipapp 앞에 **`/bin/sh` 런처**를 붙여 3.10+를 스스로 찾는다 |
 | rustc·docker 없음, glibc 2.28 | **순수 파이썬 의존성만** (`py3-none-any`). 네이티브 확장 금지 |
 | 내부 TLS 인터셉션 | HTTP는 **stdlib `urllib`** — `requests`/`httpx`는 `certifi` 번들 CA를 써서 깨진다 |
-| ETX(X11 리모팅)에서 WebView가 느리고, RHEL 8에 webkit2gtk 부재 | **GUI 안 만든다.** CLI/TUI만 |
+| 원격 X11에서 WebView가 느리고, RHEL 8에 webkit2gtk 부재 | **GUI 안 만든다.** CLI/TUI만 |
 | 파일 반출 불가 | 환경 정보는 `doctor --brief`를 **손으로 옮겨 적어** 가져온다 |
 
 자세한 근거는 [docs/plan.md](docs/plan.md), 실제 구조는 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

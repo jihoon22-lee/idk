@@ -69,7 +69,7 @@ jobs:
         run: |
           ./scripts/fetch-vendor.sh
           mkdir -p /tmp/zellij
-          tar xzf vendor/zellij-*.tar.gz -C /tmp/zellij
+          tar xzf vendor/zellij-no-web-x86_64-unknown-linux-musl.tar.gz -C /tmp/zellij
           echo "/tmp/zellij" >> "$GITHUB_PATH"
 
       - name: 통합 테스트

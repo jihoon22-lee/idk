@@ -12,10 +12,9 @@
 
 ## 1. 원본 명세
 
-devbox `apps/developer-toolbox` 의 도구 목록을 그대로 옮긴다.
-`src/tools/index.tsx` 와 `src-tauri/src/commands/tools.rs` 에서 확인한 13개다.
+기존 도구에서 폐쇄망에 유용한 변환 기능 13개를 옮긴다.
 
-| devbox id | 그룹 | idk 명령 | stdlib |
+| 기존 도구 식별자 | 그룹 | idk 명령 | stdlib |
 |---|---|---|---|
 | `json-format` | JSON | `idk dt json fmt` | `json` |
 | `json-minify` | JSON | `idk dt json min` | `json` |
@@ -278,7 +277,7 @@ stdin·출력은 전부 `cli_dt.py` 가 담당한다.
 
 | 대상 | 방법 |
 |---|---|
-| 각 변환 함수 | 표 기반 케이스. devbox `transformers.test.ts` 와 `tools.rs` 의 테스트 벡터를 옮긴다 |
+| 각 변환 함수 | 표 기반 케이스. 기존 도구와 독립 스크립트의 테스트 벡터를 옮긴다 |
 | hash | 알려진 벡터(`""`, `"abc"`)로 4종 전부 |
 | 대용량 hash | 3 MiB 파일의 알려진 digest와 1 MiB 청크 스트리밍, `Path.read_bytes` 미호출 |
 | case | §4.5 표를 그대로 파라미터화 |
@@ -328,5 +327,6 @@ A~C 가 실사용 가치의 대부분이다. D 는 없어도 동작하므로 시
 E 에서 `docs/GUIDE.md` 의 "아직 없는 명령" 표를 정리하고 `README.md` 의 상태 표를 갱신한다.
 
 릴리스 준비는 [CHANGELOG.md](../CHANGELOG.md)의 절차대로 `__version__` → `0.2.0`,
-`[Unreleased]` → `[0.2.0]` 이동까지 수행한다. 실제 `git tag v0.2.0` 생성과 push,
-GitHub Release 생성은 폐쇄망 acceptance와 최종 승인 뒤의 별도 단계다.
+`[Unreleased]` → `[0.2.0]` 이동까지 수행한다. PR 병합·CI green·최종 공개 승인이 publish
+gate이며, 그 뒤에 `git tag v0.2.0` 생성과 push, GitHub Release 생성을 진행한다.
+폐쇄망 field acceptance와 `env-survey.md` 확인은 publish와 분리된 후속 단계다.

@@ -1,6 +1,6 @@
 # idk — Integrated Developer Kit
 
-WSL Ubuntu 24.04 와 폐쇄망 RHEL 8.10(ETX 접속) 양쪽에서 동일하게 동작하는 CLI/TUI 도구 모음.
+WSL Ubuntu 24.04 와 폐쇄망 RHEL 8.10(원격 X11 접속) 양쪽에서 동일하게 동작하는 CLI/TUI 도구 모음.
 
 | 문서 | 내용 |
 |---|---|

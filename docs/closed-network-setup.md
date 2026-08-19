@@ -1,6 +1,6 @@
 # 폐쇄망 반입 · 설치 체크리스트
 
-폐쇄망(RHEL 8.10, ETX 접속, tcsh)에 `idk` 를 올리는 절차. **전 과정에서 root 권한이 필요 없다.**
+폐쇄망(RHEL 8.10, 원격 X11 접속, tcsh)에 `idk` 를 올리는 절차. **전 과정에서 root 권한이 필요 없다.**
 
 > **환경 정보를 확인해 오는 것이 목적이라면** [env-survey.md](env-survey.md) 를 볼 것.
 > 이 문서는 설치 절차만 다룬다.
@@ -60,7 +60,7 @@ cp idk.pyz ~/.local/bin/idk && chmod +x ~/.local/bin/idk
 # vendor 세트를 함께 반입했다면 먼저 무결성을 확인한다:
 # (cd vendor && sha256sum -c SHA256SUMS)
 # ws/run --pane을 사용할 때만 선택 zellij vendor를 설치한다:
-# tar xzf zellij-*-musl.tar.gz -C ~/.local/bin
+# tar xzf vendor/zellij-no-web-x86_64-unknown-linux-musl.tar.gz -C ~/.local/bin
 # copy_on_select를 사용할 때만 xclip vendor를 현지 빌드한다 (아래 §4 참조).
 ```
 

@@ -9,9 +9,9 @@
 ## Context
 
 두 개의 개발 환경을 오가며 작업 중이고, 양쪽에서 **똑같이 동작하는** 개발 편의 도구가 없다.
-특히 폐쇄망에서는 터미널을 여러 개 띄워놓고 수동 관리 중이라 ETX 세션이 끊기면 전부 날아간다.
+특히 폐쇄망에서는 터미널을 여러 개 띄워놓고 수동 관리 중이라 원격 X11 연결이 끊기면 전부 날아간다.
 
-| | WSL Ubuntu 24.04 | 폐쇄망 RHEL 8.10 (ETX 접속) |
+| | WSL Ubuntu 24.04 | 폐쇄망 RHEL 8.10 (원격 X11 접속) |
 |---|---|---|
 | glibc | 2.39 | 2.28 |
 | Python | 3.12 (apt) | **기본 python3는 구버전**. 3.10을 별도 경로에 설치하고 `.csh` 환경파일을 source해 PATH 추가 |
@@ -27,8 +27,8 @@
 `idk ws`/`idk run --pane`에는 선택 zellij vendor가, `copy_on_select`에는 선택 xclip vendor가
 필요하다.
 
-devbox(Tauri/Windows)와는 별도 저장소이며 코드를 공유하지 않는다. 단 `developer-toolbox`의
-도구 목록은 기능 명세로 참고한다.
+기존 GUI 도구(Tauri/Windows)와는 별도 저장소이며 코드를 공유하지 않는다. 단 기존 도구의
+기능 목록은 명세를 작성할 때 참고한다.
 
 ---
 
@@ -36,7 +36,7 @@ devbox(Tauri/Windows)와는 별도 저장소이며 코드를 공유하지 않는
 
 | 결정 | 내용 | 근거 |
 |---|---|---|
-| **GUI 앱 안 만듦** | CLI/TUI 전용 | RHEL 8에 `libsoup3`/`webkit2gtk-4.1` 부재로 Tauri v2 구동 불가. ETX(X11 리모팅)에서 WebView는 체감 지연이 큼 |
+| **GUI 앱 안 만듦** | CLI/TUI 전용 | RHEL 8에 `libsoup3`/`webkit2gtk-4.1` 부재로 GUI 구동이 어렵고, 원격 X11에서 WebView는 체감 지연이 큼 |
 | **언어: Python 3.10 하한** | `requires-python = ">=3.10"` | 폐쇄망 설치 버전이 3.10. `tomllib`(3.11+) 금지 → `tomli` 사용. ruff `target-version = "py310"` 으로 문법 위반 차단 |
 | **배포: 핵심 단일 zipapp** | `shiv` 로 `idk.pyz` 생성 | 필수 핵심 반입 아티팩트 1개, 의존성 내장이라 내부 패키지 미러 상태와 무관. ws/run pane/clipboard용 vendor는 선택 반입한다. **폐쇄망 안에서 소스를 풀어 긴급 수정 가능** — RHEL에 rustc가 없어 musl 바이너리는 현지 재빌드가 불가능한 것이 결정타 |
 | **순수 파이썬 의존성만** | `textual`, `rich`, `typer`, `tomli`, `tomli-w` | 전부 `py3-none-any` 휠. 아키텍처·glibc 무관 |
@@ -151,7 +151,7 @@ zellij는 `ws`/`run --pane`에, xclip은 `copy_on_select`에만 필요한 선택
 mkdir -p ~/.local/bin
 cp idk.pyz ~/.local/bin/idk && chmod +x ~/.local/bin/idk
 # ws/run --pane을 사용할 때만 선택 zellij vendor를 설치한다:
-# tar xzf zellij-*-musl.tar.gz -C ~/.local/bin
+# tar xzf vendor/zellij-no-web-x86_64-unknown-linux-musl.tar.gz -C ~/.local/bin
 # copy_on_select를 사용할 때만 xclip vendor를 현지 빌드한다 (closed-network-setup.md 참조).
 # tcsh 환경파일에: setenv PATH "$HOME/.local/bin:$PATH"
 idk doctor
@@ -173,7 +173,7 @@ idk doctor
 
 > 구현 단계의 상세 명세는 [spec-ws-run.md](spec-ws-run.md) 에 있다. 아래는 설계 의도다.
 
-가장 아픈 지점. ETX 세션이 끊겨도 zellij 세션은 살아있어 재접속 시 그대로 복구된다.
+가장 아픈 지점. 원격 X11 연결이 끊겨도 zellij 세션은 살아있어 재접속 시 그대로 복구된다.
 
 - `workspaces.toml` 에 프로젝트별 정의: 이름, cwd, pane 목록(명령·크기·탭 구성)
 - `idk ws` → Textual TUI: 정의된 워크스페이스 + 살아있는 zellij 세션을 한 화면에, Enter로 attach/생성
@@ -204,8 +204,8 @@ idk doctor
 
 > 구현 단계의 상세 명세는 [spec-dt.md](spec-dt.md) 에 있다.
 
-**의존성 0 (stdlib만).** devbox `apps/developer-toolbox/src/tools/index.tsx` 의 목록을 그대로 옮긴다.
-Rust 원본(`apps/developer-toolbox/src-tauri/src/commands/tools.rs`)의 로직은 전부 stdlib에 1:1 대응된다.
+**의존성 0 (stdlib만).** 기존 도구의 목록에서 폐쇄망에 유용한 변환 기능을 옮긴다.
+독립 스크립트로 구현할 수 있는 로직은 전부 stdlib에 1:1 대응된다.
 
 | 도구 | 구현 |
 |---|---|
@@ -317,7 +317,7 @@ OS/커널/glibc/Python/컴파일러/zellij/xclip/locale/TERM + 미러 접속 가
 
 멀티플렉서 종류와 무관하게 pane 내부 텍스트를 시스템 클립보드로 넘기려면 브릿지가 필요하다.
 
-1. **코드 불필요한 경로: Shift+드래그** — 멀티플렉서가 마우스를 가로채지 않아 ETX 터미널 자체
+1. **코드 불필요한 경로: Shift+드래그** — 멀티플렉서가 마우스를 가로채지 않아 원격 X11 터미널 자체
    선택이 동작하고, Exceed TurboX가 X 셀렉션을 Windows 클립보드로 동기화한다.
 2. `copy_on_select`(드래그만으로 자동 복사)를 원하면 xclip 필요. **외부에서 소스를 받아 폐쇄망에서
    현지 빌드**하는 것으로 확인됨:
@@ -350,8 +350,9 @@ OS/커널/glibc/Python/컴파일러/zellij/xclip/locale/TERM + 미러 접속 가
 
 **Phase 0~3은 `v0.2.0` 범위에 포함되며**, 폐쇄망에서 실제로 써본 뒤 4~5의 우선순위를
 조정한다. Phase 1·2의 초기 반입은 `v0.1.0`/`v0.1.1`에서 끝났고, v0.2.0은 보안·안정성
-보강과 `idk build` MVP를 함께 포함한다. 배포 시 버전 태그와 릴리스 산출물은 반입 검증 및
-최종 승인 절차를 거쳐 별도로 만든다.
+보강과 `idk build` MVP를 함께 포함한다. 배포 gate는 PR 병합·CI green·최종 공개 승인이고,
+그 뒤 버전 태그와 릴리스 산출물을 만든다. 폐쇄망 field acceptance와 `env-survey.md` 확인은
+publish와 분리된 후속 절차다.
 
 ---
 
@@ -385,13 +386,13 @@ env -i PATH= /bin/sh -c 'dist/idk.pyz doctor'         # PATH 부재 → 거부(e
 ```bash
 idk ws up demo && zellij list-sessions   # 세션 생성 확인
 idk ws up demo --print-layout            # 생성된 KDL 육안 검증
-# detach 후 재attach 로 ETX 끊김 시나리오 재현
+# detach 후 재attach 로 원격 X11 연결 끊김 시나리오 재현
 ```
 
 **폐쇄망 실환경 (반입 후)** — 절차와 양식은 `docs/env-survey.md`
 1. `idk --version` — 런처가 실제 tcsh/RHEL 에서 동작하는지. **여기가 1차 반입의 핵심 목적**
 2. `idk doctor --brief` — 9줄을 손으로 옮겨 적어 반출 (파일 반출 불가)
-3. 실제 Qt 프로젝트를 `workspaces.toml` 에 정의 → `idk ws up` → ETX 강제 종료 → 재접속 → 세션 복구 확인
+3. 실제 Qt 프로젝트를 `workspaces.toml` 에 정의 → `idk ws up` → 원격 X11 강제 종료 → 재접속 → 세션 복구 확인
 4. 실제 빌드 로그로 `idk build --file` 파싱 정확도 확인 (로그 반출이 불가하므로 현지에서)
 
 ---
@@ -399,8 +400,8 @@ idk ws up demo --print-layout            # 생성된 KDL 육안 검증
 ## 폐쇄망 사전 확인 항목
 
 **→ `docs/env-survey.md` 로 이동했다.** (Phase 0 진입 전 수집이 원래 계획이었으나, Phase 0 은
-수집 없이 완료됐다. 남은 항목은 폐쇄망 acceptance와 Phase 5의 착수 조건이며, Phase 3 CLI
-MVP의 구현을 막지는 않는다.)
+수집 없이 완료됐다. 남은 항목은 v0.2.0 publish 후 진행할 폐쇄망 field acceptance와 Phase 5의
+착수 조건이며, Phase 3 CLI MVP의 구현이나 publish gate를 막지는 않는다.)
 
 핵심 제약이 하나 바뀌었다: **폐쇄망은 파일 반출이 불가능하다.** 버전·환경 정보를 사람이
 읽고 옮겨 적는 것만 가능하다. 그래서
@@ -414,7 +415,7 @@ MVP의 구현을 막지는 않는다.)
 ## 부록: `AGENTS.md` 초안
 
 Claude 외 다른 LLM도 함께 작업하므로 **`AGENTS.md` 를 정본**으로 두고 `CLAUDE.md` 는 심볼릭
-링크로 연결한다 (devbox도 `AGENTS.md` 만 두는 규약을 쓰고 있어 일관됨).
+링크로 연결한다 (관련 저장소도 `AGENTS.md` 만 두는 규약을 쓰고 있어 일관됨).
 
 ```bash
 ln -s AGENTS.md CLAUDE.md    # git이 mode 120000 심볼릭 링크로 커밋한다
@@ -428,7 +429,7 @@ ln -s AGENTS.md CLAUDE.md    # git이 mode 120000 심볼릭 링크로 커밋한�
 ```markdown
 # idk — Integrated Developer Kit
 
-WSL Ubuntu 24.04 와 폐쇄망 RHEL 8.10(ETX 접속) 양쪽에서 동일하게 동작하는 CLI/TUI 도구 모음.
+WSL Ubuntu 24.04 와 폐쇄망 RHEL 8.10(원격 X11 접속) 양쪽에서 동일하게 동작하는 CLI/TUI 도구 모음.
 상세 계획은 docs/plan.md 참조.
 
 ## 반드시 지킬 규약
