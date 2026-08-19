@@ -60,6 +60,24 @@ def test_duplicate_names():
         model.load()
 
 
+def test_snippet_collection_must_be_a_list():
+    _write('[snippet]\nname = "a"\ncmd = "x"\n')
+    with pytest.raises(config.ConfigError, match=r"snippets\.toml\.snippet"):
+        model.load()
+
+
+def test_tags_must_be_a_list():
+    _write('[[snippet]]\nname = "a"\ncmd = "x"\ntags = "build"\n')
+    with pytest.raises(config.ConfigError, match=r"snippet\[0\]\.tags"):
+        model.load()
+
+
+def test_nested_params_must_be_a_table():
+    _write('[[snippet]]\nname = "a"\ncmd = "echo {{value}}"\n[snippet.params]\nvalue = "bad"\n')
+    with pytest.raises(config.ConfigError, match=r"params\.value"):
+        model.load()
+
+
 def test_undeclared_placeholder_rejected():
     _write('[[snippet]]\nname = "a"\ncmd = "run {{job}}"\n')
     with pytest.raises(config.ConfigError, match="job"):

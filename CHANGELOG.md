@@ -9,6 +9,11 @@
 
 ## [Unreleased]
 
+### Fixed
+- **설정 타입 오류를 일관되게 보고** — 문자열 불리언과 배열이 아닌 중첩 컬렉션을 설정 로드
+  시 위치가 포함된 `ConfigError`로 거부하고, workspace 명령의 닫히지 않은 인용문도 조기에
+  검증한다.
+
 ### Security
 - **`idk run` placeholder 경계 강화** — 기본 `shlex.quote()`는 현재 local shell의 한 argv만
   보호한다. `ssh`·`sh -c`·`eval`처럼 입력을 다시 해석하는 중첩 인터프리터까지 보호한다고

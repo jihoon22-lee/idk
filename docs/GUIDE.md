@@ -122,6 +122,10 @@ idk env --bindir /opt/tools/bin
 `idk ws init` / `idk run init` 이 추천 설정이 담긴 스타터 파일을 만들어 준다.
 모르겠으면 그걸로 시작해서 조금씩 고치면 된다.
 
+설정 값은 TOML의 원래 타입을 엄격하게 따른다. `focus`와 `raw`에는 `true`/`false` 불리언을
+그대로 쓰고 문자열을 쓰지 않으며, `workspace`·`tab`·`pane`·`snippet`·`tags` 같은 컬렉션은
+배열이어야 한다. 타입이나 명령 인용문이 잘못되면 로드 시 오류 위치를 포함해 알려준다.
+
 | 파일 | 쓰는 곳 | 상태 |
 |---|---|---|
 | `mirror.toml` | 아티팩토리 접속 정보 | `doctor --net` 이 읽는다. `idk mirror` 는 Phase 5 |

@@ -55,6 +55,40 @@ def test_invalid_tab_split_rejected():
         model.load()
 
 
+@pytest.mark.parametrize("field", ["focus"])
+def test_workspace_boolean_must_be_toml_boolean(field):
+    _write(f'[[workspace]]\nname = "x"\n[[workspace.tab]]\n{field} = "false"\n')
+    with pytest.raises(config.ConfigError, match=rf"workspace\[0\].*{field}"):
+        model.load()
+
+
+def test_workspace_tab_must_be_a_list():
+    _write('[[workspace]]\nname = "x"\ntab = {}\n')
+    with pytest.raises(config.ConfigError, match=r"workspace\[0\]\.tab"):
+        model.load()
+
+
+def test_tab_pane_must_be_a_list():
+    _write('[[workspace]]\nname = "x"\n[[workspace.tab]]\npane = "bad"\n')
+    with pytest.raises(config.ConfigError, match=r"workspace\[0\]\.tab\[0\]\.pane"):
+        model.load()
+
+
+def test_nested_pane_must_be_a_list():
+    _write('[[workspace]]\nname = "x"\n[[workspace.tab]]\n[[workspace.tab.pane]]\npane = "bad"\n')
+    with pytest.raises(config.ConfigError, match=r"workspace\[0\]\.tab\[0\]\.pane\[0\]\.pane"):
+        model.load()
+
+
+def test_command_unterminated_quote_is_rejected_during_model_load():
+    _write(
+        '[[workspace]]\nname = "x"\n[[workspace.tab]]\n'
+        '[[workspace.tab.pane]]\ncommand = "echo \'unterminated"\n'
+    )
+    with pytest.raises(config.ConfigError, match=r"workspace\[0\].*command"):
+        model.load()
+
+
 @pytest.mark.parametrize("bad", ["60", "0%", "-1", "1.5", "abc"])
 def test_invalid_size_rejected(bad):
     _write(

@@ -23,6 +23,22 @@ class ConfigError(Exception):
     """설정 파일을 읽을 수 없거나 TOML 이 깨졌을 때."""
 
 
+def require_bool(value: Any, where: str, *, default: bool = False) -> bool:
+    """TOML boolean만 허용하고, 누락된 값은 ``default``를 사용한다."""
+    if value is None:
+        return default
+    if type(value) is not bool:
+        raise ConfigError(f"{where}: TOML boolean(true/false)이어야 합니다 (받은 값: {value!r})")
+    return value
+
+
+def require_list(value: Any, where: str) -> list[Any]:
+    """TOML 배열만 허용하고, 오류에 설정 위치를 포함한다."""
+    if type(value) is not list:
+        raise ConfigError(f"{where}: TOML 배열이어야 합니다 (받은 값: {value!r})")
+    return value
+
+
 def config_dir() -> Path:
     """XDG 기준 설정 디렉터리. 환경변수를 존중하므로 테스트에서 갈아끼울 수 있다."""
     xdg = os.environ.get("XDG_CONFIG_HOME")

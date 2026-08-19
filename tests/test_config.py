@@ -52,3 +52,28 @@ def test_existing_configs_lists_only_present_files():
     assert config.existing_configs() == []
     config.save("snippets.toml", {})
     assert [p.name for p in config.existing_configs()] == ["snippets.toml"]
+
+
+def test_require_bool_accepts_only_toml_booleans():
+    assert config.require_bool(True, "workspace[0].focus") is True
+    assert config.require_bool(False, "workspace[0].focus") is False
+
+
+def test_require_bool_uses_default_for_missing_value():
+    assert config.require_bool(None, "workspace[0].focus", default=True) is True
+
+
+def test_require_bool_rejects_string_with_location():
+    with pytest.raises(config.ConfigError, match=r"workspace\[0\]\.focus"):
+        config.require_bool("false", "workspace[0].focus")
+
+
+def test_require_list_accepts_list():
+    value = ["one"]
+    assert config.require_list(value, "workspace[0].tab") is value
+
+
+@pytest.mark.parametrize("value", ["bad", {}, (), None])
+def test_require_list_rejects_non_list_with_location(value):
+    with pytest.raises(config.ConfigError, match=r"workspace\[0\]\.tab"):
+        config.require_list(value, "workspace[0].tab")
