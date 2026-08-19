@@ -15,14 +15,18 @@
 ./scripts/fetch-vendor.sh  # vendor/ 에 zellij musl + xclip 소스
 ```
 
-> **리눅스 네이티브 경로에서 빌드할 것** (`~/src/idk` 등, `/mnt/c`·`/mnt/e` 아님).
-> Windows 드라이브(drvfs)는 모든 파일을 `0777` 로 보고하고 그 비트가 zipapp 에 그대로
-> 실린다 → 폐쇄망의 `~/.shiv` 에 world-writable 로 풀리고, ext4 에서 빌드한 것과 체크섬도
-> 달라진다. `build-pyz.sh` 가 이 경우 경고한다.
+checkout이 `/mnt/*`에 있어도 `build-pyz.sh`는 project root의 `build/` 대신
+`BUILD="$(mktemp -d -p "${TMPDIR:-/tmp}" idk-build.XXXXXX)"`로 기본 Linux native 임시
+디렉터리(`/tmp`, WSL에서는 ext4 rootfs)에 의존성·wheel·중간 zip을 자동 staging한다. 따라서
+반입용 빌드를 위해 checkout을 수동으로 `~/` 아래로 옮길 필요가 없다. `TMPDIR`를 지정한다면
+Linux native 경로를 사용한다. 최종 파일은 `dist/idk.pyz.tmp`를 거쳐 `dist/idk.pyz`로 원자적으로
+게시된다.
 
-빌드는 **같은 파일시스템에서 반복하면 바이트 단위로 동일**하다(타임스탬프·절대경로·빌드
-출처 메타데이터를 전부 제거한다). 반입한 파일이 내가 만든 그 파일인지 `sha256sum` 으로
-대조할 수 있다. 단 파일시스템이 다르면 퍼미션 비트 때문에 해시가 달라진다.
+`smoke.sh`는 ZIP entry의 Unix mode에서 group/other write bit(`0o022`)를 거부하고 ZIP 내용
+무결성도 확인한다. CI는 새 native staging에서 두 번 빌드한 SHA-256을 같은 job 안에서 비교한다.
+동일한 committed source·`uv.lock`뿐 아니라 Python 대상, uv/shiv/hatchling 같은 빌드 toolchain,
+native staging 조건도 같을 때 바이트 재현성을 기대할 수 있으며, 반입한 파일은 `sha256sum`으로
+대조할 수 있다.
 
 반입 파일 **3개**:
 

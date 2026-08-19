@@ -65,10 +65,11 @@ echo "      $(find "$SITE" -maxdepth 1 -name '*.dist-info' | wc -l) 개 배포�
 
 echo "      빌드 환경 흔적 제거 (재현 가능 빌드)"
 python3 - "$SITE" <<'PY'
-"""같은 소스 → 같은 바이트가 되도록 site-packages 를 정규화한다.
+"""승인된 source·uv.lock과 같은 Python target·uv·build toolchain/native staging에서
+같은 바이트가 되도록 site-packages를 정규화한다.
 
 반입 파일이 내가 만든 그 파일인지 체크섬으로 대조하려면 빌드 경로·시각에 따라
-결과가 흔들리면 안 된다. 아래 셋이 그 원인이었다.
+결과가 흔들리면 안 된다. 아래 흔적이 그 원인이었다.
 """
 
 import sys
@@ -114,7 +115,8 @@ PY
 echo "[4/5] shiv zipapp 생성"
 # pip 인자를 하나도 넘기지 않아야 shiv 가 pip 을 건너뛰고 --site-packages 만 쓴다.
 # (--no-deps 같은 걸 붙이면 pip 인자로 전달돼 "requirement 가 없다"며 실패한다.)
-# --reproducible: 타임스탬프를 고정해 같은 입력이면 같은 체크섬 → 반입 파일 대조가 쉬워진다.
+# --reproducible: 타임스탬프를 고정해 같은 정규화 staging과 locked build toolchain이면
+# 같은 체크섬을 만들기 쉬워진다. CI는 같은 실행에서 두 빌드를 별도로 비교한다.
 uv run --frozen --only-group build -- shiv \
     --site-packages "$SITE" \
     --console-script idk \

@@ -274,13 +274,11 @@ tags = ["build", "qt"]
 
 [[snippet]]
 name = "deploy"
-cmd  = "ssh {{host}} 'systemctl restart {{svc}}'"
+cmd  = "ssh {{host}} systemctl restart myapp"
 tags = ["deploy"]
 
   [snippet.params.host]
   desc = "대상 호스트"
-  [snippet.params.svc]
-  default = "myapp"
 ```
 
 | 키 | 타입 | 기본 | 비고 |
@@ -312,10 +310,15 @@ tags = ["deploy"]
 ### 7.1 파라미터 치환 — 기본은 인용한다
 
 `{{k}}` 를 값으로 치환할 때 **기본적으로 `shlex.quote()` 를 적용한다.**
-`svc` 에 `foo; rm -rf ~` 를 넣어도 한 덩어리 인자가 된다.
+현재 local shell에서 하나의 argv가 되므로 `foo; rm -rf ~` 같은 값이 다음 명령으로 갈라지지는
+않는다. 다만 `ssh`, `sh -c`, `eval`처럼 값을 다시 해석하는 중첩 인터프리터까지 자동으로
+보호하지는 않는다. 원격 명령 문자열이나 두 번째 셸의 스크립트에 외부 입력을 직접 끼워 넣지
+말고 고정된 명령과 인자 경계를 유지한다.
 
-값 자체가 셸 조각이어야 하는 경우(`--jobs 8 --verbose` 처럼)만 `raw = true` 로 선언한다.
-이때는 인용하지 않으며, **문서에 위험을 명시한다.**
+이미 열린 single/double quote(`'...'`, `"..."`) 안의 non-raw placeholder는 설정 로드에서
+거부된다. 값 자체가 셸 조각이어야 하는 경우(`--jobs 8 --verbose` 처럼)만 `raw = true`로
+선언하며, raw 값은 이스케이프 없이 삽입되므로 신뢰된 고정 셸 조각에만 사용한다. 사용자 입력이나
+원격/중첩 셸에 전달되는 동적 값에는 raw를 사용하지 않는다.
 
 `--print` 로 최종 명령을 먼저 확인할 수 있다.
 

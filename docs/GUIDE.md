@@ -142,6 +142,10 @@ auth     = "netrc"          # 또는 token_env = "ARTIFACTORY_TOKEN"
 > HTTP 는 stdlib `urllib` 로만 나간다. `requests`/`httpx` 는 `certifi` 번들 CA 를 쓰기 때문에
 > 사내 TLS 인터셉션 환경에서 접속이 깨진다. 시스템 CA 를 쓰는 것이 이 도구의 전제다.
 
+리다이렉트에서도 인증정보를 보호한다. `Authorization` 헤더(`netrc`·토큰·호출자가 직접 준
+헤더)는 **동일 origin**(scheme·호스트·유효 포트)으로 이동할 때만 유지되고, 다른 origin으로
+이동하면 제거된다. HTTPS 요청이 HTTP로 내려가는 downgrade 리다이렉트는 거부한다.
+
 ---
 
 ## `idk ws` — 워크스페이스 / 터미널 매니저
@@ -198,12 +202,10 @@ idk run init            # 기본 snippets.toml 생성 (첫 사용 추천)
 ```toml
 [[snippet]]
 name = "deploy"
-cmd  = "ssh {{host}} 'systemctl restart {{svc}}'"
+cmd  = "ssh {{host}} systemctl restart myapp"
 
   [snippet.params.host]
   desc = "대상 호스트"
-  [snippet.params.svc]
-  default = "myapp"
 ```
 
 ```bash
@@ -214,8 +216,17 @@ idk run deploy -p host=h1           # 실행
 idk run deploy -p host=h1 --pane    # zellij 새 pane 에서
 ```
 
-`{{param}}` 은 기본으로 셸 인용(`shlex.quote`)돼 치환된다. 값 자체가 셸 조각이어야 할 때만
-`params.<k>.raw = true` 로 선언한다.
+`{{param}}` 은 기본으로 `shlex.quote()` 되어 **현재 local shell에서 하나의 argv**가 된다.
+따라서 `foo; rm -rf ...` 같은 값이 local shell의 다음 명령으로 갈라지지는 않지만, `ssh`,
+`sh -c`, `eval`처럼 값을 다시 해석하는 **중첩 인터프리터**까지 자동으로 보호하지는 않는다.
+원격 명령 문자열이나 두 번째 셸의 스크립트에 외부 입력을 직접 끼워 넣지 말고, 고정된 명령과
+인자 경계를 유지한다.
+
+`cmd`에서 이미 열린 single/double quote(`'...'`, `"..."`) 안에 non-raw placeholder를 넣으면
+설정 로드가 거부된다. 렌더러가 값에 필요한 인용을 다시 적용하므로 기존 인용문과 겹치는
+문맥을 허용하지 않는 것이다. 값 자체가 신뢰된 **고정 셸 조각**이어야 하는 예외에서만
+`params.<k>.raw = true`를 사용한다. raw 값은 그대로 삽입되어 아무 이스케이프도 하지 않으며,
+사용자가 입력하는 값이나 원격/중첩 셸에 전달되는 동적 값에는 사용하지 않는다.
 
 ## `idk dt` — 개발 도구 모음
 

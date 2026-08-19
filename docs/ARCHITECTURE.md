@@ -14,18 +14,21 @@
  src/idk/**.py  ──────────────►  build-pyz.sh  ──►  idk.pyz  ──►  ~/.local/bin/idk
  pyproject.toml                    │                (2.7MB)         │
                                    │                                ▼
-                                   ├─ 1. uv pip install --python 3.10 --target
-                                   ├─ 2. 순수성 검사 (네이티브 확장·certifi 거부)
-                                   ├─ 3. 빌드 흔적 제거 (재현성)
-                                   ├─ 4. shiv → zipapp
-                                   └─ 5. sh 런처 프리앰블 부착
+                                   ├─ 1. uv.lock 고정 export + 해시 설치
+                                   ├─ 2. 잠긴 build group으로 wheel 생성
+                                   ├─ 3. 순수성 검사 + 빌드 흔적 정규화
+                                   ├─ 4. shiv --reproducible → zipapp
+                                   └─ 5. sh 런처 부착 → dist/idk.pyz 원자 게시
 ```
 
 핵심 성질 셋:
 
 - **파일 1개.** 의존성이 전부 들어 있어 사내 PyPI 미러 상태와 무관하다.
 - **인터프리터를 스스로 찾는다.** `.csh` 를 source 하지 않은 컨텍스트에서도 동작한다.
-- **재현 가능하다.** 같은 소스 → 같은 바이트라 반입한 파일을 체크섬으로 대조할 수 있다.
+- **재현 가능하다.** committed source와 `uv.lock`은 필요한 입력이지만, 같은 Python 대상과
+  uv/shiv/hatchling 등 build toolchain, native staging 조건도 맞아야 같은 바이트를 기대할 수
+  있다. CI는 같은 job에서 새 staging으로 두 번 빌드한 SHA-256을 비교하고, smoke는 ZIP 권한과
+  무결성을 검사한다.
 
 ---
 
@@ -89,14 +92,27 @@ done
 
 ## 3. 빌드 파이프라인 ([scripts/build-pyz.sh](../scripts/build-pyz.sh))
 
-### 3.1 3.10 을 대상으로 설치
+### 3.1 `uv.lock`을 기준으로 3.10 대상 설치
+
+`uv.lock`이 산출물에 들어가는 runtime 의존성과 빌드 도구 버전의 **정본**이다.
+`pyproject.toml`은 직접 의존성과 `build` 그룹을 선언하지만, 산출물 빌드에서 새로 해석하지
+않는다.
 
 ```bash
-uv pip install --python 3.10 --target build/site-packages .
+uv export --frozen --no-dev --no-emit-project \
+  --format requirements.txt --output-file "$BUILD/runtime.lock"
+uv pip install --quiet --python 3.10 --target "$SITE" \
+  --require-hashes --requirements "$BUILD/runtime.lock"
+uv run --frozen --only-group build -- \
+  uv build --wheel --no-build-isolation --out-dir "$BUILD/wheels"
+uv pip install --quiet --python 3.10 --target "$SITE" \
+  --no-deps "$BUILD/wheels"/idk-*.whl
 ```
 
-개발은 더 최신 파이썬에서 하더라도 **의존성 해석은 3.10 기준**이어야 한다.
-3.11+ 를 요구하는 배포판이 딸려 들어오는 것을 막는다.
+`--frozen`은 lockfile을 변경하지 않고, runtime 설치의 `--require-hashes`는 export된 각
+wheel의 해시를 확인한다. 개발은 더 최신 파이썬에서 하더라도 **산출물은 3.10 기준**이어야
+3.11+를 요구하는 배포판이 딸려 들어오지 않는다. wheel과 shiv 모두 `uv run --frozen
+--only-group build`로 잠긴 build group에서 실행한다.
 
 ### 3.2 순수성 검사 — 규약을 기계적으로 강제
 
@@ -110,13 +126,17 @@ uv pip install --python 3.10 --target build/site-packages .
 
 ### 3.3 빌드 흔적 제거 — 재현성
 
-정규화하지 않으면 **같은 소스인데 빌드할 때마다 체크섬이 달라진다.** 원인은 셋이었다.
+동일한 source·`uv.lock`·Python 대상·build toolchain·native staging인데도 정규화하지 않으면
+빌드할 때마다 체크섬이 달라질 수 있다. uv와 wheel 빌드가 남기는 경로·시각·권한 흔적을 zip에
+넣지 않는다.
 
 | 흔적 | 무엇이 들어 있었나 |
 |---|---|
+| `site-packages/.lock` | uv pip의 설치 잠금 파일. zip entry에 쓰기 권한이 실릴 수 있다 |
 | `site-packages/bin/*` | 콘솔 스크립트 래퍼의 shebang에 빌드에 쓴 인터프리터 절대경로 |
 | `*.dist-info/direct_url.json` | 빌드한 체크아웃의 절대경로 |
 | `*.dist-info/uv_cache.json` | 빌드 타임스탬프 + 디렉터리 inode |
+| `*.dist-info/uv_build.json` | wheel 빌드 메타데이터 |
 | `*.dist-info/RECORD` | 위 파일들의 해시 (파일을 지워도 RECORD 에 남는다) |
 
 `bin/` 을 지워도 되는 이유: shiv 는 `environment.json` 의 `entry_point`
@@ -125,7 +145,8 @@ uv pip install --python 3.10 --target build/site-packages .
 ### 3.4 shiv → 프리앰블 부착
 
 ```bash
-shiv --site-packages build/site-packages --console-script idk --compressed --reproducible
+uv run --frozen --only-group build -- shiv \
+  --site-packages "$SITE" --console-script idk --compressed --reproducible -o "$RAW"
 ```
 
 pip 인자를 **하나도** 넘기지 않아야 shiv 가 pip 을 건너뛴다. `--no-deps` 같은 걸 붙이면
@@ -134,14 +155,38 @@ pip 인자를 **하나도** 넘기지 않아야 shiv 가 pip 을 건너뛴다. `
 그 다음 shiv 가 붙인 shebang 한 줄을 떼고 `launcher.sh` 를 앞에 붙인다.
 zip 시그니처(`PK\x03\x04`)와 프리앰블의 끝 개행을 확인한 뒤에만 쓴다.
 
-### 3.5 재현성의 범위
+### 3.5 native staging·권한·재현성 게이트
 
-**같은 파일시스템에서 반복 빌드하면 바이트 단위로 동일하다.** 파일시스템이 다르면 zip 에
-기록되는 **퍼미션 비트** 때문에 해시가 달라진다 — Windows 드라이브(drvfs)는 모든 파일을
-`0777` 로 보고하고 ext4 는 `0644` 다. 내용·순서·타임스탬프는 동일하다.
+checkout이 `/mnt/*`에 있어도 `build-pyz.sh`는 project root의 `build/`를 staging으로 쓰지
+않는다. `BUILD="$(mktemp -d -p "${TMPDIR:-/tmp}" idk-build.XXXXXX)"`로 기본 Linux native
+임시 디렉터리(`/tmp`, WSL에서는 ext4 rootfs)에 site-packages, wheel, build 도구 환경과 중간 zip을 만들고, 끝에서
+`dist/idk.pyz.tmp`를 거쳐 `dist/idk.pyz`로 원자적으로 교체한다. 따라서 drvfs의 `0777`
+권한이 ZIP entry로 전파되지 않는다. `TMPDIR`를 지정한다면 Linux native 경로를 사용해야
+한다.
 
-같은 이유로 **반입용 빌드는 리눅스 네이티브 경로에서 해야 한다.** drvfs 에서 빌드하면 `0777`
-이 그대로 실려 폐쇄망의 `~/.shiv` 에 world-writable 로 풀린다. `build-pyz.sh` 가 이 경우 경고한다.
+`scripts/smoke.sh`는 모든 ZIP entry의 Unix mode를 확인해 group/other write bit(`0o022`)가
+하나라도 있으면 실패시키고, `zipfile.testzip()`으로 내용 무결성도 확인한다. CI의 artifact
+job은 매번 새 staging을 만들어 두 번 빌드한 `dist/idk.pyz`의 SHA-256을 비교하고, 다르면
+upload 전에 실패한다. 이 세 게이트가 권한·재현성·무결성을 함께 확인한다.
+
+### 3.6 vendor와 Actions 공급망 경계
+
+`scripts/vendor-checksums.txt`는 반입용 vendor 입력을 저장소에 커밋된 두 SHA-256으로
+고정한다.
+
+| 입력 | 승인 범위 |
+|---|---|
+| zellij | 0.44.3 `no-web`, `x86_64-unknown-linux-musl` tarball에서 추출한 바이너리의 SHA-256 |
+| xclip | 0.13 source archive 자체의 SHA-256 |
+
+`fetch-vendor.sh`는 manifest의 형식·중복·허용된 이름을 확인한 뒤 두 checksum을 대조하고,
+zellij가 정적 링크인지 검사한다. `full` 등 다른 zellij flavor는 다운로드 전에 거부한다.
+즉, 현재 지원 경계는 내장 웹서버가 없는 검토된 `no-web` 빌드이며 flavor를 늘리려면 새
+manifest 승인이 필요하다.
+
+GitHub Actions의 `checkout`, `setup-uv`, `upload-artifact`는 workflow에 immutable commit
+SHA로 고정하고, 사람이 읽는 upstream 버전은 주석으로만 병기한다. 버전 갱신은 별도 검토에서
+commit과 주석을 함께 바꾸는 방식이다.
 
 ---
 
@@ -179,11 +224,12 @@ src/idk/
 | 모듈 | 책임 | 주의할 점 |
 |---|---|---|
 | `env.py` | 두 환경의 **차이를 만드는 값**만 읽는다 (glibc, 셸, locale, python 후보) | `PYTHON_CANDIDATES` 는 `launcher.sh` 와 동기화 |
-| `httpc.py` | HTTP 전부. **4xx/5xx 도 예외 없이 `Response` 로 반환** | 미러 조회·진단은 404/401 자체가 정보다. 실패로 다루려면 `.raise_for_status()` |
+| `httpc.py` | HTTP 전부. **4xx/5xx 도 예외 없이 `Response` 로 반환** | `Authorization`은 동일 origin redirect에서만 유지하고, origin 변경 시 제거한다. HTTPS→HTTP downgrade는 `HttpError`로 거부한다 |
 | `config.py` | TOML 로드/저장. 없는 파일은 빈 dict | 저장은 임시파일 → `os.replace` 로 원자적 |
 | `doctor.py` | `collect()` 가 `Check` 목록을 만들고 렌더러 셋이 소비 | 진단 도구라 기본 exit 0. `--strict` 일 때만 fail → 1 |
 | `ws/layout.py` | 모델 → zellij KDL 순수 함수 | 첫 탭에 `tab-bar`/`status-bar` plugin 을 감싼다 (키힌트 바) |
 | `ws/backends/zellij.py` | zellij 프로세스 호출 전부 | 이 파일 밖에서 zellij 를 부르지 않는다 |
+| `snip/model.py`·`snip/render.py` | `snippets.toml` 검증·placeholder 치환 | non-raw placeholder를 기존 single/double quote 안에서 거부한다. raw는 신뢰된 고정 셸 조각 전용이며, `shlex.quote()`의 경계는 한 번의 local shell이다 |
 | `dt/` | 변환 순수 함수 (문자열↔문자열) | **typer/rich/textual import 금지** — AST 테스트로 강제 |
 | `dt_tui.py` | 대화형 도구 TUI | dt 로직은 `dt/` 를 호출만 한다 |
 
@@ -197,6 +243,14 @@ src/idk/
 `ctx.get_ca_certs()` 가 빈 리스트라고 해서 CA 가 없는 게 아니다. CA 가 capath(해시 디렉터리)로만
 제공되면 OpenSSL 이 지연 로딩해서, 핸드셰이크가 멀쩡히 되는데도 빈 리스트가 나온다.
 실제 신뢰 경로는 `ssl.get_default_verify_paths()` 로 확인할 것.
+
+### HTTP redirect 인증 경계
+
+`httpc.request()`는 고정된 `SafeRedirectHandler`와 시스템 CA 컨텍스트를 사용하는 opener를
+만든다. origin은 소문자 scheme·호스트와 유효 포트(HTTP 80, HTTPS 443 기본값 포함)로
+비교한다. 같은 origin이면 `auth` tuple, `netrc`, 호출자가 준 `Authorization`을 유지하지만,
+하나라도 다르면 새 요청에서 헤더를 제거한다. HTTPS에서 HTTP로 내려가는 redirect는 origin
+비교보다 먼저 거부한다. 최종 응답의 4xx/5xx는 기존 계약대로 `Response`로 반환한다.
 
 ---
 
@@ -239,6 +293,11 @@ Phase 1~5 의 앱들은 모두 이 절차를 따른다.
 | Python 3.10 하한 | ruff `target-version = "py310"`, CI 가 3.10 에서 pytest |
 | `tomllib`·`requests`·`httpx`·`certifi` 금지 | ruff TID251 (banned-api) |
 | 네이티브 확장 금지 | `build-pyz.sh` 순수성 검사 |
+| 산출물 의존성 고정 | `uv.lock` frozen export + runtime `--require-hashes` + locked build group |
+| ZIP 권한·무결성 | `scripts/smoke.sh` 가 group/other writable entry와 손상된 zip을 거부 |
+| 산출물 재현성 | CI artifact job이 같은 job의 native staging 두 번 빌드 SHA-256을 비교 |
+| vendor 입력 고정 | `scripts/vendor-checksums.txt`와 `fetch-vendor.sh`가 zellij/xclip을 검증 |
+| Actions 공급망 고정 | CI/release workflow의 외부 action을 immutable commit SHA로 pin |
 | 런처 ↔ `env.py` 후보 목록 일치 | `tests/test_launcher.py` |
 | 폐쇄망에서 런처가 동작 | `scripts/smoke.sh` 가 가짜 PATH 로 재현 |
 | 산출물이 3.10 에서 동작 | `smoke.sh` 가 3.10 으로 직접 실행 |
@@ -252,7 +311,7 @@ Phase 1~5 의 앱들은 모두 이 절차를 따른다.
 
 | 제약 | 영향 / 대응 |
 |---|---|
-| 파일시스템이 다르면 빌드 체크섬이 달라진다 | 퍼미션 비트 차이. 반입용은 ext4 경로에서 빌드 |
+| `TMPDIR`를 비-native 경로로 덮어쓴다 | ZIP entry 퍼미션이 달라질 수 있다. 기본 native `/tmp`를 유지하거나 Linux native 경로를 지정 |
 | 첫 실행에 `~/.shiv` 압축 해제 비용 | 1회성. NFS 홈이면 `SHIV_ROOT` 로 이동 |
 | 런처가 `$0` 에 의존 | `sh idk.pyz` 처럼 상대 경로로 부르는 특수한 경우 취약. PATH·절대경로 실행은 정상 |
 | zellij 는 별도 반입 | musl 정적 바이너리라 rustc 없이도 동작하지만, `idk.pyz` 안에는 못 넣는다 |
