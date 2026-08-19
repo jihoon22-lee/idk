@@ -111,9 +111,9 @@ idk dt b64 dec [--url-safe]
 
 - `--wrap` 기본 0(줄바꿈 없음). `76` 이면 MIME 스타일
 - `dec` 는 패딩이 빠진 입력도 받아준다 (JWT 조각을 그대로 붙여넣는 경우가 많다)
-- `dec` 는 ASCII 공백·탭·개행을 입력 중간에서도 무시하지만, 알파벳 밖의 문자는 엄격히
-  거부하고 `올바른 base64가 아닙니다`로 exit 1을 반환한다. `--url-safe`는 `-`·`_`만
-  허용하고 표준 `+`·`/` 문자는 거부한다.
+- `dec` 는 ASCII whitespace(공백·탭·개행 등)를 입력 중간에서도 무시하지만, 모드별 알파벳
+  밖의 문자는 엄격히 거부하고 `올바른 base64가 아닙니다`로 exit 1을 반환한다. 기본 모드는
+  영숫자와 표준 `+`·`/`, `--url-safe`는 영숫자와 `-`·`_`만 허용한다.
 - 디코드 결과가 UTF-8 이 아니면 안내 후 exit 1 (`--raw` 로 바이트 그대로 출력 허용)
 
 ### 4.3 `idk dt url`
@@ -255,7 +255,7 @@ src/idk/
 │  ├─ __init__.py
 │  ├─ jsonfmt.py          format_json, minify_json
 │  ├─ encoding.py         b64/url 인코딩·디코딩
-│  ├─ timestamp.py        parse_input, to_epoch, to_iso, relative
+│  ├─ timestamp.py        parse, iso, local, relative, format_output
 │  ├─ case.py             tokenize + 4종 변환
 │  ├─ security.py         hash_bytes, hash_stream, gen_uuid
 │  ├─ regexq.py           search, replace
@@ -264,9 +264,10 @@ src/idk/
 └─ cli_dt.py              typer 배선 + TUI
 ```
 
-변환 함수는 **문자열/바이트를 받아 문자열을 돌려주는 순수 함수**로 만든다. 예외적으로
-`hash_stream`은 열린 바이너리 스트림을 받아 digest 문자열을 돌려준다. 파일 열기·stdin·출력은
-전부 `cli_dt.py` 가 담당한다.
+변환 함수는 입력·출력 타입이 각 도구의 계약에 맞는 순수 함수로 만든다. 예를 들어 timestamp의
+`parse`는 epoch `float`을, `iso`/`local`/`relative`/`format_output`은 문자열을 돌려준다.
+예외적으로 `hash_stream`은 열린 바이너리 스트림을 받아 digest 문자열을 돌려준다. 파일 열기·
+stdin·출력은 전부 `cli_dt.py` 가 담당한다.
 
 ---
 

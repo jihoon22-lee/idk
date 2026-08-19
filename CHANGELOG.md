@@ -11,8 +11,8 @@
 
 ### Fixed
 - **`idk config check` 추가** — 알려진 TOML 설정을 고정된 순서로 검사해 `skip`/`ok`/`warn`/`fail`
-  행과 JSON 출력을 제공한다. 없는 파일은 정상으로 건너뛰고, `--strict`에서만 workspace cwd
-  경고를 exit 1로 올린다.
+  행과 `file`/`status`/`detail` JSON 출력을 제공한다. 실제로 없는 파일·설정 디렉터리는 정상으로
+  건너뛰고, `--strict`에서만 workspace cwd 경고를 exit 1로 올린다.
 - **mirror 설정·doctor 접속 판정 강화** — `artifactory`/`base_url`/`auth`/`token_env` 타입과
   netrc 전용 인증을 공통 모델로 검증한다. token_env bearer 값은 요청에만 사용하며 출력하지
   않고, doctor는 2xx를 ok, 401/403을 fail, 그 밖의 HTTP 오류를 warn, 전송 실패를 fail로 보고한다.
@@ -36,8 +36,10 @@
 - **EXITED 세션 재생성 경로를 명확히 함** — 정의된 EXITED 세션은 purge 후 workspace 정의로
   재생성한다. 정의가 없는 orphan EXITED 세션은 건드리지 않고 exit 3과 복구 안내를 낸다.
 - **zellij backend 실패를 숨기지 않음** — 세션 목록의 정확한 `No active zellij sessions found.`와
-  purge의 확인된 대상 없음 문구만 멱등 성공으로 인정한다. 권한·소켓 등 예상하지 못한 nonzero는
-  명령 인자·exit code·zellij 출력을 담은 `ZellijError`로 올라오며 ws CLI는 exit 1로 끝난다.
+  `kill-session`→`delete-session --force` purge의 확인된 대상 없음 문구만 멱등 성공으로 인정한다.
+  결과를 캡처하는 backend 경로에서 권한·소켓 등 예상하지 못한 nonzero는
+  명령 인자·exit code와, 캡처된 stdout/stderr가 있을 때만 그 진단을 담은 `ZellijError`로
+  올라오며 ws CLI는 exit 1로 끝난다.
 - **dt 입력 검증·대용량 해시 정확성** — Base64 디코드는 ASCII whitespace와 누락 패딩만
   허용하고 모드별 알파벳 밖의 문자를 친화적인 오류로 거부한다(URL-safe는 `-_`만 허용).
   `hash --file`은 1 MiB 스트림 청크를 사용하며, 미래 상대 시각은 `후`를 붙여 과거와

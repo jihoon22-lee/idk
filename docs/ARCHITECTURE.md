@@ -230,12 +230,13 @@ src/idk/
 | `httpc.py` | HTTP 전부. **4xx/5xx 도 예외 없이 `Response` 로 반환** | `Authorization`은 동일 origin redirect에서만 유지하고, origin 변경 시 제거한다. HTTPS→HTTP downgrade는 `HttpError`로 거부한다 |
 | `config.py` | TOML 로드/저장과 엄격한 타입 helper. 없는 파일은 빈 dict | `config_directory()`와 `config_file()`이 디렉터리·일반 파일 여부를 공통 분류한다. 없는 경로만 missing이고, 디렉터리/FIFO/끊긴 심볼릭 링크/접근 오류는 `ConfigError`다. 로드는 nonblocking open 뒤 `fstat`으로 regular file을 재확인한다. 저장은 임시파일 → `os.replace` 로 원자적 |
 | `doctor.py` | `collect()` 가 `Check` 목록을 만들고 렌더러 셋이 소비 | 진단 도구라 기본 exit 0. `--strict` 일 때만 fail → 1 |
-| `cli_config.py` | `config check`의 고정된 설정 validator registry와 JSON/표 출력 | JSON 경로는 Rich를 import하지 않으며, `config_file()`이 없는 파일만 `skip`으로 분류한다. cwd 문제는 별도 `warn` 행으로 낸다 |
+| `cli_config.py` | `config check`의 고정된 설정 validator registry와 JSON/표 출력 | JSON 경로는 Rich를 import하지 않으며, 실제로 없는 파일만 `skip`으로 분류한다. cwd 문제는 별도 `warn` 행으로 내고 `--strict`에서만 exit 1로 올린다 |
 | `mirror/model.py` | `mirror.toml`의 artifactory/base_url/auth/token_env 검증과 요청 인증 값 해석 | `base_url`은 printable ASCII HTTP(S) URL이며 공백·userinfo·잘못된 percent escape가 없는 유효한 hostname/port만 허용한다. token_env가 있으면 유효한 bearer 값이 필수다. 토큰·거부된 URL은 모델·출력에 저장하지 않는다 |
 | `ws/layout.py` | 모델 → zellij KDL 순수 함수 | 첫 탭에 `tab-bar`/`status-bar` plugin 을 감싼다 (키힌트 바) |
-| `ws/backends/zellij.py` | zellij 프로세스 호출 전부 | 이 파일 밖에서 zellij 를 부르지 않는다. `list-sessions`의 정확한 세션 없음 문구와 purge의 확인된 대상 없음만 멱등 성공으로 허용하고, 나머지 nonzero는 명령 인자·exit code·출력과 함께 `ZellijError`로 올린다 |
+| `ws/cli.py`·`ws/tui.py` | 세션 lifecycle과 TUI 조작 | running만 attach한다. 정의된 EXITED는 purge 후 workspace 정의로 재생성하고, orphan EXITED는 자동 제거하지 않는다. `k`/`p`는 확인 modal(Enter/y 확인, Esc/n 취소) 뒤에만 backend를 호출한다 |
+| `ws/backends/zellij.py` | zellij 프로세스 호출 전부 | 이 파일 밖에서 zellij 를 부르지 않는다. `list-sessions`의 정확한 세션 없음 문구와 purge의 확인된 대상 없음만 멱등 성공으로 허용하고, 결과를 캡처하는 호출의 나머지 nonzero는 명령 인자·exit code와, 캡처된 stdout/stderr가 있을 때만 그 진단을 함께 `ZellijError`로 올린다 |
 | `snip/model.py`·`snip/render.py` | `snippets.toml` 검증·placeholder 치환 | non-raw placeholder를 기존 single/double quote 안에서 거부한다. raw는 신뢰된 고정 셸 조각 전용이며, `shlex.quote()`의 경계는 한 번의 local shell이다 |
-| `dt/` | 변환 순수 함수 (문자열↔문자열), `hash_stream` 대용량 스트림 해시 | **typer/rich/textual import 금지** — AST 테스트로 강제. Base64는 ASCII whitespace만 허용하고 모드별 알파벳을 엄격히 검증한다(URL-safe는 `-_`만 허용) |
+| `dt/` | 변환 순수 함수와 `hash_stream` 대용량 스트림 해시 | **typer/rich/textual import 금지** — AST 테스트로 강제. Base64는 ASCII whitespace만 허용하고 모드별 알파벳을 엄격히 검증한다(표준은 영숫자와 `+/`, URL-safe는 영숫자와 `-_`) |
 | `dt_tui.py` | 대화형 도구 TUI | dt 로직은 `dt/` 를 호출만 한다 |
 
 ### 버전은 한 곳에만

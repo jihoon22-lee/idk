@@ -171,7 +171,8 @@ idk doctor
   > ⚠️ 초안에 적었던 `--layout` 은 **틀렸다.** 그 플래그는 새 세션을 만드는 게 아니라
   > 기존 세션에 탭을 추가하는 것이라 세션이 없으면 `There is no active session!` 로 실패한다.
   > zellij 0.44.3 실측으로 확인했다 — 자세한 내용은 [spec-ws-run.md](spec-ws-run.md) §1.
-- `idk ws ls` / `idk ws kill <name>` / `idk ws attach <name>` (내부적으로 `zellij attach --create`)
+- `idk ws ls` / `idk ws kill <name>` / `idk ws attach <name>` — `attach`는 running 세션에
+  `zellij attach <name>`을 실행하고, 세션이 없거나 정의된 EXITED면 별도로 생성한 뒤 attach한다
 - `idk ws up <name> --print-layout` — 생성된 KDL 육안 검증용
 - 셸: zellij `default_shell` 을 설정에서 지정 가능(기본 `$SHELL`). tcsh는 스크립팅이 빈약하므로
   **pane 기본 셸은 bash 권장** — 로그인 셸은 tcsh 그대로 두고 zellij 안에서만 bash

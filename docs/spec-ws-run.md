@@ -28,7 +28,7 @@ zellij 0.44.3 으로 직접 확인했다. **여기서 나온 사실들이 아래
 | `--layout-string '<kdl>'` | 문자열을 직접 받지만 `--layout` 과 같은 의미(기존 세션에 추가). 생성에는 못 쓴다 → **임시 파일이 필요하다** |
 | 이미 있는 이름으로 생성 | `Session with name "x" already exists. Use attach command...` 로 실패 |
 | `zellij list-sessions --short` | 이름만 한 줄씩 |
-| `zellij list-sessions --no-formatting` | `name [Created 23s ago]` / 죽은 세션은 `name [Created …] (EXITED - attach to resurrect)` |
+| `zellij list-sessions --no-formatting` | `name [Created 23s ago]` / 죽은 세션은 `name [Created …] (EXITED - attach to resurrect)` — idk는 정의된 EXITED를 purge 후 재생성하고 orphan은 건드리지 않는다 |
 | `zellij kill-session <n>` | 세션을 죽이지만 **목록에 EXITED 로 남는다**(부활 가능) |
 | `zellij delete-session <n>` | 목록에서 완전히 제거 |
 | `zellij -s <n> action new-pane -- <cmd>` | ✅ **세션 밖에서도 동작한다.** 생성된 pane id(`terminal_4`)를 stdout 으로 반환 |
@@ -110,10 +110,12 @@ shell = "bash"                   # 명령 없는 pane 의 셸 (생략 시 zellij
 | 조건 | 처리 |
 |---|---|
 | `name` 없음/중복/문자 제한 위반 | `ConfigError`, 어느 workspace 인지 명시 |
+| boolean 필드가 TOML boolean이 아님 | `ConfigError` — 문자열 `"false"`를 boolean으로 변환하지 않음 |
+| `workspace`/`tab`/`pane` 컬렉션이 배열이 아님 | `ConfigError`, 설정 위치를 명시 |
 | `split` 값이 vertical/horizontal 이 아님 | `ConfigError` |
 | `size` 가 `"NN%"` 또는 양의 정수가 아님 | `ConfigError` |
 | `cwd` 가 존재하지 않음 | **경고만.** 아직 체크아웃 전일 수 있다 |
-| `command` 가 빈 문자열/빈 리스트 | `ConfigError` |
+| `command` 가 빈 문자열/빈 리스트 또는 닫히지 않은 shell quote | `ConfigError` |
 
 ---
 
@@ -180,7 +182,7 @@ layout {
 | `idk ws up <name> --print-layout` | KDL 만 stdout 으로 출력하고 종료. zellij 를 호출하지 않는다 |
 | `idk ws attach <name>` | running은 attach. 세션이 없으면 정의로 생성 후 attach. 정의된 EXITED는 purge 후 재생성 |
 | `idk ws kill <name>` | `kill-session` — EXITED 로 남아 부활 가능 |
-| `idk ws kill <name> --purge` | `delete-session` — 완전 제거 |
+| `idk ws kill <name> --purge` | `kill-session` 후 `delete-session --force` — EXITED 흔적까지 완전 제거 |
 
 ### 4.1 `up` 의 흐름
 
@@ -188,7 +190,8 @@ layout {
 정의 로드 → 검증 → KDL 렌더 → (--print-layout 이면 출력 후 종료)
   → 세션 존재 확인
       이미 있음(live)   → "이미 있습니다. idk ws attach 로 붙으세요" 후 exit 3
-      있음(EXITED)      → purge 후 workspace 정의로 재생성 → attach
+      있음(EXITED)      → purge 후 workspace 정의로 재생성 → attach 요청이면 attach
+                           (--detached 또는 중첩 실행이면 detached 생성 후 안내)
       없음              → 임시파일에 KDL 쓰기 → zellij --new-session-with-layout … --session <name>
 ```
 
@@ -216,10 +219,12 @@ zellij 가 뱉는 `already exists` 에러에 기대지 않고 **먼저 확인해
 | 3 | 상태 충돌 — 이미 있음/없음, 중첩 attach |
 | 4 | zellij 미설치 |
 
-zellij 미설치 시 설치 안내(`docs/closed-network-setup.md` 참조)를 출력하고 exit 4.
-zellij가 예상하지 못한 nonzero를 반환하면 명령 인자·exit code·출력과 함께 exit 1이다. 세션
-목록의 정확한 `No active zellij sessions found.`와 purge의 확인된 대상 없음 문구만 멱등 성공으로
-인정한다.
+zellij가 필요한 backend 경로(`up`의 실제 생성, `attach`, `kill`)에서 미설치면 설치 안내
+(`docs/closed-network-setup.md` 참조)를 출력하고 exit 4이다. `ws init`, `ws ls`,
+`ws up --print-layout`은 zellij 없이도 각각 정의 파일 생성, 정의 목록 표시, KDL 출력을 수행한다.
+결과를 캡처하는 backend 명령이 예상하지 못한 nonzero를 반환하면 명령 인자·exit code와 함께
+exit 1이며, 캡처된 stdout/stderr가 있을 때만 그 진단을 추가한다. 세션 목록의 정확한
+`No active zellij sessions found.`와 purge의 확인된 대상 없음 문구만 멱등 성공으로 인정한다.
 
 ### 4.4 `ls` 출력
 
@@ -233,7 +238,7 @@ scratch   defined    2     (정의만, 세션 없음)
 orphan    running    1     (정의 없음 — zellij 세션만 존재)
 ```
 
-`STATE` 는 `defined`(정의만) / `running` / `exited`(부활 가능) 네 가지.
+`STATE` 는 `defined`(정의만) / `running` / `exited`(부활 가능) 세 가지.
 **정의에 없는 살아있는 세션도 보여준다** — 손으로 만든 세션을 놓치지 않기 위해서다.
 
 ---
@@ -374,7 +379,7 @@ def available() -> str | None            # 경로 또는 None
 def version() -> str | None
 def list_sessions() -> list[Session]     # name, state(running|exited), created
 def new_session(name: str, layout_path: Path, *, attach: bool) -> int
-def attach(name: str) -> int             # os.execvp 로 프로세스를 넘긴다
+def attach(name: str) -> None            # os.execvp 로 프로세스를 넘기므로 반환하지 않는다
 def kill(name: str, *, purge: bool) -> None
 def new_pane(session: str, cmd: list[str], *, name: str | None) -> str   # pane id
 ```
