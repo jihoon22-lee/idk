@@ -25,6 +25,12 @@ check() { # check <설명> <기대exit> <명령...>
     fi
 }
 
+check_build_stdin_json() {
+    local output
+    output="$(printf '%s\n' 'main.cpp:3:2: error: boom' | "$PY310" "$PYZ" build --format json)" || return
+    "$PY310" -c 'import json, sys; payload = json.load(sys.stdin); assert payload["diagnostic_count"] == 1; diagnostic = payload["diagnostics"][0]; assert diagnostic["path"] == "main.cpp"; assert diagnostic["line"] == 3' <<<"$output"
+}
+
 PY310="$(uv python find 3.10 2>/dev/null || command -v python3.10 || true)"
 
 echo "== 1. 런처 경유 실행 =="
@@ -37,6 +43,7 @@ if [ -n "$PY310" ]; then
     check "python3.10 <pyz> doctor" 0 "$PY310" "$PYZ" doctor
     check "python3.10 <pyz> --version" 0 "$PY310" "$PYZ" --version
     check "python3.10 <pyz> env --csh" 0 "$PY310" "$PYZ" env --csh
+    check "python3.10 build stdin JSON" 0 check_build_stdin_json
 else
     echo "  SKIP python3.10 없음 (uv python install 3.10)"
 fi

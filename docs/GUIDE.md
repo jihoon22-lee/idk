@@ -119,6 +119,33 @@ idk config check --strict    # workspace cwd 경고도 실패로 처리
 
 ---
 
+## `idk build` — 빌드 로그 진단 MVP
+
+gcc/clang/CMake/make/Qt 빌드 로그에서 진단을 추려 출력한다. 로그 전체를 `read()`나 `list()`로
+복사하지 않고 파일/stdin을 한 줄씩 처리한다. 입력은 정확히 하나만 준다:
+
+```bash
+idk build --file build.log                         # 파일
+cat build.log | idk build --format json            # stdin + JSON
+idk build --file build.log --severity warning      # 경고만
+idk build --file build.log --severity error --exit-code
+```
+
+`--format`은 `plain`(기본) 또는 `json`이다. plain 출력은 `path:line:column: severity: message`
+형식이며, 위치가 없는 make/CMake/Qt 진단은 `[tool] severity: message`로 표시한다. JSON의 최상위
+필드는 `total_lines`, `diagnostic_count`, `diagnostics`이고 각 진단에는 `path`, `line`, `column`,
+`severity`, `message`, `context`, `tool`이 들어간다. `--severity error`는 fatal/error,
+`warning`은 warning, `all`은 note까지 출력한다. `--exit-code`는 필터링하지 않은 전체 결과에
+fatal/error가 하나라도 있을 때만 exit 1로 끝난다.
+
+터미널에서 입력 없이 실행하거나 `--file`과 파이프/리디렉션 stdin을 함께 주면 사용 오류로 exit 2다.
+파일을 열 수 없으면 오류를 stderr에 쓰고 exit 1로 끝난다.
+
+이번 MVP에서는 `idk build -- <command>` 실행 감싸기, TUI, 소스 미리보기, editor 실행, 클립보드
+복사를 제공하지 않는다. 빌드 실행과 대화형 탐색은 후속 기능이다.
+
+---
+
 ## `idk env` — 셸 환경 설정 줄 생성
 
 ```bash
@@ -310,13 +337,12 @@ idk dt tui              # 대화형 입력/출력
 
 ---
 
-## 아직 없는 명령
+## 후속 예정 명령
 
-계획만 있고 구현되지 않았다. 설계는 [plan.md](plan.md) 의 "앱별 설계" 에 있다.
+아직 구현되지 않은 명령이다. 설계는 [plan.md](plan.md) 의 "앱별 설계" 에 있다.
 
 | 명령 | Phase | 무엇을 할 것인가 |
 |---|---|---|
-| `idk build` | 3 | 수천 줄 빌드 로그에서 진단만 추려 파일별로 탐색 |
 | `idk log` | 4 | 여러 로그를 한 화면에서 tail·필터·하이라이팅 |
 | `idk mirror` | 5 | 패키지가 사내 미러에 있는지 조회 |
 
