@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +28,9 @@ SESSION_RE = re.compile(
 
 _DETACH_TIMEOUT = 10.0
 _DETACH_POLL = 0.2
+_NO_SESSIONS_MESSAGE = "No active zellij sessions found."
+_MISSING_KILL_SESSION_RE = re.compile(r'^No session named "[^"\r\n]+" found\.$')
+_MISSING_DELETE_SESSION_RE = re.compile(r'^Session: "[^"\r\n]+" not found\.$')
 
 
 class ZellijError(Exception):
@@ -69,8 +73,26 @@ def version() -> str | None:
     return out[0] if out else None
 
 
-def _run(
-    args: list[str], *, check: bool = True, timeout: float = 15.0
+def _failure_detail(proc: subprocess.CompletedProcess[str]) -> str:
+    details: list[str] = []
+    if proc.stderr and proc.stderr.strip():
+        details.append(f"stderr: {proc.stderr.strip()}")
+    if proc.stdout and proc.stdout.strip():
+        details.append(f"stdout: {proc.stdout.strip()}")
+    return "; ".join(details) if details else "출력 없음"
+
+
+def _raise_for_failure(args: list[str], proc: subprocess.CompletedProcess[str]) -> None:
+    raise ZellijError(
+        f"zellij {' '.join(args)} 실패 (exit {proc.returncode}): {_failure_detail(proc)}"
+    )
+
+
+def _run_allowing(
+    args: list[str],
+    *,
+    allowed: Callable[[subprocess.CompletedProcess[str]], bool],
+    timeout: float = 15.0,
 ) -> subprocess.CompletedProcess[str]:
     path = _binary()
     try:
@@ -79,19 +101,46 @@ def _run(
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise ZellijError(f"zellij 실행 실패: {exc}") from exc
-    if check and proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout).strip()
-        raise ZellijError(f"zellij {' '.join(args)} 실패 (exit {proc.returncode}): {detail}")
+    if proc.returncode != 0 and not allowed(proc):
+        _raise_for_failure(args, proc)
     return proc
+
+
+def _run(args: list[str], *, timeout: float = 15.0) -> subprocess.CompletedProcess[str]:
+    return _run_allowing(args, allowed=lambda _proc: False, timeout=timeout)
+
+
+def _combined_output(proc: subprocess.CompletedProcess[str]) -> str:
+    return "\n".join(
+        stream.strip() for stream in (proc.stdout or "", proc.stderr or "") if stream.strip()
+    )
+
+
+def _is_no_sessions(proc: subprocess.CompletedProcess[str]) -> bool:
+    """`list-sessions` 의 알려진 빈 목록 응답만 허용한다."""
+    return proc.returncode != 0 and _combined_output(proc) == _NO_SESSIONS_MESSAGE
+
+
+def _is_missing_target(proc: subprocess.CompletedProcess[str]) -> bool:
+    """purge 의 멱등 대상 없음 응답만 허용한다."""
+    if proc.returncode == 0:
+        return False
+    output = _combined_output(proc)
+    return bool(
+        _MISSING_KILL_SESSION_RE.fullmatch(output) or _MISSING_DELETE_SESSION_RE.fullmatch(output)
+    )
 
 
 def list_sessions() -> list[Session]:
     """세션 목록. 세션이 하나도 없으면 빈 목록.
 
-    zellij 는 세션이 없을 때 exit 1 + stderr 안내를 낸다. 그건 오류가 아니라
-    "빈 목록"이므로 check=False 로 돌리고 stdout 만 본다.
+    zellij 는 세션이 없을 때 exit 1 + 안내를 낸다. 그 정확한 문구만 오류가 아닌
+    "빈 목록"으로 인정하고, 권한/소켓 등 다른 실패는 호출자에게 알린다.
     """
-    proc = _run(["list-sessions", "--no-formatting"], check=False)
+    proc = _run_allowing(
+        ["list-sessions", "--no-formatting"],
+        allowed=_is_no_sessions,
+    )
     sessions: list[Session] = []
     for line in proc.stdout.splitlines():
         match = SESSION_RE.match(line.strip())
@@ -175,11 +224,14 @@ def attach(name: str) -> None:
 def kill(name: str, *, purge: bool = False) -> None:
     if purge:
         # 여러 zellij 버전/세션 상태에 대응하는 2단계:
-        #  - kill-session 으로 세션을 죽인다 (없으면 무시)
+        #  - kill-session 으로 세션을 죽인다 (알려진 대상 없음만 무시)
         #  - delete-session --force 로 EXITED 흔적까지 제거 (detached 세션의
-        #    "not found" quirk 는 --force 여부와 무관하므로 check=False 로 무시)
-        _run(["kill-session", name], check=False)
-        _run(["delete-session", name, "--force"], check=False)
+        #    알려진 대상 없음은 멱등 성공으로 처리)
+        _run_allowing(["kill-session", name], allowed=_is_missing_target)
+        _run_allowing(
+            ["delete-session", name, "--force"],
+            allowed=_is_missing_target,
+        )
     else:
         _run(["kill-session", name])
 

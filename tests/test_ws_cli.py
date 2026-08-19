@@ -60,6 +60,21 @@ def test_ls_merges_running_and_orphan(monkeypatch):
     assert next(r for r in rows if r["name"] == "orphan")["desc"] == ""
 
 
+def test_ls_backend_error_exits_one_cleanly(monkeypatch):
+    def fail_list():
+        raise zellij.ZellijError(
+            "zellij list-sessions --no-formatting failed (exit 1): permission denied"
+        )
+
+    monkeypatch.setattr(cli.zellij, "list_sessions", fail_list)
+
+    result = runner.invoke(cli.ws_app, ["ls"])
+
+    assert result.exit_code == 1
+    assert "세션 목록을 읽지 못했습니다" in result.output
+    assert "permission denied" in result.output
+
+
 def test_up_print_layout_does_not_call_zellij(monkeypatch):
     _write_ws('[[workspace]]\nname = "demo"\n')
     called = []
@@ -115,6 +130,27 @@ def test_up_auto_purges_exited_and_recreates(monkeypatch):
     assert created[0][1]["attach"] is True
 
 
+def test_up_exited_cleanup_backend_error_exits_one_cleanly(monkeypatch):
+    _write_ws('[[workspace]]\nname = "demo"\n')
+    monkeypatch.setattr(
+        cli.zellij,
+        "list_sessions",
+        lambda: [zellij.Session("demo", "exited", "1s ago")],
+    )
+
+    def fail_cleanup(name, purge=False):
+        raise zellij.ZellijError("delete-session demo --force failed (exit 2): socket unavailable")
+
+    monkeypatch.setattr(cli.zellij, "kill", fail_cleanup)
+
+    result = runner.invoke(cli.ws_app, ["up", "demo"])
+
+    assert result.exit_code == 1
+    assert "세션 정리 실패" in result.output
+    assert "delete-session demo --force" in result.output
+    assert "socket unavailable" in result.output
+
+
 def test_up_unknown_workspace_is_conflict():
     result = runner.invoke(cli.ws_app, ["up", "nope"])
     assert result.exit_code == 3
@@ -159,6 +195,71 @@ def test_attach_existing_session(monkeypatch):
     assert called == ["demo"]
 
 
+def test_attach_recreates_defined_exited_session(monkeypatch):
+    _write_ws('[[workspace]]\nname = "demo"\n')
+    monkeypatch.setattr(
+        cli.zellij,
+        "list_sessions",
+        lambda: [zellij.Session("demo", "exited", "1s ago")],
+    )
+    killed = []
+    monkeypatch.setattr(cli.zellij, "kill", lambda name, purge=False: killed.append((name, purge)))
+    monkeypatch.setattr(cli.zellij, "attach", lambda name: None)
+    recreated = []
+    monkeypatch.setattr(
+        cli,
+        "_do_up",
+        lambda name, ws, *, attach, print_layout: recreated.append(
+            (name, ws.name, attach, print_layout)
+        ),
+    )
+
+    result = runner.invoke(cli.ws_app, ["attach", "demo"])
+
+    assert result.exit_code == 0
+    assert killed == [("demo", True)]
+    assert recreated == [("demo", "demo", True, False)]
+
+
+def test_attach_exited_cleanup_backend_error_exits_one_cleanly(monkeypatch):
+    _write_ws('[[workspace]]\nname = "demo"\n')
+    monkeypatch.setattr(
+        cli.zellij,
+        "list_sessions",
+        lambda: [zellij.Session("demo", "exited", "1s ago")],
+    )
+
+    def fail_cleanup(name, purge=False):
+        raise zellij.ZellijError("delete-session demo --force failed (exit 2): socket unavailable")
+
+    monkeypatch.setattr(cli.zellij, "kill", fail_cleanup)
+
+    result = runner.invoke(cli.ws_app, ["attach", "demo"])
+
+    assert result.exit_code == 1
+    assert "세션 정리 실패" in result.output
+    assert "delete-session demo --force" in result.output
+    assert "socket unavailable" in result.output
+
+
+def test_attach_orphan_exited_is_conflict_with_recovery_guidance(monkeypatch):
+    monkeypatch.setattr(
+        cli.zellij,
+        "list_sessions",
+        lambda: [zellij.Session("orphan", "exited", "1s ago")],
+    )
+    killed = []
+    monkeypatch.setattr(cli.zellij, "kill", lambda name, purge=False: killed.append((name, purge)))
+    monkeypatch.setattr(cli.zellij, "attach", lambda name: None)
+
+    result = runner.invoke(cli.ws_app, ["attach", "orphan"])
+
+    assert result.exit_code == 3
+    assert killed == []
+    assert "EXITED" in result.output
+    assert "idk ws kill orphan --purge" in result.output
+
+
 def test_attach_creates_when_missing_definition(monkeypatch):
     _write_ws('[[workspace]]\nname = "demo"\n')
     _no_sessions(monkeypatch)
@@ -189,6 +290,21 @@ def test_kill_purge(monkeypatch):
     result = runner.invoke(cli.ws_app, ["kill", "demo", "--purge"])
     assert result.exit_code == 0
     assert calls == [("demo", True)]
+
+
+def test_kill_purge_backend_error_exits_one_cleanly(monkeypatch):
+    def fail_kill(name, purge=False):
+        raise zellij.ZellijError(
+            "zellij delete-session demo --force failed (exit 2): socket unavailable"
+        )
+
+    monkeypatch.setattr(cli.zellij, "kill", fail_kill)
+
+    result = runner.invoke(cli.ws_app, ["kill", "demo", "--purge"])
+
+    assert result.exit_code == 1
+    assert "세션 종료 실패" in result.output
+    assert "socket unavailable" in result.output
 
 
 def test_init_creates_starter_config():

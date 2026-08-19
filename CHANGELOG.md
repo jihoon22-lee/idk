@@ -13,6 +13,13 @@
 - **설정 타입 오류를 일관되게 보고** — 문자열 불리언과 배열이 아닌 중첩 컬렉션을 설정 로드
   시 위치가 포함된 `ConfigError`로 거부하고, workspace 명령의 닫히지 않은 인용문도 조기에
   검증한다.
+- **파괴적인 ws 동작을 확인** — TUI의 `k`/`p`가 확인 modal을 먼저 보여 주며, `Enter`/`y`로
+  확인하고 `Esc`/`n`으로 취소한다. `p`는 EXITED 흔적까지 영구 제거한다는 경고를 표시한다.
+- **EXITED 세션 재생성 경로를 명확히 함** — 정의된 EXITED 세션은 purge 후 workspace 정의로
+  재생성한다. 정의가 없는 orphan EXITED 세션은 건드리지 않고 exit 3과 복구 안내를 낸다.
+- **zellij backend 실패를 숨기지 않음** — 세션 목록의 정확한 `No active zellij sessions found.`와
+  purge의 확인된 대상 없음 문구만 멱등 성공으로 인정한다. 권한·소켓 등 예상하지 못한 nonzero는
+  명령 인자·exit code·zellij 출력을 담은 `ZellijError`로 올라오며 ws CLI는 exit 1로 끝난다.
 
 ### Security
 - **`idk run` placeholder 경계 강화** — 기본 `shlex.quote()`는 현재 local shell의 한 argv만

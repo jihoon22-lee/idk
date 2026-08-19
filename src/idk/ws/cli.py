@@ -82,6 +82,16 @@ def _tab_count(session: str) -> int | None:
         return None
 
 
+def _purge_exited(name: str) -> None:
+    try:
+        zellij.kill(name, purge=True)
+    except zellij.ZellijMissing:
+        raise
+    except zellij.ZellijError as exc:
+        typer.echo(f"세션 정리 실패: {exc}", err=True)
+        raise typer.Exit(EXIT_ERROR) from exc
+
+
 def _is_nested() -> bool:
     return bool(os.environ.get("ZELLIJ"))
 
@@ -158,7 +168,7 @@ def _do_up(name: str, ws: model.Workspace, *, attach: bool, print_layout: bool) 
         # EXITED(부활 가능한 죽은 세션) — 같은 이름으로 새로 만들 수 없으므로
         # 자동으로 정리하고 재생성한다. 잔재가 "신규 세션 생성 실패" 의 흔한 원인이다.
         typer.echo(f"종료된 세션 '{name}' 을 제거하고 새로 만듭니다...", err=True)
-        zellij.kill(name, purge=True)
+        _purge_exited(name)
 
     if _is_nested():
         attach = False
@@ -211,9 +221,26 @@ def list_rows() -> list[dict[str, object]]:
 def attach_or_create(name: str) -> None:
     """attach. 세션이 없으면 정의로 생성 후 attach. (attach 명령과 TUI Enter 가 공유)"""
     sessions = _sessions()
-    if name in sessions:
+    session = sessions.get(name)
+    if session is not None and session.state == "running":
         zellij.attach(name)
         return
+
+    if session is not None and session.state == "exited":
+        workspaces = _load_workspaces()
+        ws = next((workspace for workspace in workspaces if workspace.name == name), None)
+        if ws is None:
+            typer.echo(
+                f"EXITED orphan 세션 '{name}' 은 workspace 정의가 없습니다. \
+`idk ws kill {name} --purge` 로 흔적을 제거한 뒤 workspaces.toml 에 정의하세요.",
+                err=True,
+            )
+            raise typer.Exit(EXIT_CONFLICT)
+        typer.echo(f"종료된 세션 '{name}' 을 purge 하고 workspace 정의로 재생성합니다...", err=True)
+        _purge_exited(name)
+        _do_up(name, ws, attach=True, print_layout=False)
+        return
+
     ws = _find_workspace(name)
     _do_up(name, ws, attach=True, print_layout=False)
 

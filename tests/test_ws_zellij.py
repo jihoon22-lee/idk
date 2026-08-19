@@ -58,6 +58,81 @@ def test_list_sessions_empty_when_none(monkeypatch):
     assert zellij.list_sessions() == []
 
 
+def test_no_sessions_allowlist_requires_the_exact_zellij_message():
+    assert zellij._is_no_sessions(_proc(rc=1, stderr="No active zellij sessions found.\n"))
+    assert not zellij._is_no_sessions(_proc(rc=1, stderr="permission denied\n"))
+    assert not zellij._is_no_sessions(
+        _proc(rc=1, stderr="No active zellij sessions found.\npermission denied\n")
+    )
+
+
+def test_list_sessions_unknown_failure_raises_with_command_diagnostics(monkeypatch):
+    monkeypatch.setattr(
+        zellij.subprocess,
+        "run",
+        lambda *a, **k: _proc(rc=1, stderr="permission denied\n"),
+    )
+
+    with pytest.raises(zellij.ZellijError) as exc_info:
+        zellij.list_sessions()
+
+    message = str(exc_info.value)
+    assert "list-sessions --no-formatting" in message
+    assert "exit 1" in message
+    assert "permission denied" in message
+
+
+def test_purge_allows_only_known_missing_target_messages(monkeypatch):
+    calls: list[list[str]] = []
+    responses = iter(
+        [
+            _proc(rc=1, stdout='No session named "demo" found.\n'),
+            _proc(rc=2, stderr='Session: "demo" not found.\n'),
+        ]
+    )
+
+    def fake_run(*args, **kwargs):
+        calls.append(list(args[0]))
+        return next(responses)
+
+    monkeypatch.setattr(zellij.subprocess, "run", fake_run)
+
+    zellij.kill("demo", purge=True)
+
+    assert calls == [
+        [ZBIN, "kill-session", "demo"],
+        [ZBIN, "delete-session", "demo", "--force"],
+    ]
+
+
+def test_purge_unknown_delete_failure_raises_with_command_diagnostics(monkeypatch):
+    calls: list[list[str]] = []
+    responses = iter(
+        [
+            _proc(),
+            _proc(rc=2, stderr="socket unavailable\n"),
+        ]
+    )
+
+    def fake_run(*args, **kwargs):
+        calls.append(list(args[0]))
+        return next(responses)
+
+    monkeypatch.setattr(zellij.subprocess, "run", fake_run)
+
+    with pytest.raises(zellij.ZellijError) as exc_info:
+        zellij.kill("demo", purge=True)
+
+    message = str(exc_info.value)
+    assert "delete-session demo --force" in message
+    assert "exit 2" in message
+    assert "socket unavailable" in message
+    assert calls == [
+        [ZBIN, "kill-session", "demo"],
+        [ZBIN, "delete-session", "demo", "--force"],
+    ]
+
+
 def test_new_session_attach_uses_new_session_with_layout_flag(monkeypatch):
     calls: list[list[str]] = []
 

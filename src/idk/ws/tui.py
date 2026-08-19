@@ -11,10 +11,78 @@ from typing import ClassVar
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
-from textual.widgets import DataTable, Footer, Header
+from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Footer, Header, Label
 
 from idk.ws import cli
+
+
+class ConfirmSessionAction(ModalScreen[bool]):
+    """세션 kill/purge 동작을 확인받는 재사용 가능한 모달."""
+
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("enter", "confirm", "확인"),
+        Binding("y", "confirm", "확인"),
+        Binding("escape", "cancel", "취소"),
+        Binding("n", "cancel", "취소"),
+    ]
+
+    CSS = """
+    ConfirmSessionAction {
+        align: center middle;
+    }
+    #dialog {
+        width: 64;
+        height: auto;
+        border: round $accent;
+        padding: 1 2;
+        background: $surface;
+    }
+    #actions {
+        height: 3;
+        align-horizontal: right;
+    }
+    """
+
+    def __init__(self, session_name: str, purge: bool) -> None:
+        super().__init__()
+        self.session_name = session_name
+        self.purge = purge
+
+    def compose(self) -> ComposeResult:
+        if self.purge:
+            action = "영구 제거"
+            warning = "EXITED 흔적까지 영구 제거됩니다."
+        else:
+            action = "종료"
+            warning = "세션은 EXITED 흔적으로 남아 다시 부활할 수 있습니다."
+        with Vertical(id="dialog"):
+            yield Label(f"세션 '{self.session_name}' 를 {action}할까요?", id="message")
+            yield Label(warning, id="warning")
+            with Horizontal(id="actions"):
+                confirm = Button(
+                    "확인",
+                    id="confirm",
+                    variant="error" if self.purge else "warning",
+                )
+                confirm.can_focus = False
+                yield confirm
+                cancel = Button("취소", id="cancel")
+                cancel.can_focus = False
+                yield cancel
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "confirm":
+            self.action_confirm()
+        elif event.button.id == "cancel":
+            self.action_cancel()
 
 
 class WsApp(App[None]):
@@ -23,7 +91,7 @@ class WsApp(App[None]):
     TITLE = "idk ws"
 
     BINDINGS: ClassVar[list[Binding]] = [
-        Binding("enter", "activate", "attach/생성", priority=True),
+        Binding("enter", "activate", "attach/생성"),
         Binding("k", "kill", "kill"),
         Binding("p", "purge", "purge"),
         Binding("r", "refresh", "새로고침"),
@@ -82,23 +150,32 @@ class WsApp(App[None]):
         self.attach_target = str(row["name"])
         self.exit()
 
-    def _kill(self, purge: bool) -> None:
-        row = self._selected()
-        if row is None:
-            return
+    def _kill(self, session_name: str, purge: bool) -> None:
         from idk.ws.backends import zellij
 
         try:
-            zellij.kill(str(row["name"]), purge=purge)
+            zellij.kill(session_name, purge=purge)
         except zellij.ZellijError as exc:
             self.notify(str(exc), severity="error")
         self._refresh()
 
+    def _confirm_action(self, purge: bool) -> None:
+        row = self._selected()
+        if row is None:
+            return
+        session_name = str(row["name"])
+
+        def on_done(confirmed: bool | None) -> None:
+            if confirmed:
+                self._kill(session_name, purge)
+
+        self.push_screen(ConfirmSessionAction(session_name, purge), on_done)
+
     def action_kill(self) -> None:
-        self._kill(purge=False)
+        self._confirm_action(purge=False)
 
     def action_purge(self) -> None:
-        self._kill(purge=True)
+        self._confirm_action(purge=True)
 
     def action_refresh(self) -> None:
         self._refresh()
