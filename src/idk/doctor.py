@@ -139,15 +139,23 @@ def _terminal_checks(info: env.SystemInfo) -> list[Check]:
 
 def _config_checks() -> list[Check]:
     directory = config.config_dir()
-    present = [p.name for p in config.existing_configs()]
+    directory_exists = directory.exists()
+    directory_check = Check(
+        "config",
+        "dir",
+        OK if directory_exists else SKIP,
+        str(directory),
+        "존재" if directory_exists else "아직 없음 (기본값으로 동작)",
+    )
+    try:
+        present = [p.name for p in config.existing_configs()]
+    except config.ConfigError:
+        return [
+            directory_check,
+            Check("config", "files", FAIL, "설정 오류", "설정 파일을 확인할 수 없습니다"),
+        ]
     return [
-        Check(
-            "config",
-            "dir",
-            OK if directory.exists() else SKIP,
-            str(directory),
-            "존재" if directory.exists() else "아직 없음 (기본값으로 동작)",
-        ),
+        directory_check,
         Check(
             "config",
             "files",
@@ -188,11 +196,11 @@ def _mirror_checks(*, net: bool) -> list[Check]:
         return [Check("mirror", "base_url", SKIP, str(base_url), "--net 을 주면 접속까지 확인한다")]
     try:
         resp = httpc.request(base_url, timeout=5.0, auth=auth)
-    except Exception:
+    except (httpc.HttpError, TypeError, ValueError):
         return [Check("mirror", "base_url", FAIL, base_url, "미러 접속 실패")]
     try:
         status = resp.status
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         return [Check("mirror", "base_url", FAIL, base_url, "미러 응답 상태가 올바르지 않습니다")]
     if type(status) is not int or not 100 <= status <= 599:
         return [Check("mirror", "base_url", FAIL, base_url, "미러 응답 상태가 올바르지 않습니다")]

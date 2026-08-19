@@ -313,6 +313,99 @@ def test_mirror_invalid_url_is_fail_in_doctor(monkeypatch):
     assert "base_url" in check.detail
 
 
+def test_mirror_rejected_userinfo_never_reaches_doctor_outputs():
+    secret = "sentinel-password"
+    config.save(
+        "mirror.toml",
+        {
+            "artifactory": {
+                "base_url": f"https://user:{secret}@mirror.example/simple",
+            }
+        },
+    )
+
+    check = next(c for c in doctor.collect(net=True) if c.section == "mirror")
+    assert check.status == doctor.FAIL
+    assert secret not in check.value
+    assert secret not in check.detail
+
+    for kwargs in ({"as_json": True}, {"as_brief": True}, {}):
+        output = StringIO()
+        with redirect_stdout(output):
+            assert doctor.main(net=True, **kwargs) == 0
+        assert secret not in output.getvalue()
+
+
+def test_doctor_json_is_deterministic_for_rejected_mirror_url():
+    config.save(
+        "mirror.toml",
+        {"artifactory": {"base_url": "https://mirror.example/%ZZ"}},
+    )
+
+    first = StringIO()
+    with redirect_stdout(first):
+        doctor.main(as_json=True, net=True)
+    second = StringIO()
+    with redirect_stdout(second):
+        doctor.main(as_json=True, net=True)
+
+    assert first.getvalue() == second.getvalue()
+
+
+def test_doctor_request_programming_errors_propagate(monkeypatch):
+    config.save(
+        "mirror.toml",
+        {"artifactory": {"base_url": "https://mirror.example/simple"}},
+    )
+
+    def bug(*args, **kwargs):
+        raise RuntimeError("programming bug")
+
+    monkeypatch.setattr(httpc, "request", bug)
+
+    with pytest.raises(RuntimeError, match="programming bug"):
+        doctor.collect(net=True)
+
+
+def test_doctor_response_shape_programming_errors_propagate(monkeypatch):
+    config.save(
+        "mirror.toml",
+        {"artifactory": {"base_url": "https://mirror.example/simple"}},
+    )
+
+    class BrokenResponse:
+        @property
+        def status(self):
+            raise RuntimeError("response programming bug")
+
+    monkeypatch.setattr(httpc, "request", lambda *args, **kwargs: BrokenResponse())
+
+    with pytest.raises(RuntimeError, match="response programming bug"):
+        doctor.collect(net=True)
+
+
+def test_doctor_response_value_error_is_safe(monkeypatch):
+    secret = "response-secret"
+    config.save(
+        "mirror.toml",
+        {"artifactory": {"base_url": "https://mirror.example/simple"}},
+    )
+
+    class BrokenResponse:
+        @property
+        def status(self):
+            raise ValueError(secret)
+
+    monkeypatch.setattr(httpc, "request", lambda *args, **kwargs: BrokenResponse())
+
+    check = next(c for c in doctor.collect(net=True) if c.section == "mirror")
+
+    assert check.status == doctor.FAIL
+    assert check.detail == "미러 응답 상태가 올바르지 않습니다"
+    assert secret not in check.value
+    assert secret not in check.detail
+
+
 def test_workspace_symlink_loop_is_a_config_failure(tmp_path):
     loop = tmp_path / "loop"
     loop.symlink_to(loop, target_is_directory=True)

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import errno
+import os
+from pathlib import Path
+
 import pytest
 
 from idk import config
@@ -46,6 +50,51 @@ def test_load_broken_toml_raises_config_error():
     with pytest.raises(config.ConfigError) as excinfo:
         config.load("mirror.toml")
     assert "mirror.toml" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("kind", ["directory", "fifo", "broken-symlink"])
+def test_load_rejects_nonregular_config_paths_without_reading(kind, monkeypatch):
+    path = config.config_path("mirror.toml")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if kind == "directory":
+        path.mkdir()
+    elif kind == "fifo":
+        try:
+            os.mkfifo(path)
+        except OSError as exc:
+            if exc.errno in {errno.ENOTSUP, errno.EOPNOTSUPP}:
+                pytest.skip("filesystem does not support FIFOs")
+            raise
+    else:
+        path.symlink_to(path.with_name("missing-mirror.toml"))
+
+    def unexpected_read(file_path):
+        raise AssertionError(f"loader tried to read nonregular path: {file_path}")
+
+    monkeypatch.setattr(Path, "read_bytes", unexpected_read)
+
+    with pytest.raises(config.ConfigError):
+        config.load("mirror.toml")
+
+
+def test_load_rejects_inaccessible_parent_without_using_os_access(monkeypatch, tmp_path):
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    target = blocked / "idk"
+    original_lstat = Path.lstat
+
+    def deny_parent(path):
+        if path == blocked:
+            raise PermissionError("parent-secret")
+        return original_lstat(path)
+
+    monkeypatch.setattr(config, "config_dir", lambda: target)
+    monkeypatch.setattr(Path, "lstat", deny_parent)
+
+    with pytest.raises(config.ConfigError) as excinfo:
+        config.load("mirror.toml")
+
+    assert "parent-secret" not in str(excinfo.value)
 
 
 def test_existing_configs_lists_only_present_files():

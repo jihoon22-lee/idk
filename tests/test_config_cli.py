@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import errno
 import json
+import os
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -220,6 +223,64 @@ def test_config_check_rejects_invalid_mirror_urls(base_url):
     assert "base_url" in rows[2]["detail"]
 
 
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        " https://mirror.example/simple",
+        "https://mirror.example/simple ",
+        "https://mirror.example/path with space",
+        "https://mirror.example/path\\twith-tab",
+        "https://user:sentinel-password@mirror.example/simple",
+        "https://sentinel-password@mirror.example/simple",
+        "https://mirror.example/%ZZ",
+        "https://mirror.example/%",
+        "https://mirror.example/%0",
+        "https://mirror.example:",
+        "https://mirror.example: ",
+        "https://bad_host.example/simple",
+        "https://-bad.example/simple",
+        "https://bad-.example/simple",
+    ],
+)
+def test_config_check_rejects_unsafe_mirror_urls_without_echoing_value(base_url):
+    _write("mirror.toml", f'[artifactory]\nbase_url = "{base_url}"\n')
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+    assert "base_url" in rows[2]["detail"]
+    assert "sentinel-password" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://localhost",
+        "https://mirror.example:8443/simple",
+        "http://127.0.0.1:1/",
+        "https://[::1]:443/simple",
+        "https://example.com./simple",
+    ],
+)
+def test_config_check_accepts_valid_http_urls(base_url):
+    _write("mirror.toml", f'[artifactory]\nbase_url = "{base_url}"\n')
+
+    result, rows = _json_result("--strict")
+
+    assert result.exit_code == 0, result.stdout
+    assert rows[2]["status"] == "ok"
+
+
+def test_config_check_json_is_deterministic():
+    _write("mirror.toml", '[artifactory]\nbase_url = "https://mirror.example/simple"\n')
+
+    first, _ = _json_result()
+    second, _ = _json_result()
+
+    assert first.stdout == second.stdout
+
+
 def test_config_check_existing_directory_is_failure():
     path = config.config_path("mirror.toml")
     path.mkdir(parents=True)
@@ -232,6 +293,76 @@ def test_config_check_existing_directory_is_failure():
         "status": "fail",
         "detail": "설정 경로가 일반 파일이 아닙니다",
     }
+
+
+def test_config_check_rejects_fifo_without_blocking():
+    path = config.config_path("mirror.toml")
+    path.parent.mkdir(parents=True)
+    try:
+        os.mkfifo(path)
+    except OSError as exc:
+        if exc.errno in {errno.ENOTSUP, errno.EOPNOTSUPP}:
+            pytest.skip("filesystem does not support FIFOs")
+        raise
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+
+
+def test_config_check_rejects_broken_config_symlink():
+    path = config.config_path("mirror.toml")
+    path.parent.mkdir(parents=True)
+    path.symlink_to(path.with_name("missing-mirror.toml"))
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+
+
+def test_config_check_does_not_misreport_inaccessible_parent_as_missing(monkeypatch, tmp_path):
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    target = blocked / "idk"
+    original_lstat = Path.lstat
+
+    def deny_parent(path):
+        if path == blocked:
+            raise PermissionError("parent-secret")
+        return original_lstat(path)
+
+    monkeypatch.setattr(config, "config_dir", lambda: target)
+    monkeypatch.setattr(Path, "lstat", deny_parent)
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[0]["status"] == "fail"
+    assert all(row["status"] != "skip" for row in rows)
+    assert "parent-secret" not in result.stdout
+
+
+def test_config_check_converts_config_read_errors_to_safe_failure(monkeypatch):
+    secret = "read-secret"
+    _write("mirror.toml", '[artifactory]\nbase_url = "https://mirror.example"\n')
+    path = config.config_path("mirror.toml")
+    original_read_bytes = Path.read_bytes
+
+    def fail_read(file_path):
+        if file_path == path:
+            raise PermissionError(secret)
+        return original_read_bytes(file_path)
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read)
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+    assert rows[2]["detail"] == "설정 검사 중 파일/모델 오류"
+    assert secret not in result.stdout
 
 
 def test_config_check_converts_validator_filesystem_errors_to_safe_failure(monkeypatch):

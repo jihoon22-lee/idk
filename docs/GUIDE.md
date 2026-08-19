@@ -158,7 +158,10 @@ auth     = "netrc"          # 또는 token_env = "ARTIFACTORY_TOKEN"
 `token_env`를 쓰면 해당 환경변수의 값이 bearer token으로 요청에만 사용되며 `doctor`와
 `config check`의 출력에는 token 값이 포함되지 않는다. 환경변수가 없거나 비어 있거나 HTTP
 헤더에 넣을 수 없는 값이면 netrc로 폴백하지 않고 설정 오류로 보고한다. `base_url`은
-hostname이 있는 `http://` 또는 `https://` URL이어야 한다.
+hostname이 있는 `http://` 또는 `https://` URL이어야 한다. URL에는 공백·제어문자·사용자
+정보(`user:password@`)·잘못된 percent escape를 넣을 수 없고, hostname과 port도 URI 규칙에
+맞아야 한다. 설정 경로가 없을 때만 `config check`가 `skip`으로 보고하며, 디렉터리·FIFO·끊긴
+심볼릭 링크·접근할 수 없는 부모·읽기 오류는 `fail`이다. 특수 파일은 검사 중 열지 않는다.
 
 > HTTP 는 stdlib `urllib` 로만 나간다. `requests`/`httpx` 는 `certifi` 번들 CA 를 쓰기 때문에
 > 사내 TLS 인터셉션 환경에서 접속이 깨진다. 시스템 CA 를 쓰는 것이 이 도구의 전제다.

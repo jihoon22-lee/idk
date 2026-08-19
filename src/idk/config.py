@@ -7,6 +7,7 @@ ruff TID251 로도 막혀 있다.
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -50,15 +51,76 @@ def config_path(name: str) -> Path:
     return config_dir() / name
 
 
+def _check_parent_directory(path: Path) -> None:
+    """Confirm that a missing config path is really under an accessible directory.
+
+    ``Path.exists()`` and ``os.access()`` can both turn an inaccessible parent into a
+    false "missing" result.  Walking with ``lstat`` lets the caller distinguish a
+    genuinely absent path from permission errors, symlink loops, and broken parent
+    links without opening a special file.
+    """
+    current = path
+    while True:
+        try:
+            current.lstat()
+        except FileNotFoundError:
+            parent = current.parent
+            if parent == current:
+                return
+            current = parent
+            continue
+        except (OSError, RuntimeError) as exc:
+            raise ConfigError("설정 경로를 확인할 수 없습니다") from exc
+
+        try:
+            info = current.stat()
+        except FileNotFoundError as exc:
+            raise ConfigError("설정 경로의 부모 심볼릭 링크가 끊어졌습니다") from exc
+        except (OSError, RuntimeError) as exc:
+            raise ConfigError("설정 경로를 확인할 수 없습니다") from exc
+        if not stat.S_ISDIR(info.st_mode):
+            raise ConfigError("설정 경로의 부모가 디렉터리가 아닙니다")
+        return
+
+
+def config_file(name: str) -> Path | None:
+    """Return a usable regular config file, or ``None`` only when it is absent.
+
+    All config consumers use this classification.  Directories, FIFOs, broken
+    symlinks, inaccessible parents, and other stat errors are configuration errors;
+    no special file is opened while classifying it.
+    """
+    path = config_path(name)
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        _check_parent_directory(path.parent)
+        return None
+    except (OSError, RuntimeError) as exc:
+        raise ConfigError("설정 경로를 확인할 수 없습니다") from exc
+
+    try:
+        info = path.stat()
+    except FileNotFoundError as exc:
+        raise ConfigError("설정 경로가 끊어진 심볼릭 링크입니다") from exc
+    except (OSError, RuntimeError) as exc:
+        raise ConfigError("설정 경로를 확인할 수 없습니다") from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise ConfigError("설정 경로가 일반 파일이 아닙니다")
+    return path
+
+
 def load(name: str, *, default: dict[str, Any] | None = None) -> dict[str, Any]:
     """설정 파일 하나를 읽는다. 없으면 default(기본 `{}`)."""
-    path = config_path(name)
+    path = config_file(name)
+    if path is None:
+        return dict(default or {})
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
         return dict(default or {})
-    except OSError as exc:
-        raise ConfigError(f"{path} 를 읽을 수 없습니다: {exc}") from exc
+    except (OSError, RuntimeError) as exc:
+        raise ConfigError(f"{path} 를 읽을 수 없습니다") from exc
     try:
         return tomli.loads(raw.decode("utf-8"))
     except (tomli.TOMLDecodeError, UnicodeDecodeError) as exc:
@@ -80,5 +142,9 @@ def save(name: str, data: dict[str, Any]) -> Path:
 
 
 def existing_configs() -> list[Path]:
-    directory = config_dir()
-    return [p for name in KNOWN_CONFIGS if (p := directory / name).exists()]
+    paths: list[Path] = []
+    for name in KNOWN_CONFIGS:
+        path = config_file(name)
+        if path is not None:
+            paths.append(path)
+    return paths

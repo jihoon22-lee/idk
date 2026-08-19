@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -60,17 +62,78 @@ def _valid_bearer_token(token: str) -> bool:
     return bool(token) and all(0x21 <= ord(char) <= 0x7E for char in token)
 
 
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+_DNS_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z")
+
+
+def _valid_percent_escapes(value: str) -> bool:
+    for index, char in enumerate(value):
+        if char == "%" and (
+            index + 2 >= len(value)
+            or value[index + 1] not in _HEX_DIGITS
+            or value[index + 2] not in _HEX_DIGITS
+        ):
+            return False
+    return True
+
+
+def _valid_hostname(hostname: str, netloc: str) -> bool:
+    if not hostname:
+        return False
+
+    if ":" in hostname:
+        if not netloc.startswith("["):
+            return False
+        try:
+            ipaddress.IPv6Address(hostname)
+        except ValueError:
+            return False
+        return True
+
+    try:
+        ipaddress.ip_address(hostname)
+    except ValueError:
+        pass
+    else:
+        return True
+
+    dns_name = hostname[:-1] if hostname.endswith(".") else hostname
+    if not dns_name or len(dns_name) > 253:
+        return False
+    try:
+        ascii_name = dns_name.encode("idna").decode("ascii")
+    except UnicodeError:
+        return False
+    labels = ascii_name.split(".")
+    if len(labels) == 4 and all(label.isdigit() for label in labels):
+        return False
+    return all(_DNS_LABEL.fullmatch(label) for label in labels)
+
+
 def _validate_base_url(value: str, where: str) -> str:
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+    if (
+        not isinstance(value, str)
+        or not value
+        or not _valid_percent_escapes(value)
+        or any(char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+    ):
         raise _error(where, "HTTP(S) URL이어야 합니다")
     try:
         parsed = urlsplit(value)
         scheme = parsed.scheme.lower()
         hostname = parsed.hostname
+        has_userinfo = (
+            parsed.username is not None or parsed.password is not None or "@" in parsed.netloc
+        )
         _ = parsed.port
-    except ValueError as exc:
+    except (ValueError, UnicodeError) as exc:
         raise _error(where, "HTTP(S) URL의 host/port가 올바르지 않습니다") from exc
-    if scheme not in {"http", "https"} or not hostname:
+    if (
+        scheme not in {"http", "https"}
+        or has_userinfo
+        or not _valid_hostname(hostname or "", parsed.netloc)
+        or parsed.netloc.endswith(":")
+    ):
         raise _error(where, "HTTP(S) URL이며 hostname이 필요합니다")
     return value
 

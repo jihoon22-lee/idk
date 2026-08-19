@@ -20,6 +20,10 @@
   netrc로 폴백하지 않고 generic 오류로 실패한다. base_url의 HTTP(S)/hostname/port와 설정
   경로의 일반 파일 여부를 검사하며, doctor와 config check는 파일·응답 shape 오류를
   secret-bearing 예외 문자열 없이 fail 행으로 보고한다.
+- **설정 경로·URL 검증 경계 보강** — `config_file()`이 없는 경로만 `skip`으로 분류하고,
+  디렉터리·FIFO·끊긴 심볼릭 링크·접근/읽기 오류는 결정적인 `ConfigError`/`fail`로 보고한다.
+  mirror URL의 공백·userinfo·잘못된 percent escape·호스트·포트도 거부하며, doctor는 예상된
+  HTTP/request-value 오류만 안전하게 `fail`로 바꾸고 프로그래밍 오류는 숨기지 않는다.
 - **설정 타입 오류를 일관되게 보고** — 문자열 불리언과 배열이 아닌 중첩 컬렉션을 설정 로드
   시 위치가 포함된 `ConfigError`로 거부하고, workspace 명령의 닫히지 않은 인용문도 조기에
   검증한다.

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
@@ -67,15 +66,20 @@ def collect_checks() -> list[ConfigCheck]:
     checks: list[ConfigCheck] = []
     for filename, validator in VALIDATORS.items():
         try:
-            path = config.config_path(filename)
-            if not os.path.lexists(path):
-                checks.append(ConfigCheck(filename, SKIP, "파일 없음"))
-                continue
-            if not path.is_file():
-                checks.append(ConfigCheck(filename, FAIL, "설정 경로가 일반 파일이 아닙니다"))
-                continue
+            path = config.config_file(filename)
+        except config.ConfigError as exc:
+            detail = (
+                "설정 검사 중 파일/모델 오류"
+                if isinstance(exc.__cause__, (OSError, RuntimeError))
+                else str(exc)
+            )
+            checks.append(ConfigCheck(filename, FAIL, detail))
+            continue
         except (OSError, RuntimeError, ValueError):
             checks.append(ConfigCheck(filename, FAIL, "설정 검사 중 파일/모델 오류"))
+            continue
+        if path is None:
+            checks.append(ConfigCheck(filename, SKIP, "파일 없음"))
             continue
         try:
             warnings = validator()
