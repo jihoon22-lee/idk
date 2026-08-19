@@ -48,8 +48,8 @@ select = [
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "tomllib".msg = "tomllib 은 3.11+ 다. 폐쇄망은 3.10 이므로 tomli 를 쓴다 (AGENTS.md)."
-"requests".msg = "certifi 번들 CA 때문에 사내 TLS 인터셉션 환경에서 깨진다. idk.httpc 를 쓴다."
-"httpx".msg = "certifi 번들 CA 때문에 사내 TLS 인터셉션 환경에서 깨진다. idk.httpc 를 쓴다."
+"requests".msg = "certifi 번들 CA 때문에 내부 TLS 인터셉션 환경에서 깨진다. idk.httpc 를 쓴다."
+"httpx".msg = "certifi 번들 CA 때문에 내부 TLS 인터셉션 환경에서 깨진다. idk.httpc 를 쓴다."
 "certifi".msg = "시스템 CA 를 써야 한다. ssl.create_default_context() (idk.httpc)."
 
 [tool.pytest.ini_options]

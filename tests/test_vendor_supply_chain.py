@@ -137,6 +137,27 @@ def test_script_reads_both_manifest_entries_for_fixture(tmp_path):
     assert xclip_hash in result.stdout
 
 
+def test_stale_vendor_archives_are_excluded_from_transfer_checksum_manifest(tmp_path):
+    checkout, _, _ = _vendor_fixture(tmp_path)
+    stale = checkout / "vendor" / "old-zellij-build.tar.gz"
+    stale.write_bytes(b"stale archive that must not be transferred")
+
+    result = _run_fixture(checkout, tmp_path)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    checksum_names = {
+        line.split()[-1] for line in (checkout / "vendor" / "SHA256SUMS").read_text().splitlines()
+    }
+    assert checksum_names == {
+        "zellij-no-web-x86_64-unknown-linux-musl.tar.gz",
+        "xclip-0.13.tar.gz",
+    }
+    assert "old-zellij-build.tar.gz" not in (checkout / "vendor" / "SHA256SUMS").read_text()
+    output = result.stdout + result.stderr
+    assert "allowlist" in output.lower()
+    assert "삭제하지 않음" in output
+
+
 @pytest.mark.parametrize(
     "manifest_text, expected_error",
     [

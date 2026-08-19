@@ -4,8 +4,7 @@
 화면을 보고 손으로 옮겨 적는 것이 유일한 경로다. 그래서 이 문서는 **옮겨 적을 양을 최소화**하는
 데 초점을 맞춘다 — 꼭 필요한 것만 있고, 각 항목이 무엇을 풀어주는지 이유가 붙어 있다.
 
-> 상태 (2026-08-20): 이 양식은 `v0.2.0` 릴리스 후보의 폐쇄망 acceptance용이다. 후보
-> 아티팩트와 문서는 준비됐지만, 아직 `v0.2.0` 태그나 GitHub Release는 만들지 않았다.
+> 이 양식은 폐쇄망 acceptance에서 core 아티팩트와 선택 vendor를 확인하는 데 사용한다.
 
 아래 **A → B → C** 순서로 진행하고, 마지막 [답변 양식](#답변-양식)만 채워 오면 된다.
 
@@ -89,12 +88,12 @@ mirror  skip  미설정  ~/.config/idk/mirror.toml (Phase 5)
 
 ## C. doctor 가 알 수 없는 것 — 물어봐야 아는 것들
 
-### C-1. 아티팩토리 (Phase 5 `idk mirror` 착수 조건)
+### C-1. 내부 패키지 미러 (Phase 5 `idk mirror` 착수 조건)
 
 이게 없으면 Phase 5 는 시작조차 불가능하다. **값 자체가 민감하면 형태만 알려줘도 된다**
-(예: "사내 도메인 1개, 경로는 /artifactory", "repo key 는 pypi-remote 스타일 문자열").
+(예: "내부 호스트 1개, 경로는 /package-mirror", "repo key 는 pypi-remote 스타일 문자열").
 
-- [ ] 아티팩토리 base URL — 예: `https://<host>/artifactory`
+- [ ] 내부 패키지 미러 base URL — 예: `https://<host>/package-mirror`
 - [ ] PyPI 저장소 2개의 repo key — 메인 / 별도
 - [ ] 인증 방식 — `~/.netrc` / 토큰(환경변수) / 익명 중 무엇인가
 - [ ] 웹 UI 말고 **REST 로 조회가 되는가** — 아래 한 줄로 확인된다
@@ -108,7 +107,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' <base_url>/api/pypi/<repo_key>/simple/
 
 ### C-2. 빌드 로그 (Phase 3 `idk build` acceptance)
 
-`idk build` CLI MVP는 합성 fixture로 구현되어 `v0.2.0` 후보에 포함됐다. **로그 파일 자체는
+`idk build` CLI MVP는 합성 fixture로 구현되어 v0.2.0 범위에 포함됐다. **로그 파일 자체는
 반출 불가**이므로, 이제 파서 설계에 필요한 것은 현지 acceptance를 위한 "형태"뿐이다.
 
 - [ ] 빌드 명령이 무엇인가 — `make -j8` / `cmake --build` / `qmake` 등
@@ -160,7 +159,7 @@ dnf list available xclip xsel libX11-devel libXmu-devel autoconf automake libtoo
   tools
   build
 
-[C-1] 아티팩토리
+[C-1] 내부 패키지 미러
   base URL 형태:
   PyPI repo key 2개:
   인증 방식:

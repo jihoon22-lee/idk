@@ -80,7 +80,7 @@ def test_load_missing_file_returns_default():
 
 
 def test_save_then_load_roundtrip():
-    data = {"artifactory": {"base_url": "https://artifactory.corp/artifactory"}}
+    data = {"artifactory": {"base_url": "https://mirror.example/package-mirror"}}
     path = config.save("mirror.toml", data)
     assert path.exists()
     assert config.load("mirror.toml") == data

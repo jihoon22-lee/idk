@@ -10,9 +10,9 @@
 
 **Spec:** `docs/superpowers/plans/2026-08-19-immediate-roadmap.md`의 `v0.2.0` 안정성 작업군, `docs/spec-ws-run.md`, `docs/spec-dt.md`
 
-> 상태 (2026-08-20): 설정·ws·dt·`config check` 작업과 문서 통합은 완료되어 통합 브랜치에
-> 반영됐다. 아래 단계는 완료 기록으로 보존하며, changelog 항목은 최종 `[0.2.0]` 섹션으로
-> 이동했다. `v0.2.0` 태그와 GitHub Release는 아직 만들지 않았다.
+> 완료 기록 (2026-08-20): 설정·ws·dt·`config check` 작업과 문서 통합은 완료되어 통합 브랜치에
+> 반영됐다. 아래 단계는 당시 구현·문서 통합 과정을 보존하며, changelog 항목은 최종 `[0.2.0]`
+> 섹션으로 이동했다.
 > 각 Task 제목의 상태 표기가 원래 단계별 체크리스트보다 현재 진행 상태의 기준이다.
 
 ## Global Constraints
@@ -321,8 +321,8 @@ Run: `./scripts/build-pyz.sh && ./scripts/smoke.sh`
 
 - [ ] **Step 3: 최종 changelog의 `[0.2.0]` 섹션을 확인하고 커밋한다**
 
-안정성·`config check` 변경은 최종 릴리스 준비 단계에서 `[0.2.0]` 섹션으로 이동했다. 중간
-버전과 태그는 만들지 않는다.
+안정성·`config check` 변경은 당시 최종 릴리스 준비 단계에서 `[0.2.0]` 섹션으로 이동했다.
+중간 버전은 만들지 않는 계획이었다.
 
 ```bash
 git add docs README.md CHANGELOG.md

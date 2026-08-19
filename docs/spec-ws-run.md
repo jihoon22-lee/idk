@@ -5,9 +5,8 @@
 - 배경과 우선순위: [plan.md](plan.md)
 - 구현 규약과 서브커맨드 추가 절차: [ARCHITECTURE.md](ARCHITECTURE.md)
 
-> 상태 (2026-08-20): `idk ws`와 `idk run`의 Phase 1 구현은 완료되어 `v0.2.0` 릴리스
-> 후보에 포함되어 있다. 이 문서는 동작 계약을 설명하는 명세이며, 아직 `v0.2.0` 태그나
-> GitHub Release는 만들지 않았다. `/` 검색처럼 명시된 후속 UX는 여전히 미구현이다.
+> `idk ws`와 `idk run`의 Phase 1 구현은 완료되어 v0.2.0 동작 계약에 포함되어 있다.
+> `/` 검색처럼 명시된 후속 UX는 여전히 미구현이다.
 
 ---
 
@@ -426,7 +425,7 @@ tmux 백엔드는 만들지 않되, 이 시그니처가 백엔드 경계가 된�
 | 7 | `snip/cli.py` (`ls`/`run`/`--print`/`--pane`) | ✅ `--pane` 이 실제 pane 생성 |
 | 8 | `ws/tui.py` | ✅ Enter attach 가 `execvp` 로 넘어가는지 |
 | 9 | `snip/tui.py` | ✅ 퍼지 검색 |
-| 10 | 문서 — GUIDE.md 명령표·설정 파일, CHANGELOG | ✅ v0.2.0 release-prep 문서 반영 |
+| 10 | 문서 — GUIDE.md 명령표·설정 파일, CHANGELOG | ✅ v0.2.0 문서 반영 완료 |
 
 **5번까지가 실사용 최소선이다.** TUI 없이 `idk ws up`/`attach` 만으로도 목적을 달성한다.
 

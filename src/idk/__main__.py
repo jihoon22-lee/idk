@@ -58,7 +58,7 @@ def doctor_cmd(  # 모듈 idk.doctor 와 이름이 겹치지 않게 _cmd 접미�
         bool, typer.Option("--brief", help="손으로 옮겨 적기 좋은 압축 출력 (폐쇄망용)")
     ] = False,
     net: Annotated[
-        bool, typer.Option("--net", help="mirror.toml 의 아티팩토리 접속까지 확인")
+        bool, typer.Option("--net", help="mirror.toml 의 내부 패키지 미러 접속까지 확인")
     ] = False,
     strict: Annotated[bool, typer.Option("--strict", help="fail 이 있으면 exit 1")] = False,
 ) -> None:

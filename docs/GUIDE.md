@@ -3,9 +3,6 @@
 설치와 명령어 사용법. 폐쇄망 반입 절차는 [closed-network-setup.md](closed-network-setup.md),
 내부 구조는 [ARCHITECTURE.md](ARCHITECTURE.md).
 
-> 현재 소스와 문서는 `v0.2.0` 릴리스 후보 준비 상태다. 통합 검증은 이 문서의 절차로
-> 진행할 수 있지만, 아직 `v0.2.0` 태그나 GitHub Release는 만들지 않았다.
-
 ---
 
 ## 설치
@@ -66,7 +63,7 @@ idk doctor
 ```
 
 OS/커널/glibc, python 후보와 각각의 절대경로, zellij·xclip·컴파일러, TERM·LANG,
-설정 파일, 아티팩토리 미러 접속을 점검한다.
+설정 파일, 내부 패키지 미러 접속을 점검한다.
 
 **진단 도구이므로 경고나 미설치 항목이 있어도 exit 0 이다.** 스크립트에서 실패로 다루려면
 `--strict` 를 쓴다 (`fail` 이 하나라도 있으면 exit 1).
@@ -108,7 +105,7 @@ mirror  skip  미설정  ~/.config/idk/mirror.toml
 | `fail` | 고쳐야 한다 |
 | `skip` | 확인하지 않았다 (설정이 없거나 `--net` 미지정) |
 
-`--net` 을 주면 `mirror.toml` 의 아티팩토리에 실제로 접속해 본다. 기본은 네트워크를 건드리지 않는다.
+`--net` 을 주면 `mirror.toml` 의 내부 패키지 미러에 실제로 접속해 본다. 기본은 네트워크를 건드리지 않는다.
 네트워크 검사에서 2xx는 `ok`, 401/403은 인증 실패 `fail`, 그 밖의 HTTP 상태는 `warn`,
 전송·URL·인증 설정 오류는 `fail`이다.
 
@@ -180,7 +177,7 @@ idk env --bindir /opt/tools/bin
 
 | 파일 | 쓰는 곳 | 상태 |
 |---|---|---|
-| `mirror.toml` | 아티팩토리 접속 정보 | `doctor --net` 이 읽는다. `idk mirror` 는 Phase 5 |
+| `mirror.toml` | 내부 패키지 미러 접속 정보 | `doctor --net` 이 읽는다. `idk mirror` 는 Phase 5 |
 | `workspaces.toml` | 워크스페이스 정의 | `idk ws` |
 | `snippets.toml` | 명령 스니펫 | `idk run` |
 | `logview.toml` | 로그 하이라이팅 규칙 | Phase 4 |
@@ -189,8 +186,8 @@ idk env --bindir /opt/tools/bin
 
 ```toml
 [artifactory]
-base_url = "https://artifactory.example/artifactory"
-auth     = "netrc"          # 또는 token_env = "ARTIFACTORY_TOKEN"
+base_url = "https://mirror.example/package-mirror"
+auth     = "netrc"          # 또는 token_env = "MIRROR_TOKEN"
 ```
 
 인증은 `~/.netrc` 를 읽는다. 별도 토큰 파일을 만들지 않는다.
@@ -208,7 +205,7 @@ percent encoding으로 적는다. 설정 파일이나 설정 디렉터리가 실
 인증값 검증 실패도 원래 URL·토큰을 오류 상세에 재출력하지 않는다.
 
 > HTTP 는 stdlib `urllib` 로만 나간다. `requests`/`httpx` 는 `certifi` 번들 CA 를 쓰기 때문에
-> 사내 TLS 인터셉션 환경에서 접속이 깨진다. 시스템 CA 를 쓰는 것이 이 도구의 전제다.
+> 내부 TLS 인터셉션 환경에서 접속이 깨진다. 시스템 CA 를 쓰는 것이 이 도구의 전제다.
 
 리다이렉트에서도 인증정보를 보호한다. `Authorization` 헤더(`netrc`·토큰·호출자가 직접 준
 헤더)는 **동일 origin**(scheme·호스트·유효 포트)으로 이동할 때만 유지되고, 다른 origin으로
@@ -353,7 +350,7 @@ idk dt tui              # 대화형 입력/출력
 | 명령 | Phase | 무엇을 할 것인가 |
 |---|---|---|
 | `idk log` | 4 | 여러 로그를 한 화면에서 tail·필터·하이라이팅 |
-| `idk mirror` | 5 | 패키지가 사내 미러에 있는지 조회 |
+| `idk mirror` | 5 | 패키지가 내부 미러에 있는지 조회 |
 
 ---
 

@@ -1,4 +1,4 @@
-"""아티팩토리 미러 설정 모델."""
+"""내부 패키지 미러 설정 모델."""
 
 from .model import MirrorConfig, load
 

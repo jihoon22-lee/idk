@@ -3,9 +3,8 @@
 > **이 저장소의 작업 계획서(정본)다.** Phase 0부터 순서대로 진행한다.
 > 규약은 `AGENTS.md` 에 요약되어 있고, 상세 근거는 이 문서에 있다.
 
-> 상태 (2026-08-20): Phase 0~3과 v0.2.0 보안·안정성 작업은 통합 브랜치에 반영되어
-> 릴리스 후보를 준비 중이다. 핵심 실행 아티팩트는 `dist/idk.pyz` 한 개이며, 아직
-> `v0.2.0` 태그나 GitHub Release는 만들지 않았다.
+> Phase 0~3과 v0.2.0 보안·안정성·build MVP 작업은 통합 브랜치에 반영되어 있다.
+> 핵심 실행 아티팩트는 `dist/idk.pyz` 한 개이며, ws/run pane/clipboard용 vendor는 선택 입력이다.
 
 ## Context
 
@@ -17,8 +16,8 @@
 | glibc | 2.39 | 2.28 |
 | Python | 3.12 (apt) | **기본 python3는 구버전**. 3.10을 별도 경로에 설치하고 `.csh` 환경파일을 source해 PATH 추가 |
 | rustc / docker | 있음 (apt) | **없음** |
-| 패키지 | apt + 사내 아티팩토리 미러 | 사내 아티팩토리 미러 (docker/npm/pypi/maven/rpm/cargo, **publish 불가**) |
-| git | 공개 GitHub **pull 가능 / push 차단**, 사내 GHE | 사내 GHE (외부와 완전 분리) |
+| 패키지 | apt + 내부 패키지 미러 | 내부 패키지 미러 (docker/npm/pypi/maven/rpm/cargo, **publish 불가**) |
+| git | 공개 GitHub **pull 가능 / push 차단**, 내부 Git 서버 | 내부 Git 서버 (외부와 완전 분리) |
 | 기본 셸 | bash | **tcsh** |
 | 주력 스택 | (구현은 대부분 LLM이 수행) | C++ Qt, Python |
 
@@ -39,9 +38,9 @@ devbox(Tauri/Windows)와는 별도 저장소이며 코드를 공유하지 않는
 |---|---|---|
 | **GUI 앱 안 만듦** | CLI/TUI 전용 | RHEL 8에 `libsoup3`/`webkit2gtk-4.1` 부재로 Tauri v2 구동 불가. ETX(X11 리모팅)에서 WebView는 체감 지연이 큼 |
 | **언어: Python 3.10 하한** | `requires-python = ">=3.10"` | 폐쇄망 설치 버전이 3.10. `tomllib`(3.11+) 금지 → `tomli` 사용. ruff `target-version = "py310"` 으로 문법 위반 차단 |
-| **배포: 핵심 단일 zipapp** | `shiv` 로 `idk.pyz` 생성 | 필수 핵심 반입 아티팩트 1개, 의존성 내장이라 사내 PyPI 미러 상태와 무관. ws/run pane/clipboard용 vendor는 선택 반입한다. **폐쇄망 안에서 소스를 풀어 긴급 수정 가능** — RHEL에 rustc가 없어 musl 바이너리는 현지 재빌드가 불가능한 것이 결정타 |
+| **배포: 핵심 단일 zipapp** | `shiv` 로 `idk.pyz` 생성 | 필수 핵심 반입 아티팩트 1개, 의존성 내장이라 내부 패키지 미러 상태와 무관. ws/run pane/clipboard용 vendor는 선택 반입한다. **폐쇄망 안에서 소스를 풀어 긴급 수정 가능** — RHEL에 rustc가 없어 musl 바이너리는 현지 재빌드가 불가능한 것이 결정타 |
 | **순수 파이썬 의존성만** | `textual`, `rich`, `typer`, `tomli`, `tomli-w` | 전부 `py3-none-any` 휠. 아키텍처·glibc 무관 |
-| **HTTP는 stdlib `urllib`** | `requests`/`httpx` 금지 | 이 둘은 `certifi` 번들 CA를 사용해 **사내 TLS 인터셉션 CA를 신뢰하지 않아 아티팩토리 접속이 깨진다.** stdlib은 시스템 CA를 사용 |
+| **HTTP는 stdlib `urllib`** | `requests`/`httpx` 금지 | 이 둘은 `certifi` 번들 CA를 사용해 **내부 TLS 인터셉션 CA를 신뢰하지 않아 내부 패키지 미러 접속이 깨진다.** stdlib은 시스템 CA를 사용 |
 | **멀티플렉서: zellij** | musl 정적 바이너리 반입 (승인됨) | 양쪽 버전 완전 일치. tmux는 RHEL8=2.7 / Ubuntu=3.4 로 6년 차이라 설정 분기 비용이 큼. 레이아웃이 KDL 선언 파일이라 작성할 코드가 거의 없고 세션 매니저 UI가 내장 |
 | **umbrella CLI `idk`** | `idk <subcommand>` 단일 진입점 | 필수 핵심 실행 아티팩트를 1개로 유지하기 위함 |
 
@@ -78,7 +77,7 @@ idk/
 │  │  └─ backends/zellij.py  # KDL 레이아웃 생성 + zellij CLI 호출
 │  ├─ dt/                    # 개발 도구 모음 (의존성 0, stdlib만)
 │  ├─ build/                 # 빌드 에러 네비게이터
-│  ├─ mirror/                # 아티팩토리 미러 검색기
+│  ├─ mirror/                # 내부 패키지 미러 검색기
 │  ├─ logview/               # 멀티 로그 뷰어
 │  └─ snip/                  # 명령 런처(스니펫)
 ├─ tests/
@@ -132,8 +131,8 @@ exit 1
 
 ```
 [집 PC WSL 에서 개발]  →  공개 GitHub (신규 repo: idk)
-                              ↓ git pull          (사내 PC WSL — pull만 가능, push 차단이라 무관)
-                        [사내 WSL 에서 빌드]
+                              ↓ git pull          (내부 PC WSL — pull만 가능, push 차단이라 무관)
+                        [내부 WSL 에서 빌드]
                           ./scripts/build-pyz.sh
                           ./scripts/fetch-vendor.sh  # 선택 vendor (ws/클립보드용)
                               ↓ 반입 (core only: 1개; 두 vendor 포함 full bundle: 4개)
@@ -253,16 +252,16 @@ editor 실행, 클립보드 복사다. 실제 로그 반출을 전제하지 않�
 - 뷰 모드 2종: 시간순 merge / 분할
 - 대용량 대비: 파일 끝에서부터 읽고 링버퍼로 라인 수 상한
 
-### 6. `idk mirror` — 아티팩토리 미러 검색기
+### 6. `idk mirror` — 내부 패키지 미러 검색기
 
-"이 패키지가 사내 미러에 있나?"를 매번 웹 UI에서 찾는 것을 대체. 폐쇄망 특화 가치가 가장 크다.
-사내 PyPI 저장소가 **메인 + 별도 2개**이므로 개별/동시 조회를 모두 지원한다.
+"이 패키지가 내부 미러에 있나?"를 매번 웹 UI에서 찾는 것을 대체. 폐쇄망 특화 가치가 가장 크다.
+내부 PyPI 저장소가 **메인 + 별도 2개**이므로 개별/동시 조회를 모두 지원한다.
 
 `~/.config/idk/mirror.toml`:
 ```toml
 [artifactory]
-base_url = "https://artifactory.corp/artifactory"
-auth     = "netrc"          # 또는 token_env = "ARTIFACTORY_TOKEN"
+base_url = "https://mirror.example/package-mirror"
+auth     = "netrc"          # 또는 token_env = "MIRROR_TOKEN"
 
 [[repo]]
 name = "pypi-main"
@@ -273,8 +272,8 @@ default = true
 [[repo]]
 name = "pypi-extra"
 eco  = "pypi"
-key  = "pypi-internal"
-# base_url = "https://other.corp/artifactory"   # 서버가 다르면 개별 override
+key  = "pypi-extra"
+# base_url = "https://mirror.example/other"   # 서버가 다르면 개별 override
 
 [[repo]]
 name = "npm"
@@ -292,9 +291,9 @@ idk mirror requests --diff               # 두 pypi 저장소 버전 비교
 idk mirror pipconf                       # index-url + extra-index-url 생성
 ```
 
-- **아티팩토리 독자 API(AQL)가 아니라 각 생태계 표준 엔드포인트를 쓴다** — 추가 권한 없이 읽기 토큰만으로 동작:
+- **미러 전용 API가 아니라 각 생태계 표준 엔드포인트를 쓴다** — 추가 권한 없이 읽기 토큰만으로 동작:
   PyPI simple index / npm registry JSON / cargo sparse index / `maven-metadata.xml` / rpm repodata
-- HTTP는 `httpc.py`(stdlib urllib)로 통일 — 사내 CA 문제 회피
+- HTTP는 `httpc.py`(stdlib urllib)로 통일 — 내부 CA 문제 회피
 - 결과 테이블에 저장소 이름 컬럼을 둬 "어느 쪽에 있는지" 즉시 보이게
 - WSL에서도 동작하므로 폐쇄망 작업 전 사전 확인용으로 쓴다
 
@@ -326,7 +325,7 @@ OS/커널/glibc/Python/컴파일러/zellij/xclip/locale/TERM + 미러 접속 가
    ./configure --prefix=$HOME/.local && make && make install
    ```
    빌드 재료(`libX11-devel`, `libXmu-devel`, 소스 형태에 따라 `autoconf`/`automake`/`libtool`)가
-   사내 rpm 미러에 있는지 먼저 확인.
+   내부 rpm 미러에 있는지 먼저 확인.
 3. `idk doctor` 가 xclip 유무를 리포트하고, 없으면 zellij `copy_command` 설정을 빼서
    **Shift+드래그 경로로 자동 폴백**한다.
 
@@ -345,13 +344,14 @@ OS/커널/glibc/Python/컴파일러/zellij/xclip/locale/TERM + 미러 접속 가
 | **0** ✅ | 저장소 스캐폴딩, `pyproject.toml`, `config.py`/`env.py`/`httpc.py`, `idk doctor`, `idk env`, `build-pyz.sh`/`smoke.sh`/`fetch-vendor.sh`, CI | 완료. sh 프리앰블 폴리글롯 검증 통과 — 2파일 분리 불필요 |
 | **1** ✅ | `idk ws` + `idk run` | 완료 (v0.1.0~0.1.1). 모델·KDL·백엔드·CLI·TUI. 상세 명세: [spec-ws-run.md](spec-ws-run.md) |
 | **2** ✅ | `idk dt` | 완료 (v0.1.0~0.1.1). 13개 도구 + TUI. `src/idk/dt/` 의존성 0. 상세 명세: [spec-dt.md](spec-dt.md) |
-| **3** ✅ | `idk build` CLI MVP | 파일/stdin streaming parser + plain/JSON + 필터/exit code (v0.2.0 릴리스 후보 준비 완료) |
+| **3** ✅ | `idk build` CLI MVP | 파일/stdin streaming parser + plain/JSON + 필터/exit code (v0.2.0 구현·문서 완료) |
 | **4** | `idk log` | |
-| **5** | `idk mirror` | 실제 아티팩토리 URL·repo key 확보 후 |
+| **5** | `idk mirror` | 실제 내부 미러 URL·repo key 확보 후 |
 
-**Phase 0~3을 `v0.2.0` 1차 반입 후보로 삼고**, 폐쇄망에서 실제로 써본 뒤 4~5의 우선순위를
-조정한다. Phase 1·2의 초기 반입은 `v0.1.0`/`v0.1.1`에서 끝났고, 이번 후보는 보안·안정성
-보강과 `idk build` MVP를 함께 포함한다. 태그와 GitHub Release는 반입 검증 뒤에 별도로 만든다.
+**Phase 0~3은 `v0.2.0` 범위에 포함되며**, 폐쇄망에서 실제로 써본 뒤 4~5의 우선순위를
+조정한다. Phase 1·2의 초기 반입은 `v0.1.0`/`v0.1.1`에서 끝났고, v0.2.0은 보안·안정성
+보강과 `idk build` MVP를 함께 포함한다. 배포 시 버전 태그와 릴리스 산출물은 반입 검증 및
+최종 승인 절차를 거쳐 별도로 만든다.
 
 ---
 
@@ -435,7 +435,7 @@ WSL Ubuntu 24.04 와 폐쇄망 RHEL 8.10(ETX 접속) 양쪽에서 동일하게 �
 - **Python 3.10 하한.** 3.11+ 문법 금지. `tomllib` 대신 `tomli`.
 - **의존성은 순수 파이썬(py3-none-any)만.** 네이티브 확장 금지.
 - **HTTP는 stdlib `urllib`(src/idk/httpc.py) 만 사용.** requests/httpx 금지 —
-  certifi 번들 CA 때문에 사내 TLS 인터셉션 환경에서 접속이 깨진다.
+  certifi 번들 CA 때문에 내부 TLS 인터셉션 환경에서 접속이 깨진다.
 - **GUI 금지.** CLI/TUI(textual)만.
 - 산출물은 `shiv` 단일 zipapp `dist/idk.pyz` 하나(필수 핵심 실행 아티팩트)다. zellij/xclip은
   필요한 기능에서만 별도 vendor로 반입한다.

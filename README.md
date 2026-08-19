@@ -4,9 +4,6 @@
 핵심 실행 아티팩트 한 개(`idk.pyz`)로 배포된다. `idk ws`와 `idk run --pane`에는 선택
 zellij vendor가, `copy_on_select`에는 선택 xclip vendor가 추가로 필요하다.
 
-> 현재 소스와 문서는 `v0.2.0` 릴리스 후보 준비 상태다. 통합 검증과 문서 정리는 끝났지만
-> 아직 `v0.2.0` 태그나 GitHub Release는 만들지 않았다.
-
 ```bash
 $ idk doctor --brief
 idk 0.2.0 brief
@@ -29,7 +26,7 @@ mirror  skip  미설정  ~/.config/idk/mirror.toml
 | 파일 반입이 번거롭고 심사 대상 | **핵심 zipapp 아티팩트 1개** — 의존성까지 한 파일에 넣고, ws/clipboard용 vendor는 선택 반입한다 |
 | 기본 `python3`가 구버전, 3.10은 `.csh`를 source해야 잡힘 | zipapp 앞에 **`/bin/sh` 런처**를 붙여 3.10+를 스스로 찾는다 |
 | rustc·docker 없음, glibc 2.28 | **순수 파이썬 의존성만** (`py3-none-any`). 네이티브 확장 금지 |
-| 사내 TLS 인터셉션 | HTTP는 **stdlib `urllib`** — `requests`/`httpx`는 `certifi` 번들 CA를 써서 깨진다 |
+| 내부 TLS 인터셉션 | HTTP는 **stdlib `urllib`** — `requests`/`httpx`는 `certifi` 번들 CA를 써서 깨진다 |
 | ETX(X11 리모팅)에서 WebView가 느리고, RHEL 8에 webkit2gtk 부재 | **GUI 안 만든다.** CLI/TUI만 |
 | 파일 반출 불가 | 환경 정보는 `doctor --brief`를 **손으로 옮겨 적어** 가져온다 |
 
@@ -53,7 +50,7 @@ idk doctor
 
 핵심 CLI와 `idk build`만 사용하면 `dist/idk.pyz` 한 개가 필요한 전부다. `idk ws`/`idk run
 --pane`에는 zellij vendor가, `copy_on_select`에는 xclip vendor가 필요하다. 두 선택 구성요소를
-`fetch-vendor.sh` 실행은 vendor 파일 3개(두 아카이브와 `vendor/SHA256SUMS`)를 만들며,
+모두 준비하는 `fetch-vendor.sh` 실행은 vendor 파일 3개(두 아카이브와 `vendor/SHA256SUMS`)를 만들며,
 `idk.pyz`를 더한 전체 준비 bundle은 4개 파일이다. 무결성 파일은 vendor 아카이브와 함께
 반입해야 한다.
 
@@ -79,9 +76,9 @@ idk doctor
 | `idk ws` | ✅ | 워크스페이스·터미널 매니저 (확인 modal, EXITED 재생성, zellij 백엔드) |
 | `idk run` | ✅ | 명령 런처(스니펫) |
 | `idk dt` | ✅ | 개발 도구 모음 (JSON·Base64·hash·JWT·diff…) |
-| `idk build` | ✅ MVP (v0.2.0 준비 완료) | 파일/stdin 빌드 로그에서 진단 추출 (plain/JSON) |
+| `idk build` | ✅ MVP (v0.2.0) | 파일/stdin 빌드 로그에서 진단 추출 (plain/JSON) |
 | `idk log` | 📋 Phase 4 | 멀티 로그 뷰어 |
-| `idk mirror` | 📋 Phase 5 | 사내 아티팩토리 미러 검색 |
+| `idk mirror` | 📋 Phase 5 | 내부 패키지 미러 검색 |
 
 ### `idk build` — 빌드 진단 MVP
 

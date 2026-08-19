@@ -1,8 +1,8 @@
 """stdlib urllib 기반 HTTP 클라이언트.
 
 requests/httpx 를 쓰지 않는 이유: 두 라이브러리는 certifi 가 번들한 CA 목록을 쓴다.
-사내망은 TLS 를 인터셉션하므로 사설 루트 CA 가 시스템 신뢰 저장소에만 있고 certifi 에는
-없다 → 아티팩토리 접속이 통째로 깨진다. `ssl.create_default_context()` 는 OpenSSL 의
+내부망은 TLS 를 인터셉션하므로 사설 루트 CA 가 시스템 신뢰 저장소에만 있고 certifi 에는
+없다 → 내부 패키지 미러 접속이 통째로 깨진다. `ssl.create_default_context()` 는 OpenSSL 의
 기본 경로(시스템 CA)를 쓰므로 그 문제가 없다.
 """
 

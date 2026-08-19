@@ -2,9 +2,6 @@
 
 폐쇄망(RHEL 8.10, ETX 접속, tcsh)에 `idk` 를 올리는 절차. **전 과정에서 root 권한이 필요 없다.**
 
-> 상태 (2026-08-20): `v0.2.0` 릴리스 후보의 반입 절차다. `dist/idk.pyz` 빌드·smoke와
-> 문서 정리는 준비됐지만, 아직 `v0.2.0` 태그나 GitHub Release는 만들지 않았다.
-
 > **환경 정보를 확인해 오는 것이 목적이라면** [env-survey.md](env-survey.md) 를 볼 것.
 > 이 문서는 설치 절차만 다룬다.
 
@@ -39,12 +36,14 @@ xclip은 `copy_on_select`에만 필요하며, `SHA256SUMS`는 vendor 아카이�
 
 | 파일 | 용도 |
 |---|---|
-| `dist/idk.pyz` (필수) | 도구 본체 (의존성 내장, 사내 PyPI 미러 상태와 무관) |
+| `dist/idk.pyz` (필수) | 도구 본체 (의존성 내장, 내부 패키지 미러 상태와 무관) |
 | `vendor/zellij-no-web-x86_64-unknown-linux-musl.tar.gz` (선택 1/3) | `ws`/`run --pane` 멀티플렉서. musl 정적 링크라 glibc 2.28 과 무관 |
 | `vendor/xclip-0.13.tar.gz` (선택 2/3) | `copy_on_select` 클립보드 브릿지 소스 (현지 빌드) |
 | `vendor/SHA256SUMS` (vendor를 반입하면 필수 3/3) | 위 두 아카이브와 함께 반입하는 무결성 파일 |
 
 전체 vendor 세트를 반입한 뒤 `(cd vendor && sha256sum -c SHA256SUMS)`로 무결성을 확인한다.
+재사용한 `vendor/`에 남은 다른 `.tar.gz`는 삭제하지 않으며, `fetch-vendor.sh`의 allowlist와
+`SHA256SUMS`에는 포함하지 않는다. 반입할 때는 위에 열거한 3개 파일만 선택한다.
 
 > zellij 는 committed checksum manifest가 승인한 **no-web** 빌드만 받는다. 내장 웹서버가 없어
 > 반입 심사에서 설명하기 쉽고 4MB 작다. `ZELLIJ_FLAVOR=full`을 포함한 다른 flavor는
@@ -84,7 +83,7 @@ idk doctor
 
 ## 3. 확인 항목
 
-- `idk --version` 이 `idk 0.2.0` → 후보 아티팩트와 문서 버전이 일치한다는 뜻
+- `idk --version` 이 `idk 0.2.0` → 아티팩트와 문서 버전이 일치한다는 뜻
 - `idk doctor` 의 `python / running` 이 3.10 이상 → 런처가 올바른 인터프리터를 골랐다는 뜻
 - `terminal / locale` 이 UTF-8 → 아니면 TUI 박스 문자가 깨진다
 - `tools / zellij` 가 ok
@@ -121,6 +120,6 @@ autoreconf -i          # git 아카이브라 configure 가 없으면
 ./configure --prefix=$HOME/.local && make && make install
 ```
 
-`libX11-devel`, `libXmu-devel` (+ `autoconf`/`automake`/`libtool`) 이 사내 rpm 미러에 있어야 한다.
+`libX11-devel`, `libXmu-devel` (+ `autoconf`/`automake`/`libtool`) 이 내부 rpm 미러에 있어야 한다.
 없으면 그냥 Shift+드래그를 쓴다 — `idk doctor` 가 xclip 부재를 감지하면 zellij `copy_command`
 설정을 빼서 자동으로 그 경로로 폴백한다.

@@ -293,7 +293,7 @@ def test_ssl_context_verifies():
 
 
 def test_ssl_context_uses_system_trust_store():
-    """certifi 번들이 아니라 시스템 신뢰 저장소를 써야 사내 TLS 인터셉션 환경에서 살아남는다.
+    """certifi 번들이 아니라 시스템 신뢰 저장소를 써야 내부 TLS 인터셉션 환경에서 살아남는다.
 
     `ctx.get_ca_certs()` 로는 확인할 수 없다 — CA 가 capath(해시 디렉터리)로 제공되면
     OpenSSL 이 지연 로딩해서 핸드셰이크가 멀쩡히 되는데도 빈 리스트가 나온다.
