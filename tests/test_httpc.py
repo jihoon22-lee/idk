@@ -216,11 +216,31 @@ def test_https_to_http_redirect_is_rejected():
     [
         ("HTTPS://Example.COM/path", ("https", "example.com", 443)),
         ("http://Example.COM:80/path", ("http", "example.com", 80)),
+        ("http://Example.COM:0/path", ("http", "example.com", 0)),
         ("https://Example.COM:444/path", ("https", "example.com", 444)),
     ],
 )
 def test_origin_normalizes_scheme_hostname_and_effective_port(url, expected):
     assert httpc.origin(url) == expected
+
+
+def test_explicit_port_zero_is_cross_origin_and_strips_authorization():
+    source = "http://example.test/"
+    target = "http://example.test:0/target"
+    assert httpc.origin(source) != httpc.origin(target)
+
+    req = Request(source, headers={"Authorization": "Bearer zero-port"})
+    redirected = httpc.SafeRedirectHandler().redirect_request(
+        req,
+        None,
+        302,
+        "Found",
+        {},
+        target,
+    )
+
+    assert redirected is not None
+    assert redirected.get_header("Authorization") is None
 
 
 def test_basic_auth_header(server):

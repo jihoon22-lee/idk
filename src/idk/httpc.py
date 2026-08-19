@@ -37,7 +37,7 @@ def origin(url: str) -> tuple[str, str, int | None]:
     """URL 의 scheme, hostname, 유효 port 로 origin 을 정규화한다."""
     parsed = urllib.parse.urlsplit(url)
     scheme = parsed.scheme.lower()
-    port = parsed.port or {"http": 80, "https": 443}.get(scheme)
+    port = parsed.port if parsed.port is not None else {"http": 80, "https": 443}.get(scheme)
     return scheme, (parsed.hostname or "").lower(), port
 
 
