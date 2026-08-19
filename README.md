@@ -68,9 +68,30 @@ idk doctor
 | `idk ws` | ✅ | 워크스페이스·터미널 매니저 (확인 modal, EXITED 재생성, zellij 백엔드) |
 | `idk run` | ✅ | 명령 런처(스니펫) |
 | `idk dt` | ✅ | 개발 도구 모음 (JSON·Base64·hash·JWT·diff…) |
-| `idk build` | 📋 Phase 3 | 빌드 에러 네비게이터 |
+| `idk build` | ✅ MVP | 파일/stdin 빌드 로그에서 진단 추출 (plain/JSON) |
 | `idk log` | 📋 Phase 4 | 멀티 로그 뷰어 |
 | `idk mirror` | 📋 Phase 5 | 사내 아티팩토리 미러 검색 |
+
+### `idk build` — 빌드 진단 MVP
+
+gcc/clang/CMake/make/Qt 빌드 로그를 파일이나 파이프에서 한 줄씩 읽어 진단만 출력한다. 입력은
+`--file` 또는 stdin 중 정확히 하나여야 한다. 터미널에서 입력 없이 실행하거나, `--file`과
+리디렉션된 stdin을 함께 주면 exit 2다.
+
+```bash
+idk build --file build.log
+cat build.log | idk build --format json
+idk build --file build.log --severity warning
+idk build --file build.log --severity error --exit-code
+```
+
+기본 `plain` 출력은 `path:line:column: severity: message` 형식이고, `json`은 `total_lines`,
+`diagnostic_count`, `diagnostics`(path/line/column/severity/message/context/tool) 필드를 갖는다.
+`--severity error`는 fatal/error, `warning`은 warning만, `all`은 note까지 포함한다. `--exit-code`는
+필터 전 전체 결과에 fatal/error가 있으면 exit 1로 끝내며, 출력 필터와 독립적이다.
+
+MVP에는 `idk build -- <command>` 실행 감싸기, TUI, 소스 미리보기, editor 실행, 클립보드 복사가
+포함되지 않는다. 실제 빌드 실행과 대화형 탐색은 후속 범위다.
 
 사용법은 [docs/GUIDE.md](docs/GUIDE.md).
 

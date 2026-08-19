@@ -211,6 +211,7 @@ src/idk/
 ├─ httpc.py        stdlib urllib HTTP 클라이언트 (netrc, 시스템 CA)
 ├─ doctor.py       진단 — Check 목록을 모아 표/JSON/brief 로 렌더
 ├─ cli_config.py   `idk config check` CLI 배선 (검사 registry, JSON/표 출력)
+├─ cli_build.py    `idk build` CLI 배선 (입력 선택, 필터, exit code, plain/JSON)
 ├─ cli_dt.py       `idk dt` CLI 배선 (typer). 공통 I/O 규약 담당
 ├─ dt_tui.py       `idk dt tui` — 입력/출력 2패널 (textual)
 ├─ mirror/         mirror.toml 최소 모델·인증 해석
@@ -246,7 +247,11 @@ src/idk/
 `build/model.py`, `build/parsers.py`, and `build/render.py` form the internal build-diagnostic
 core. The parser consumes logs one line at a time; the renderer emits plain text or a
 JSON-ready payload without importing Typer, Rich, or Textual. Fixtures are synthetic by
-design because closed-network logs cannot be exported. The root CLI wiring is a later step.
+design because closed-network logs cannot be exported. `cli_build.py` is the Typer-only root
+adapter: it selects exactly one file/stdin source, passes the source iterator directly to the
+parser, applies the output severity filter, and computes optional exit status from the complete
+result. The MVP intentionally does not execute a build command or provide TUI/source/editor/
+clipboard integrations.
 
 ### 버전은 한 곳에만
 
@@ -285,6 +290,8 @@ Phase 1~5 의 앱들은 모두 이 절차를 따른다.
 
    서브커맨드가 여럿이면 `typer.Typer()` 를 만들어 `app.add_typer(ws_app, name="ws")`.
    umbrella CLI 를 유지하는 것이 목적이므로 **별도 진입점을 만들지 않는다.**
+   `idk build`처럼 단일 명령은 CLI 배선 모듈의 함수를 `app.command("build")`로 등록하고,
+   순수 parser/model/render 모듈에는 Typer를 import하지 않는다.
 3. **설정이 필요하면** `config.load("<name>.toml")`. 파일이 없을 때 기본값으로 동작해야 한다.
 4. **테스트를 쓴다** — 순수 함수(파서·렌더러)는 단위 테스트로, CLI 는 `typer.testing.CliRunner`.
 5. **무거운 import 는 함수 안에서** 한다. `doctor.render()` 가 `rich` 를 함수 안에서 import 하는

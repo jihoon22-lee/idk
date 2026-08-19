@@ -217,13 +217,19 @@ Rust 원본(`apps/developer-toolbox/src-tauri/src/commands/tools.rs`)의 로직�
 
 C++ Qt 빌드 로그는 수천 줄인데 필요한 건 에러 몇 개다.
 
-- 입력 3가지: `idk build -- make -j8` (감싸서 캡처) / `idk build --file build.log` / stdin 파이프
+- MVP 입력 2가지: `idk build --file build.log` / stdin 파이프. 파일과 non-TTY stdin을 함께
+  주거나 입력 없이 TTY에서 실행하면 exit 2로 거부한다.
 - 파서: gcc·clang 진단(`file:line:col: error|warning: msg`), `In file included from` 체인,
   `required from here` 템플릿 인스턴스화 체인, make/cmake 마커, Qt `moc`/`uic` 에러
-- **템플릿 에러 접기**: `required from` 체인을 진단 1건으로 묶고 펼치기 가능하게
-- TUI: 좌측 파일별 진단 트리 / 우측 소스 발췌 + 전체 메시지, `e`/`w` 로 에러·경고 필터,
-  Enter로 `$EDITOR +<line> <file>`, `y`로 `file:line` 복사
+- **템플릿 context 보존**: `required from` 체인을 다음 primary 진단의 context로 붙이고,
+  note 진단은 독립 진단으로 보존한다.
+- plain/JSON 출력과 `--severity all|error|warning`, `--exit-code`를 제공한다. error 필터는
+  fatal/error를 포함하며 exit code 판정은 필터 전 결과를 사용한다.
 - 파서는 `build/parsers.py` 에 순수 함수로 분리해 실제 빌드 로그 fixture 기반 단위 테스트
+
+이번 MVP의 명시적 제외 범위는 `idk build -- <command>` 실행 감싸기, TUI, 소스 미리보기,
+editor 실행, 클립보드 복사다. 실제 로그 반출을 전제하지 않고 합성 fixture로 시작하며, 현지
+환경의 로그 정확도 확인은 `idk build --file`로 한다.
 
 ### 5. `idk log` — 멀티 로그 뷰어
 
@@ -327,12 +333,12 @@ OS/커널/glibc/Python/컴파일러/zellij/xclip/locale/TERM + 미러 접속 가
 | **0** ✅ | 저장소 스캐폴딩, `pyproject.toml`, `config.py`/`env.py`/`httpc.py`, `idk doctor`, `idk env`, `build-pyz.sh`/`smoke.sh`/`fetch-vendor.sh`, CI | 완료. sh 프리앰블 폴리글롯 검증 통과 — 2파일 분리 불필요 |
 | **1** ✅ | `idk ws` + `idk run` | 완료 (v0.1.0~0.1.1). 모델·KDL·백엔드·CLI·TUI. 상세 명세: [spec-ws-run.md](spec-ws-run.md) |
 | **2** ✅ | `idk dt` | 완료 (v0.1.0~0.1.1). 13개 도구 + TUI. `src/idk/dt/` 의존성 0. 상세 명세: [spec-dt.md](spec-dt.md) |
-| **3** | `idk build` | 파서 단위 테스트 비중 큼 |
+| **3** ✅ | `idk build` CLI MVP | 파일/stdin streaming parser + plain/JSON + 필터/exit code |
 | **4** | `idk log` | |
 | **5** | `idk mirror` | 실제 아티팩토리 URL·repo key 확보 후 |
 
-**Phase 0~2를 1차 반입 대상으로 삼고**, 폐쇄망에서 실제로 써본 뒤 3~5의 우선순위를 조정한다.
-(Phase 1·2 는 `v0.1.0` 으로 반입 가능. 실사용 피드백 반영분은 `v0.1.1`.)
+**Phase 0~3을 다음 1차 반입 후보로 삼고**, 폐쇄망에서 실제로 써본 뒤 4~5의 우선순위를 조정한다.
+(Phase 1·2 는 `v0.1.0` 으로 반입 가능했고, 실사용 피드백 반영분은 `v0.1.1`이다.)
 
 ---
 

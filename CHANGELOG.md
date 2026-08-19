@@ -10,8 +10,10 @@
 ## [Unreleased]
 
 ### Added
-- **빌드 진단 core** — 합성 fixture 경계를 전제로 gcc/clang·CMake·make·Qt 로그를 streaming parser로
-  읽고, 위치·context를 보존한 plain/JSON-ready 결과로 변환한다. root `idk build` CLI 배선은 후속 작업이다.
+- **`idk build` CLI MVP** — 합성 fixture 경계를 전제로 gcc/clang·CMake·make·Qt 로그를 파일 또는
+  stdin에서 streaming parser로 읽고, 위치·context를 보존한 plain/JSON 결과를 출력한다. `--severity`
+  필터와 전체 결과를 기준으로 하는 `--exit-code`를 제공한다. `-- <command>` 실행 감싸기, TUI,
+  소스 미리보기/editor/클립보드 연동은 후속 범위다.
 
 ### Fixed
 - **`idk config check` 추가** — 알려진 TOML 설정을 고정된 순서로 검사해 `skip`/`ok`/`warn`/`fail`
