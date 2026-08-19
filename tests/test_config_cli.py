@@ -1,0 +1,443 @@
+from __future__ import annotations
+
+import errno
+import json
+import os
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from idk import cli_config, config
+from idk.__main__ import app
+
+runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def xdg(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    return tmp_path
+
+
+def _write(name: str, text: str) -> None:
+    path = config.config_path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _json_result(*args: str):
+    result = runner.invoke(app, ["config", "check", "--json", *args])
+    assert result.stdout.startswith("[")
+    return result, json.loads(result.stdout)
+
+
+def test_config_check_reports_missing_files_in_stable_order():
+    result, rows = _json_result()
+
+    assert result.exit_code == 0, result.stdout
+    assert [row["file"] for row in rows] == [
+        "workspaces.toml",
+        "snippets.toml",
+        "mirror.toml",
+        "logview.toml",
+    ]
+    assert [row["status"] for row in rows] == ["skip"] * 4
+    assert all(set(row) == {"file", "status", "detail"} for row in rows)
+
+
+def test_config_check_missing_files_are_not_failures_in_strict_mode():
+    result, rows = _json_result("--strict")
+
+    assert result.exit_code == 0, result.stdout
+    assert all(row["status"] == "skip" for row in rows)
+
+
+def test_config_check_accepts_all_valid_files():
+    _write(
+        "workspaces.toml",
+        '[[workspace]]\nname = "demo"\ncwd = "."\n',
+    )
+    _write("snippets.toml", '[[snippet]]\nname = "demo"\ncmd = "printf ok"\n')
+    _write(
+        "mirror.toml",
+        '[artifactory]\nbase_url = "https://mirror.example/simple"\nauth = "netrc"\n',
+    )
+    _write("logview.toml", '[highlight]\nerror = "red"\n')
+
+    result, rows = _json_result("--strict")
+
+    assert result.exit_code == 0, result.stdout
+    assert [row["status"] for row in rows] == ["ok"] * 4
+
+
+def test_config_check_reports_missing_workspace_cwd_as_separate_warning():
+    _write(
+        "workspaces.toml",
+        '[[workspace]]\nname = "demo"\ncwd = "./does-not-exist"\n',
+    )
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 0, result.stdout
+    workspace_rows = [row for row in rows if row["file"] == "workspaces.toml"]
+    assert [row["status"] for row in workspace_rows] == ["ok", "warn"]
+    assert "demo" in workspace_rows[1]["detail"]
+
+    strict, strict_rows = _json_result("--strict")
+    assert strict.exit_code == 1, strict.stdout
+    assert strict_rows == rows
+
+
+def test_config_check_schema_error_is_failure_in_both_modes():
+    _write("workspaces.toml", '[[workspace]]\nname = "demo"\ntab = "not an array"\n')
+
+    result, rows = _json_result()
+    assert result.exit_code == 1, result.stdout
+    assert rows[0]["file"] == "workspaces.toml"
+    assert rows[0]["status"] == "fail"
+    assert "tab" in rows[0]["detail"]
+
+    strict, strict_rows = _json_result("--strict")
+    assert strict.exit_code == 1, strict.stdout
+    assert strict_rows[0]["status"] == "fail"
+
+
+def test_config_check_logview_only_requires_toml_root():
+    _write("logview.toml", "not valid = = toml")
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1, result.stdout
+    assert rows[3]["status"] == "fail"
+
+
+def test_config_check_validates_snippet_model():
+    _write("snippets.toml", '[[snippet]]\nname = "demo"\ncmd = 123\n')
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1, result.stdout
+    assert rows[1]["status"] == "fail"
+    assert "cmd" in rows[1]["detail"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("artifactory", '"not a table"'),
+        ("base_url", "123"),
+        ("auth", "true"),
+        ("auth", '"basic"'),
+        ("token_env", "123"),
+    ],
+)
+def test_config_check_validates_mirror_schema(field: str, value: str):
+    if field == "artifactory":
+        text = f"artifactory = {value}\n"
+    elif field == "base_url":
+        text = f"[artifactory]\nbase_url = {value}\n"
+    else:
+        text = f'[artifactory]\nbase_url = "https://mirror.example"\n{field} = {value}\n'
+    _write("mirror.toml", text)
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1, result.stdout
+    assert rows[2]["status"] == "fail"
+    assert field in rows[2]["detail"]
+
+
+def test_config_check_never_outputs_bearer_token(monkeypatch):
+    secret = "do-not-print-this-token"
+    monkeypatch.setenv("MIRROR_TOKEN", secret)
+    _write(
+        "mirror.toml",
+        '[artifactory]\nbase_url = "https://mirror.example"\ntoken_env = "MIRROR_TOKEN"\n',
+    )
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 0, result.stdout
+    assert secret not in result.stdout
+    assert secret not in json.dumps(rows, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
+    "token", ["secret\nheader", "secret\rheader", "secret\theader", "secret\x7fheader"]
+)
+def test_config_check_rejects_header_invalid_bearer_token_without_output(monkeypatch, token):
+    monkeypatch.setenv("MIRROR_TOKEN", token)
+    _write(
+        "mirror.toml",
+        '[artifactory]\nbase_url = "https://mirror.example"\ntoken_env = "MIRROR_TOKEN"\n',
+    )
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+    assert "bearer" in rows[2]["detail"]
+    assert token not in result.stdout
+    assert token not in rows[2]["detail"]
+
+
+@pytest.mark.parametrize("token_value", [None, ""])
+def test_config_check_rejects_missing_or_empty_token_env_without_fallback(monkeypatch, token_value):
+    if token_value is None:
+        monkeypatch.delenv("MIRROR_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("MIRROR_TOKEN", token_value)
+    _write(
+        "mirror.toml",
+        "[artifactory]\n"
+        'base_url = "https://mirror.example"\n'
+        'auth = "netrc"\n'
+        'token_env = "MIRROR_TOKEN"\n',
+    )
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+    assert "token_env" in rows[2]["detail"]
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "ftp://mirror.example/simple",
+        "https://",
+        "https://mirror.example:bad/simple",
+        "https://mirror.example:65536/simple",
+        "https://[bad/simple",
+    ],
+)
+def test_config_check_rejects_invalid_mirror_urls(base_url):
+    _write("mirror.toml", f'[artifactory]\nbase_url = "{base_url}"\n')
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+    assert "base_url" in rows[2]["detail"]
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        " https://mirror.example/simple",
+        "https://mirror.example/simple ",
+        "https://mirror.example/path with space",
+        "https://mirror.example/path\\twith-tab",
+        "https://user:sentinel-password@mirror.example/simple",
+        "https://sentinel-password@mirror.example/simple",
+        "https://mirror.example/%ZZ",
+        "https://mirror.example/%",
+        "https://mirror.example/%0",
+        "https://mirror.example:",
+        "https://mirror.example: ",
+        "https://bad_host.example/simple",
+        "https://-bad.example/simple",
+        "https://bad-.example/simple",
+    ],
+)
+def test_config_check_rejects_unsafe_mirror_urls_without_echoing_value(base_url):
+    _write("mirror.toml", f'[artifactory]\nbase_url = "{base_url}"\n')
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+    assert "base_url" in rows[2]["detail"]
+    assert base_url not in result.stdout
+    assert "sentinel-password" not in result.stdout
+
+
+@pytest.mark.parametrize("bad_char", ["\x80", "\x9f"])
+def test_config_check_rejects_c1_url_characters_without_echoing_them(bad_char):
+    base_url = f"https://mirror.example/path{bad_char}sentinel"
+    _write("mirror.toml", f'[artifactory]\nbase_url = "{base_url}"\n')
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+    assert base_url not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://localhost",
+        "https://mirror.example:8443/simple",
+        "http://127.0.0.1:1/",
+        "https://[::1]:443/simple",
+        "https://example.com./simple",
+        "https://mirror.example/%E2%9C%93",
+    ],
+)
+def test_config_check_accepts_valid_http_urls(base_url):
+    _write("mirror.toml", f'[artifactory]\nbase_url = "{base_url}"\n')
+
+    result, rows = _json_result("--strict")
+
+    assert result.exit_code == 0, result.stdout
+    assert rows[2]["status"] == "ok"
+
+
+def test_config_check_json_is_deterministic():
+    _write("mirror.toml", '[artifactory]\nbase_url = "https://mirror.example/simple"\n')
+
+    first, _ = _json_result()
+    second, _ = _json_result()
+
+    assert first.stdout == second.stdout
+
+
+def test_config_check_existing_directory_is_failure():
+    path = config.config_path("mirror.toml")
+    path.mkdir(parents=True)
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2] == {
+        "file": "mirror.toml",
+        "status": "fail",
+        "detail": "설정 경로가 일반 파일이 아닙니다",
+    }
+
+
+def test_config_check_invalid_config_directory_is_not_skipped():
+    directory = config.config_dir()
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    directory.write_text("not a directory", encoding="utf-8")
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert [row["status"] for row in rows] == ["fail"] * 4
+
+
+def test_config_check_inaccessible_config_directory_is_not_skipped(monkeypatch):
+    directory = config.config_dir()
+    directory.mkdir(parents=True)
+    original_scandir = config.os.scandir
+
+    def deny(path):
+        if Path(path) == directory:
+            raise PermissionError("directory-secret")
+        return original_scandir(path)
+
+    monkeypatch.setattr(config.os, "scandir", deny)
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert [row["status"] for row in rows] == ["fail"] * 4
+    assert "directory-secret" not in result.stdout
+
+
+def test_config_check_rejects_fifo_without_blocking():
+    path = config.config_path("mirror.toml")
+    path.parent.mkdir(parents=True)
+    try:
+        os.mkfifo(path)
+    except OSError as exc:
+        if exc.errno in {errno.ENOTSUP, errno.EOPNOTSUPP}:
+            pytest.skip("filesystem does not support FIFOs")
+        raise
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+
+
+def test_config_check_rejects_broken_config_symlink():
+    path = config.config_path("mirror.toml")
+    path.parent.mkdir(parents=True)
+    path.symlink_to(path.with_name("missing-mirror.toml"))
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+
+
+def test_config_check_does_not_misreport_inaccessible_parent_as_missing(monkeypatch, tmp_path):
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    target = blocked / "idk"
+    original_lstat = Path.lstat
+
+    def deny_parent(path):
+        if path == blocked:
+            raise PermissionError("parent-secret")
+        return original_lstat(path)
+
+    monkeypatch.setattr(config, "config_dir", lambda: target)
+    monkeypatch.setattr(Path, "lstat", deny_parent)
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[0]["status"] == "fail"
+    assert all(row["status"] != "skip" for row in rows)
+    assert "parent-secret" not in result.stdout
+
+
+def test_config_check_converts_config_read_errors_to_safe_failure(monkeypatch):
+    secret = "read-secret"
+    _write("mirror.toml", '[artifactory]\nbase_url = "https://mirror.example"\n')
+    path = config.config_path("mirror.toml")
+    original_open = config.os.open
+
+    def fail_read(file_path, flags, *args, **kwargs):
+        if Path(file_path) == path:
+            raise PermissionError(secret)
+        return original_open(file_path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(config.os, "open", fail_read)
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+    assert rows[2]["detail"] == "설정 검사 중 파일/모델 오류"
+    assert secret not in result.stdout
+
+
+def test_config_check_converts_validator_filesystem_errors_to_safe_failure(monkeypatch):
+    secret = "validator-secret"
+
+    def fail():
+        raise PermissionError(f"permission denied: {secret}")
+
+    monkeypatch.setitem(cli_config.VALIDATORS, "mirror.toml", fail)
+    _write("mirror.toml", '[artifactory]\nbase_url = "https://mirror.example"\n')
+
+    result, rows = _json_result()
+
+    assert result.exit_code == 1
+    assert rows[2]["status"] == "fail"
+    assert rows[2]["detail"] == "설정 검사 중 파일/모델 오류"
+    assert secret not in result.stdout
+
+
+def test_config_check_table_output_is_not_used_for_json():
+    _write("logview.toml", '[highlight]\nerror = "red"\n')
+
+    result = runner.invoke(app, ["config", "check", "--json"])
+
+    assert result.exit_code == 0
+    assert "WORKSPACES" not in result.stdout
+    assert "┏" not in result.stdout
+
+
+def test_config_subcommand_has_help_without_loading_rich_table():
+    result = runner.invoke(app, ["config", "--help"])
+
+    assert result.exit_code == 0
+    assert "check" in result.stdout

@@ -10,6 +10,24 @@
 ## [Unreleased]
 
 ### Fixed
+- **`idk config check` 추가** — 알려진 TOML 설정을 고정된 순서로 검사해 `skip`/`ok`/`warn`/`fail`
+  행과 JSON 출력을 제공한다. 없는 파일은 정상으로 건너뛰고, `--strict`에서만 workspace cwd
+  경고를 exit 1로 올린다.
+- **mirror 설정·doctor 접속 판정 강화** — `artifactory`/`base_url`/`auth`/`token_env` 타입과
+  netrc 전용 인증을 공통 모델로 검증한다. token_env bearer 값은 요청에만 사용하며 출력하지
+  않고, doctor는 2xx를 ok, 401/403을 fail, 그 밖의 HTTP 오류를 warn, 전송 실패를 fail로 보고한다.
+- **mirror 인증·경로 오류의 안전한 실패** — 비어 있거나 헤더에 넣을 수 없는 token_env는
+  netrc로 폴백하지 않고 generic 오류로 실패한다. base_url의 HTTP(S)/hostname/port와 설정
+  경로의 일반 파일 여부를 검사하며, doctor와 config check는 파일·응답 shape 오류를
+  secret-bearing 예외 문자열 없이 fail 행으로 보고한다.
+- **설정 경로·URL 검증 경계 보강** — `config_file()`이 없는 경로만 `skip`으로 분류하고,
+  디렉터리·FIFO·끊긴 심볼릭 링크·접근/읽기 오류는 결정적인 `ConfigError`/`fail`로 보고한다.
+  mirror URL의 공백·userinfo·잘못된 percent escape·호스트·포트도 거부하며, doctor는 예상된
+  HTTP/request-value 오류만 안전하게 `fail`로 바꾸고 프로그래밍 오류는 숨기지 않는다.
+- **설정 디렉터리·파일 경합 방어** — URL은 printable ASCII만 직접 허용하고 C1 제어문자와
+  비ASCII 원문을 거부한다. `config_directory()`가 없는 디렉터리와 손상/접근 불가 경로를
+  구분하며, 설정 파일은 nonblocking open과 `fstat`으로 교체된 FIFO·특수 파일·사라진 파일을
+  결정적인 `ConfigError`로 처리한다. regular file을 가리키는 심볼릭 링크는 계속 허용한다.
 - **설정 타입 오류를 일관되게 보고** — 문자열 불리언과 배열이 아닌 중첩 컬렉션을 설정 로드
   시 위치가 포함된 `ConfigError`로 거부하고, workspace 명령의 닫히지 않은 인용문도 조기에
   검증한다.
