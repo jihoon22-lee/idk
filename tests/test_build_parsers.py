@@ -155,6 +155,109 @@ def test_accepts_relative_absolute_space_and_windows_path_variants():
     )
 
 
+def test_preserves_valid_path_punctuation_and_pseudo_paths():
+    result = parse(
+        [
+            r"C:\build=debug\main.cpp:8: error: equals in Windows path",
+            r"C:\Program Files\O'Brien\main.cpp:9: warning: apostrophe in path",
+            "dir:name.cpp:10: note: colon in relative path",
+            "my header:11: error: extensionless path with spaces",
+            "<stdin>:12: fatal error: standard input",
+        ]
+    )
+
+    assert result.diagnostics == (
+        Diagnostic(
+            path=r"C:\build=debug\main.cpp",
+            line=8,
+            column=None,
+            severity="error",
+            message="equals in Windows path",
+            context=(),
+            tool="compiler",
+        ),
+        Diagnostic(
+            path=r"C:\Program Files\O'Brien\main.cpp",
+            line=9,
+            column=None,
+            severity="warning",
+            message="apostrophe in path",
+            context=(),
+            tool="compiler",
+        ),
+        Diagnostic(
+            path="dir:name.cpp",
+            line=10,
+            column=None,
+            severity="note",
+            message="colon in relative path",
+            context=(),
+            tool="compiler",
+        ),
+        Diagnostic(
+            path="my header",
+            line=11,
+            column=None,
+            severity="error",
+            message="extensionless path with spaces",
+            context=(),
+            tool="compiler",
+        ),
+        Diagnostic(
+            path="<stdin>",
+            line=12,
+            column=None,
+            severity="fatal error",
+            message="standard input",
+            context=(),
+            tool="compiler",
+        ),
+    )
+
+
+def test_accepts_extensionless_include_and_from_context_with_gcc_terminators():
+    result = parse(
+        [
+            "In file included from header:1,",
+            "                 from my header:2:",
+            "header:3: error: extensionless include",
+        ]
+    )
+
+    assert result.diagnostics == (
+        Diagnostic(
+            path="header",
+            line=3,
+            column=None,
+            severity="error",
+            message="extensionless include",
+            context=("In file included from header:1,", "from my header:2:"),
+            tool="compiler",
+        ),
+    )
+
+
+def test_ignores_bare_from_context_without_gcc_terminator():
+    result = parse(
+        [
+            "from cache:42",
+            "header:43: warning: real diagnostic",
+        ]
+    )
+
+    assert result.diagnostics == (
+        Diagnostic(
+            path="header",
+            line=43,
+            column=None,
+            severity="warning",
+            message="real diagnostic",
+            context=(),
+            tool="compiler",
+        ),
+    )
+
+
 def test_ignores_source_code_strings_and_arbitrary_from_context():
     result = parse(
         [

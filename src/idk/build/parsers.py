@@ -8,12 +8,9 @@ from collections.abc import Iterable
 from .model import Diagnostic, ParseResult
 
 _ANSI_CSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-_PATH_UNSAFE_RE = re.compile(r"""[\"'`=;|<>]""")
-_PATH_EXTENSION_RE = re.compile(r"\.[^./\\\s:]+$")
-_WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
-_CODE_PREFIX_RE = re.compile(
-    r"^(?:auto|bool|char|const|double|float|if|int|long|return|short|struct|using|void|while)(?:\s|$)",
-    re.IGNORECASE,
+_SOURCE_STRING_FRAME_RE = re.compile(
+    r"""^\s*["']|=\s*(?:[A-Za-z_]\w*)?\s*["']|"""
+    r"""(?:\b(?:return|throw)\s+|<<\s*|\b[A-Za-z_]\w*\s*\(\s*)["']"""
 )
 
 # The path is intentionally broad and stops at the first colon that begins a
@@ -26,11 +23,11 @@ COMPILER_RE = re.compile(
 )
 
 _CONTEXT_INCLUDE_RE = re.compile(
-    r"^In file included from\s+(?P<path>.+?):\d+(?::\d+)?(?:[:,].*)?$",
+    r"^In file included from\s+(?P<path>.+?):\d+(?::\d+)?[,:]\s*$",
     re.IGNORECASE,
 )
 _CONTEXT_FROM_RE = re.compile(
-    r"^from\s+(?P<path>.+?):\d+(?::\d+)?(?:[:,].*)?$",
+    r"^from\s+(?P<path>.+?):\d+(?::\d+)?[,:]\s*$",
     re.IGNORECASE,
 )
 _CONTEXT_TRACE_RE = re.compile(
@@ -41,39 +38,13 @@ _CONTEXT_PLAIN_TRACE_RE = re.compile(r"^(?:required from|instantiated from)\b", 
 _CONTEXT_INSTANTIATION_RE = re.compile(r"^(?:In )?instantiation of\b", re.IGNORECASE)
 
 
-def _looks_like_path(value: str, *, require_hint: bool = True) -> bool:
-    """Reject source/prose prefixes while accepting ordinary filesystem paths."""
-
-    path = value.strip()
-    if not path or _PATH_UNSAFE_RE.search(path):
-        return False
-    if any(ord(char) < 32 for char in path):
-        return False
-    if ":" in path and not _WINDOWS_DRIVE_RE.match(path):
-        return False
-
-    first_component = re.split(r"[\\/]", path, maxsplit=1)[0]
-    if _CODE_PREFIX_RE.match(first_component):
-        return False
-
-    has_path_hint = bool(
-        "/" in path
-        or "\\" in path
-        or _WINDOWS_DRIVE_RE.match(path)
-        or _PATH_EXTENSION_RE.search(path)
-    )
-    if require_hint:
-        return has_path_hint
-    return has_path_hint or not any(char.isspace() for char in path)
-
-
 def _parse_compiler(line: str) -> Diagnostic | None:
     match = COMPILER_RE.match(line)
     if match is None:
         return None
 
     path = match.group("path").strip()
-    if not _looks_like_path(path, require_hint=False):
+    if _SOURCE_STRING_FRAME_RE.search(path):
         return None
 
     severity = " ".join(match.group("severity").lower().split())
@@ -95,9 +66,8 @@ def _is_context(line: str) -> bool:
         return False
 
     for pattern in (_CONTEXT_INCLUDE_RE, _CONTEXT_FROM_RE, _CONTEXT_TRACE_RE):
-        match = pattern.match(stripped)
-        if match is not None:
-            return _looks_like_path(match.group("path"), require_hint=pattern is _CONTEXT_FROM_RE)
+        if pattern.match(stripped) is not None:
+            return True
 
     return bool(
         _CONTEXT_PLAIN_TRACE_RE.match(stripped) or _CONTEXT_INSTANTIATION_RE.match(stripped)
