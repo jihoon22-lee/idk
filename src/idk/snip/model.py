@@ -43,8 +43,50 @@ def placeholders(cmd: str) -> list[str]:
     return seen
 
 
+def quoted_placeholders(cmd: str) -> list[str]:
+    """인용된 shell 문맥 안에 있는 플레이스홀더 키를 등장 순서대로 돌려준다.
+
+    이 함수는 명령을 완전하게 파싱하려는 것이 아니라, 비-raw 플레이스홀더가
+    이미 열린 single/double quote 안에 들어갔는지만 확인한다. 셸의 unquoted 및
+    double quote 문맥에서 backslash 는 다음 문자를 이스케이프한다.
+    """
+    state = "unquoted"
+    quoted: list[str] = []
+    index = 0
+    while index < len(cmd):
+        char = cmd[index]
+        if char == "\\" and state in {"unquoted", "double"}:
+            index += 2
+            continue
+
+        match = PLACEHOLDER_RE.match(cmd, index)
+        if match is not None and state in {"single", "double"}:
+            quoted.append(match.group(1))
+            index = match.end()
+            continue
+
+        if state == "unquoted":
+            if char == "'":
+                state = "single"
+            elif char == '"':
+                state = "double"
+        elif state == "single":
+            if char == "'":
+                state = "unquoted"
+        elif char == '"':
+            state = "unquoted"
+        index += 1
+    return quoted
+
+
 def _err(where: str, message: str) -> config.ConfigError:
     return config.ConfigError(f"{where}: {message}")
+
+
+def _strict_bool(value: Any, where: str) -> bool:
+    if type(value) is not bool:
+        raise _err(where, "raw 는 true 또는 false 여야 합니다")
+    return value
 
 
 def _parse_params(raw: Any, where: str) -> dict[str, Param]:
@@ -62,7 +104,8 @@ def _parse_params(raw: Any, where: str) -> dict[str, Param]:
         desc = value.get("desc", "")
         if not isinstance(desc, str):
             raise _err(where, f"params.{key}.desc 는 문자열이어야 합니다")
-        out[str(key)] = Param(default=default, desc=desc, raw=bool(value.get("raw", False)))
+        raw_flag = _strict_bool(value.get("raw", False), f"{where}.params.{key}.raw")
+        out[str(key)] = Param(default=default, desc=desc, raw=raw_flag)
     return out
 
 
@@ -83,6 +126,13 @@ def _parse_snippet(raw: Any, where: str) -> Snippet:
     for key in placeholders(cmd):
         if key not in params:
             raise _err(where, f"cmd 의 플레이스홀더 {{{{{key}}}}} 가 params 에 선언되지 않았습니다")
+    for key in quoted_placeholders(cmd):
+        if not params[key].raw:
+            raise _err(
+                where,
+                f"cmd 의 플레이스홀더 {{{{{key}}}}} 를 인용문 안에서 사용할 수 없습니다 "
+                "(raw = true 는 신뢰한 고정값에만 사용하세요)",
+            )
 
     cwd = raw.get("cwd")
     cwd_path: Path | None = None

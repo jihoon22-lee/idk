@@ -141,15 +141,12 @@ tags = ["build", "make"]
 [[snippet]]
 name = "deploy"
 desc = "배포"
-cmd  = "ssh {{host}} 'systemctl restart {{svc}}'"
+cmd  = "ssh {{host}} systemctl restart myapp"
 tags = ["deploy"]
 
   [snippet.params.host]
   desc = "대상 호스트"
 
-  [snippet.params.svc]
-  default = "myapp"
-  desc    = "서비스 이름"
 """
 
 
@@ -207,8 +204,12 @@ def run_cmd(
     session: Annotated[str | None, typer.Option("--session", help="--pane 대상 세션")] = None,
     tag: Annotated[str | None, typer.Option("--tag", help="ls 필터")] = None,
     as_json: Annotated[bool, typer.Option("--json", help="ls 를 JSON 으로")] = False,
+    force: Annotated[bool, typer.Option("--force", help="init 에서 기존 파일을 덮어쓴다")] = False,
 ) -> None:
     """명령 런처 — snippets.toml 의 명령을 파라미터 치환해 실행한다."""
+    if force and name != "init":
+        typer.echo("--force 는 'run init' 에서만 사용할 수 있습니다.", err=True)
+        raise typer.Exit(2)
     if name is None:
         from idk.snip import tui
 
@@ -218,7 +219,7 @@ def run_cmd(
         _list(tag, as_json)
         return
     if name == "init":
-        _init_snippets(force=False)
+        _init_snippets(force=force)
         return
     snippet = _find(name)
     values = _parse_params(list(param or ()))

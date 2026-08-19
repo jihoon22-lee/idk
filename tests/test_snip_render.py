@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
 from idk.snip import model, render
@@ -16,6 +18,14 @@ def _snippet(cmd: str, **params) -> model.Snippet:
 def test_quote_by_default():
     s = _snippet("ssh {{host}}", host={"default": None})
     assert render.render(s, {"host": "a; rm -rf ~"}) == "ssh 'a; rm -rf ~'"
+
+
+def test_unquoted_placeholder_stays_one_local_shell_word(tmp_path):
+    marker = tmp_path / "owned"
+    s = _snippet("printf '%s' {{value}}", value=None)
+    command = render.render(s, {"value": f"x; touch {marker}"})
+    subprocess.run(["sh", "-c", command], check=True)
+    assert not marker.exists()
 
 
 def test_raw_skips_quoting():
