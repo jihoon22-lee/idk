@@ -160,9 +160,10 @@ def test_preserves_valid_path_punctuation_and_pseudo_paths():
         [
             r"C:\build=debug\main.cpp:8: error: equals in Windows path",
             r"C:\Program Files\O'Brien\main.cpp:9: warning: apostrophe in path",
-            "dir:name.cpp:10: note: colon in relative path",
-            "my header:11: error: extensionless path with spaces",
-            "<stdin>:12: fatal error: standard input",
+            r"C:\dir=O'Brien\main.cpp:10: error: combined path punctuation",
+            "dir:name.cpp:11: note: colon in relative path",
+            "my header:12: error: extensionless path with spaces",
+            "<stdin>:13: fatal error: standard input",
         ]
     )
 
@@ -186,8 +187,17 @@ def test_preserves_valid_path_punctuation_and_pseudo_paths():
             tool="compiler",
         ),
         Diagnostic(
-            path="dir:name.cpp",
+            path=r"C:\dir=O'Brien\main.cpp",
             line=10,
+            column=None,
+            severity="error",
+            message="combined path punctuation",
+            context=(),
+            tool="compiler",
+        ),
+        Diagnostic(
+            path="dir:name.cpp",
+            line=11,
             column=None,
             severity="note",
             message="colon in relative path",
@@ -196,7 +206,7 @@ def test_preserves_valid_path_punctuation_and_pseudo_paths():
         ),
         Diagnostic(
             path="my header",
-            line=11,
+            line=12,
             column=None,
             severity="error",
             message="extensionless path with spaces",
@@ -205,7 +215,7 @@ def test_preserves_valid_path_punctuation_and_pseudo_paths():
         ),
         Diagnostic(
             path="<stdin>",
-            line=12,
+            line=13,
             column=None,
             severity="fatal error",
             message="standard input",
@@ -262,6 +272,11 @@ def test_ignores_source_code_strings_and_arbitrary_from_context():
     result = parse(
         [
             'std::string s = "src/main.cpp:12:7: error: fake";',
+            'std::string s{"src/main.cpp:14:1: error: fake"};',
+            'std::string s{ "src/main.cpp:15:1: error: fake" };',
+            '#include "src/main.cpp:16:1: error: fake"',
+            r'#define MSG "prefix \"src/main.cpp:17:1: error: fake"',
+            'from "src/header.hpp:21:',
             "from cache:42",
             'from "cache":42',
             "src/main.cpp:13:1: warning: real diagnostic",
@@ -279,7 +294,7 @@ def test_ignores_source_code_strings_and_arbitrary_from_context():
             tool="compiler",
         ),
     )
-    assert result.total_lines == 4
+    assert result.total_lines == 9
 
 
 def test_parse_consumes_a_one_shot_iterator_once():

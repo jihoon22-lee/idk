@@ -8,10 +8,6 @@ from collections.abc import Iterable
 from .model import Diagnostic, ParseResult
 
 _ANSI_CSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-_SOURCE_STRING_FRAME_RE = re.compile(
-    r"""^\s*["']|=\s*(?:[A-Za-z_]\w*)?\s*["']|"""
-    r"""(?:\b(?:return|throw)\s+|<<\s*|\b[A-Za-z_]\w*\s*\(\s*)["']"""
-)
 
 # The path is intentionally broad and stops at the first colon that begins a
 # numeric source location.  This keeps colons in Windows drive names (and in
@@ -38,13 +34,32 @@ _CONTEXT_PLAIN_TRACE_RE = re.compile(r"^(?:required from|instantiated from)\b", 
 _CONTEXT_INSTANTIATION_RE = re.compile(r"^(?:In )?instantiation of\b", re.IGNORECASE)
 
 
+def _has_unclosed_double_quote(text: str) -> bool:
+    """Return whether *text* ends inside a double-quoted source string.
+
+    This is deliberately only an ambiguity guard for the path prefix.  It is
+    not a C++ parser and does not reject any path character on its own.
+    """
+
+    in_quote = False
+    escaped = False
+    for char in text:
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == '"':
+            in_quote = not in_quote
+    return in_quote
+
+
 def _parse_compiler(line: str) -> Diagnostic | None:
     match = COMPILER_RE.match(line)
     if match is None:
         return None
 
     path = match.group("path").strip()
-    if _SOURCE_STRING_FRAME_RE.search(path):
+    if _has_unclosed_double_quote(path):
         return None
 
     severity = " ".join(match.group("severity").lower().split())
@@ -66,7 +81,8 @@ def _is_context(line: str) -> bool:
         return False
 
     for pattern in (_CONTEXT_INCLUDE_RE, _CONTEXT_FROM_RE, _CONTEXT_TRACE_RE):
-        if pattern.match(stripped) is not None:
+        match = pattern.match(stripped)
+        if match is not None and not _has_unclosed_double_quote(match.group("path")):
             return True
 
     return bool(
