@@ -1,38 +1,49 @@
 #!/usr/bin/env bash
 # dist/idk.pyz 를 만든다 — 반입 파일 1개.
 #
-#   1) 3.10 을 대상으로 의존성을 풀어 build/site-packages 에 설치
+#   1) 3.10 을 대상으로 uv.lock 에서 의존성을 풀어 native tmp 에 설치
 #   2) 네이티브 확장이 섞이지 않았는지 검사 (AGENTS.md 규약의 기계적 강제)
 #   3) shiv 로 zipapp 생성
 #   4) shebang 자리에 scripts/launcher.sh 를 얹어 sh 폴리글롯으로 마감
+#   5) 완성한 파일을 dist/idk.pyz 로 원자적으로 교체
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 PY_TARGET="${IDK_BUILD_PYTHON:-3.10}"   # 산출물이 돌아야 하는 하한 = 폐쇄망 설치 버전
-BUILD="$ROOT/build"
+BUILD="$(mktemp -d -p "${TMPDIR:-/tmp}" idk-build.XXXXXX)"
 SITE="$BUILD/site-packages"
 RAW="$BUILD/idk-raw.pyz"
+STAGED_OUT="$BUILD/idk.pyz"
 OUT="$ROOT/dist/idk.pyz"
+OUT_TMP="$ROOT/dist/idk.pyz.tmp"
+# uv run 의 build 도구 환경도 checkout 이 아니라 native staging 에 만든다.
+export UV_PROJECT_ENVIRONMENT="$BUILD/build-env"
+
+cleanup() {
+    rm -rf "$BUILD" "$OUT_TMP"
+}
+trap cleanup EXIT
 
 command -v uv >/dev/null || { echo "uv 가 필요합니다: https://docs.astral.sh/uv/" >&2; exit 1; }
 
-# Windows 드라이브(drvfs)는 모든 파일을 0777 로 보고한다. 그 비트가 zip 에 그대로 실려
-#   - 같은 소스라도 ext4 에서 빌드한 것과 체크섬이 달라지고
-#   - 폐쇄망의 ~/.shiv 에 풀릴 때 world-writable 파일이 된다.
-# 반입용 빌드는 리눅스 네이티브 경로(~/ 등)에서 하는 것을 권장한다.
-case "$ROOT" in
-    /mnt/*) echo "경고: $ROOT 는 Windows 드라이브입니다. 파일 권한이 0777 로 기록됩니다." >&2
-            echo "      반입용 빌드는 ~/ 아래 등 ext4 경로에서 하세요." >&2 ;;
-esac
-
-echo "[1/4] 의존성 설치 (python $PY_TARGET 대상)"
-rm -rf "$BUILD"
+echo "[1/5] runtime 의존성 설치 (uv.lock, python $PY_TARGET 대상)"
 mkdir -p "$SITE" "$ROOT/dist"
-uv pip install --quiet --python "$PY_TARGET" --target "$SITE" "$ROOT"
+rm -f "$OUT_TMP"
+uv export --frozen --no-dev --no-emit-project \
+    --format requirements.txt --output-file "$BUILD/runtime.lock"
+uv pip install --quiet --python "$PY_TARGET" --target "$SITE" \
+    --require-hashes --requirements "$BUILD/runtime.lock"
 
-echo "[2/4] 순수 파이썬 검사"
+echo "[2/5] locked wheel 생성"
+mkdir -p "$BUILD/wheels"
+uv run --frozen --only-group build -- \
+    uv build --wheel --no-build-isolation --out-dir "$BUILD/wheels"
+uv pip install --quiet --python "$PY_TARGET" --target "$SITE" \
+    --no-deps "$BUILD/wheels"/idk-*.whl
+
+echo "[3/5] 순수 파이썬 검사"
 impure="$(find "$SITE" \( -name '*.so' -o -name '*.pyd' -o -name '*.dylib' \) -print)"
 if [ -n "$impure" ]; then
     echo "네이티브 확장이 포함됐습니다 — glibc/아키텍처에 묶여 폐쇄망에서 깨집니다:" >&2
@@ -66,7 +77,13 @@ from pathlib import Path
 site = Path(sys.argv[1])
 removed: set[Path] = set()
 
-# 1) bin/ 콘솔 스크립트 래퍼 — shebang 에 빌드에 쓴 인터프리터의 절대경로가 박힌다.
+# 1) uv pip 의 설치 잠금 파일 — target 디렉터리에 남으면 zip 에 쓰기 권한이 실린다.
+lockfile = site / ".lock"
+if lockfile.is_file() or lockfile.is_symlink():
+    removed.add(lockfile)
+    lockfile.unlink()
+
+# 2) bin/ 콘솔 스크립트 래퍼 — shebang 에 빌드에 쓴 인터프리터의 절대경로가 박힌다.
 #    shiv 는 environment.json 의 entry_point 로 바로 진입하므로 이 디렉터리를 쓰지 않는다.
 bindir = site / "bin"
 if bindir.is_dir():
@@ -78,14 +95,14 @@ if bindir.is_dir():
             path.rmdir()
     bindir.rmdir()
 
-# 2) uv 의 설치 출처 메타데이터 — direct_url.json 에 체크아웃 절대경로가,
+# 3) uv 의 설치 출처 메타데이터 — direct_url.json 에 체크아웃 절대경로가,
 #    uv_cache.json 에 빌드 타임스탬프와 디렉터리 inode 가 들어 있다.
 for name in ("direct_url.json", "uv_cache.json", "uv_build.json"):
     for path in site.glob(f"*.dist-info/{name}"):
         removed.add(path)
         path.unlink()
 
-# 3) RECORD 는 위 파일들의 해시를 그대로 안고 있다. 지운 항목을 걷어내야 한다.
+# 4) RECORD 는 위 파일들의 해시를 그대로 안고 있다. 지운 항목을 걷어내야 한다.
 for record in site.glob("*.dist-info/RECORD"):
     lines = record.read_text(encoding="utf-8").splitlines(keepends=True)
     kept = [ln for ln in lines if not (site / ln.split(",", 1)[0]) in removed]
@@ -94,19 +111,19 @@ for record in site.glob("*.dist-info/RECORD"):
 print(f"      {len(removed)} 개 항목 제거")
 PY
 
-echo "[3/4] shiv zipapp 생성"
+echo "[4/5] shiv zipapp 생성"
 # pip 인자를 하나도 넘기지 않아야 shiv 가 pip 을 건너뛰고 --site-packages 만 쓴다.
 # (--no-deps 같은 걸 붙이면 pip 인자로 전달돼 "requirement 가 없다"며 실패한다.)
 # --reproducible: 타임스탬프를 고정해 같은 입력이면 같은 체크섬 → 반입 파일 대조가 쉬워진다.
-uv run --quiet --with shiv -- shiv \
+uv run --frozen --only-group build -- shiv \
     --site-packages "$SITE" \
     --console-script idk \
     --compressed \
     --reproducible \
     -o "$RAW"
 
-echo "[4/4] sh 런처 프리앰블 부착"
-python3 - "$RAW" "$ROOT/scripts/launcher.sh" "$OUT" <<'PY'
+echo "[5/5] sh 런처 프리앰블 부착 및 원자적 게시"
+python3 - "$RAW" "$ROOT/scripts/launcher.sh" "$STAGED_OUT" <<'PY'
 import sys
 
 raw_path, preamble_path, out_path = sys.argv[1:4]
@@ -121,6 +138,8 @@ if not preamble.endswith(b"\n"):
 with open(out_path, "wb") as fh:
     fh.write(preamble + body)
 PY
+cp "$STAGED_OUT" "$OUT_TMP"
+mv -f "$OUT_TMP" "$OUT"
 chmod +x "$OUT"
 
 printf '완료: %s (%s)\n' "$OUT" "$(du -h "$OUT" | cut -f1)"

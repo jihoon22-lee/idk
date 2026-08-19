@@ -37,8 +37,13 @@ jobs:
           enable-cache: true
       - run: uv python install 3.10 3.9
 
-      - name: build-pyz
-        run: ./scripts/build-pyz.sh
+      - name: build-pyz reproducibility
+        run: |
+          ./scripts/build-pyz.sh
+          first="$(sha256sum dist/idk.pyz | awk '{print $1}')"
+          ./scripts/build-pyz.sh
+          second="$(sha256sum dist/idk.pyz | awk '{print $1}')"
+          test "$first" = "$second"
 
       # 런처 폴백까지 포함한 아티팩트 스모크. 반입 전 게이트와 동일한 스크립트다.
       - name: smoke
