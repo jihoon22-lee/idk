@@ -21,7 +21,8 @@ dependencies = [
 idk = "idk.__main__:main"
 
 [dependency-groups]
-dev = ["pytest>=8.0", "shiv>=1.0.6"]
+build = ["hatchling", "shiv"]
+dev = ["pytest>=8.0"]
 
 [tool.hatch.version]
 path = "src/idk/__init__.py"

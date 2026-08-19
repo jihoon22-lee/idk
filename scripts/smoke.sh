@@ -56,7 +56,23 @@ else
 fi
 check "PATH 완전 부재 → 거부"             1 env -i PATH= /bin/sh -c "$PYZ doctor"
 
-echo "== 4. zipapp 무결성 =="
+echo "== 4. zipapp 권한 =="
+check "group/other writable zip entry 거부" 0 python3 - "$PYZ" <<'PY'
+import sys
+import zipfile
+
+path = sys.argv[1]
+bad = []
+with zipfile.ZipFile(path) as archive:
+    for info in archive.infolist():
+        mode = (info.external_attr >> 16) & 0o777
+        if mode & 0o022:
+            bad.append((info.filename, oct(mode)))
+if bad:
+    raise SystemExit(f"world/group writable zip entries: {bad[:10]}")
+PY
+
+echo "== 5. zipapp 무결성 =="
 check "python -m zipfile 로 목록 확인" 0 python3 -c "
 import sys, zipfile
 z = zipfile.ZipFile(sys.argv[1])
