@@ -377,3 +377,154 @@ def test_notes_are_independent_and_models_are_immutable():
         result.diagnostics[0].message = "changed"
     with pytest.raises(FrozenInstanceError):
         result.total_lines = 99
+
+
+def test_parses_cmake_body_and_make_marker_fixture():
+    result = parse((FIXTURES / "cmake-make.log").open(encoding="utf-8"))
+
+    assert result.diagnostics == (
+        Diagnostic(
+            path="CMakeLists.txt",
+            line=42,
+            column=None,
+            severity="error",
+            message="add_executable",
+            context=("Cannot find source file:", "missing.cpp"),
+            tool="cmake",
+        ),
+        Diagnostic(
+            path=None,
+            line=None,
+            column=None,
+            severity="error",
+            message="[CMakeFiles/app.dir/build.make:76: app] Error 1",
+            context=(),
+            tool="make",
+        ),
+    )
+    assert result.total_lines == 6
+
+
+def test_parses_qt_compiler_and_uic_markers():
+    result = parse((FIXTURES / "qt-tools.log").open(encoding="utf-8"))
+
+    assert result.diagnostics == (
+        Diagnostic(
+            path="src/widget.h",
+            line=18,
+            column=1,
+            severity="error",
+            message="Meta object features not supported for nested classes",
+            context=(),
+            tool="qt",
+        ),
+        Diagnostic(
+            path=None,
+            line=9,
+            column=4,
+            severity="error",
+            message="Unexpected element widget",
+            context=(),
+            tool="qt",
+        ),
+    )
+
+
+def test_cmake_body_stops_at_blank_or_new_marker():
+    result = parse(
+        [
+            "CMake Error at CMakeLists.txt:10 (first):",
+            "  first body line",
+            "",
+            "CMake Warning at CMakeLists.txt:20 (second):",
+            "  second body line",
+            "src/main.cpp:30:1: error: later compiler failure",
+        ]
+    )
+
+    assert result.diagnostics == (
+        Diagnostic(
+            path="CMakeLists.txt",
+            line=10,
+            column=None,
+            severity="error",
+            message="first",
+            context=("first body line",),
+            tool="cmake",
+        ),
+        Diagnostic(
+            path="CMakeLists.txt",
+            line=20,
+            column=None,
+            severity="warning",
+            message="second",
+            context=("second body line",),
+            tool="cmake",
+        ),
+        Diagnostic(
+            path="src/main.cpp",
+            line=30,
+            column=1,
+            severity="error",
+            message="later compiler failure",
+            context=(),
+            tool="compiler",
+        ),
+    )
+
+
+def test_strips_ansi_for_matching_but_preserves_unicode_and_tabs():
+    result = parse(
+        [
+            "\x1b[31msrc/widget.h:18:1: error:\x1b[0m 한글\tmessage",
+            "\x1b[1mmake[2]: *** [Makefile:4: app] Error 2\x1b[0m",
+        ]
+    )
+
+    assert result.diagnostics == (
+        Diagnostic(
+            path="src/widget.h",
+            line=18,
+            column=1,
+            severity="error",
+            message="한글\tmessage",
+            context=(),
+            tool="compiler",
+        ),
+        Diagnostic(
+            path=None,
+            line=None,
+            column=None,
+            severity="error",
+            message="[Makefile:4: app] Error 2",
+            context=(),
+            tool="make",
+        ),
+    )
+
+
+def test_ignores_error_count_source_strings_and_unknown_lines():
+    result = parse(
+        [
+            "error count: 0",
+            'const char *s = "src/main.cpp:12:1: error: fake";',
+            'const char *s = "CMake Error at CMakeLists.txt:42 (fake):";',
+            'const char *s = "make[2]: *** [Makefile:4: fake] Error 1";',
+            "make[2]: Entering directory '/tmp/build'",
+            "plain build output",
+            "src/main.cpp:12:1: error: real failure",
+        ]
+    )
+
+    assert result.diagnostics == (
+        Diagnostic(
+            path="src/main.cpp",
+            line=12,
+            column=1,
+            severity="error",
+            message="real failure",
+            context=(),
+            tool="compiler",
+        ),
+    )
+    assert result.total_lines == 7
