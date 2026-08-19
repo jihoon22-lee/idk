@@ -100,10 +100,15 @@ def _vendor_fixture(
     return checkout, zellij_hashes["zellij"], hashlib.sha256(xclip_tar.read_bytes()).hexdigest()
 
 
-def _run_fixture(checkout: Path, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+def _run_fixture(
+    checkout: Path,
+    tmp_path: Path,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     fake_bin = tmp_path / "bin"
     env = os.environ.copy()
     env["PATH"] = os.pathsep.join((str(fake_bin), env.get("PATH", "")))
+    env.update(extra_env or {})
     return subprocess.run(
         ["bash", str(checkout / "scripts" / SCRIPT.name)],
         cwd=checkout,
@@ -193,26 +198,64 @@ def test_static_link_check_failure_is_fatal(tmp_path):
     assert "static" in (result.stdout + result.stderr).lower()
 
 
+@pytest.mark.parametrize("flavor", ["full", "debug"])
+def test_unsupported_zellij_flavor_fails_before_manifest_or_download(tmp_path, flavor):
+    manifest_text = (
+        f"zellij-0.44.3-{flavor}-x86_64-musl binary "
+        "a675b0106263113b9cb8f028649bad05c5d2283331fa62b2b36dd275aeaaa4d3\n"
+        "xclip-0.13 archive ca5b8804e3c910a66423a882d79bf3c9450b875ac8528791fb60ec9de667f758\n"
+    )
+    checkout, _, _ = _vendor_fixture(tmp_path, manifest_text=manifest_text)
+    for artifact in (checkout / "vendor").iterdir():
+        artifact.unlink()
+    marker = tmp_path / "curl-called"
+    (tmp_path / "bin" / "curl").write_text(
+        '#!/bin/sh\ntouch "$DOWNLOAD_MARKER"\nexit 99\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "bin" / "curl").chmod(0o755)
+
+    result = _run_fixture(
+        checkout,
+        tmp_path,
+        {"DOWNLOAD_MARKER": str(marker), "ZELLIJ_FLAVOR": flavor},
+    )
+
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "only no-web" in output.lower()
+    assert "manifest" in output.lower()
+    assert not marker.exists()
+
+
+def _assert_immutable_action_refs(text: str) -> None:
+    refs = re.findall(r"^\s*(?:-\s*)?uses:\s*([^\s#]+)", text, re.MULTILINE)
+    assert refs, "workflow has no remote uses entries"
+    for ref in refs:
+        assert not ref.startswith("./"), f"unexpected local action in remote uses scan: {ref}"
+        action, separator, revision = ref.rpartition("@")
+        assert action and separator, f"action ref has no immutable revision: {ref}"
+        assert re.fullmatch(r"[0-9a-fA-F]{40}", revision), (
+            f"action ref is not an immutable 40-hex commit: {ref}"
+        )
+
+
+def test_workflow_pin_guard_rejects_mutable_action_fixture():
+    with pytest.raises(AssertionError, match="immutable"):
+        _assert_immutable_action_refs("jobs:\n  steps:\n    - uses: other/action@v1\n")
+
+
 def test_github_actions_use_approved_immutable_pins():
     workflow_paths = (
         ROOT / ".github" / "workflows" / "ci.yml",
         ROOT / ".github" / "workflows" / "release.yml",
     )
-    for path in workflow_paths:
-        text = path.read_text(encoding="utf-8")
-        for action, (sha, version) in ACTION_PINS.items():
-            pattern = rf"uses:\s*{re.escape(action)}@([^\s#]+)(?:\s+#\s*(.*))?"
-            for occurrence in re.findall(pattern, text):
-                ref, comment = occurrence
-                assert ref == sha, f"{path}: {action} is not pinned"
-                assert comment.strip() == version, f"{path}: {action} version comment drifted"
-
-    occurrences = re.findall(
-        r"uses:\s*((?:actions/checkout|astral-sh/setup-uv|actions/upload-artifact)@[^\s#]+)",
-        "\n".join(path.read_text(encoding="utf-8") for path in workflow_paths),
-    )
-    assert occurrences
-    assert all(
-        "@" in occurrence and not occurrence.endswith(("@v7", "@v10.0.1"))
-        for occurrence in occurrences
-    )
+    workflow_text = "\n".join(path.read_text(encoding="utf-8") for path in workflow_paths)
+    _assert_immutable_action_refs(workflow_text)
+    for action, (sha, version) in ACTION_PINS.items():
+        pattern = rf"uses:\s*{re.escape(action)}@([^\s#]+)(?:\s+#\s*(.*))?"
+        occurrences = re.findall(pattern, workflow_text)
+        assert occurrences, f"approved action is missing: {action}"
+        for ref, comment in occurrences:
+            assert ref == sha, f"{action} is not pinned"
+            assert comment.strip() == version, f"{action} version comment drifted"

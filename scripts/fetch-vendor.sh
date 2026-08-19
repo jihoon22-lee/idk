@@ -6,8 +6,8 @@
 #   vendor/SHA256SUMS             반입 후 무결성 확인용
 #   scripts/vendor-checksums.txt  승인한 zellij 바이너리와 xclip 아카이브의 해시
 #
-# 기본은 no-web 빌드다. 폐쇄망 반입 심사에서 내장 웹서버가 없는 쪽이 설명하기 쉽고 4MB 작다.
-# 웹 기능이 필요하면 ZELLIJ_FLAVOR=full 로 바꾼다.
+# 현재 승인 manifest에는 no-web 빌드만 있다. 폐쇄망 반입 심사에서 내장 웹서버가 없는 쪽이
+# 설명하기 쉽고 4MB 작다. 다른 flavor를 추가하려면 검토된 manifest hash가 필요하다.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -20,8 +20,11 @@ XCLIP_VERSION="${XCLIP_VERSION:-0.13}"
 
 case "$ZELLIJ_FLAVOR" in
     no-web) zellij_name="zellij-no-web-${ZELLIJ_TARGET}" ;;
-    full)   zellij_name="zellij-${ZELLIJ_TARGET}" ;;
-    *)      echo "ZELLIJ_FLAVOR 는 no-web 또는 full" >&2; exit 1 ;;
+    *)
+        echo "unsupported ZELLIJ_FLAVOR=$ZELLIJ_FLAVOR: only no-web is approved by the vendor checksum manifest" >&2
+        echo "다른 flavor를 추가하려면 검토된 manifest hash가 필요합니다." >&2
+        exit 1
+        ;;
 esac
 
 if [ "$ZELLIJ_TARGET" = "x86_64-unknown-linux-musl" ]; then
