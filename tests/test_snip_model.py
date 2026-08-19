@@ -164,6 +164,23 @@ def test_quoted_placeholders_ignores_escaped_quotes():
     assert model.quoted_placeholders(command) == []
 
 
+def test_backslash_before_brace_in_double_quotes_is_still_quoted():
+    command = r'''printf "%s" "\{{value}}"'''
+    assert model.quoted_placeholders(command) == ["value"]
+
+
+def test_command_substitution_context_is_rejected():
+    _write(
+        """[[snippet]]
+name = "x"
+cmd = 'printf "%s" "\\{{value}}"'
+[snippet.params.value]
+"""
+    )
+    with pytest.raises(config.ConfigError, match="인용문"):
+        model.load()
+
+
 def test_placeholders_extracted_in_order():
     assert model.placeholders("a {{x}} b {{y}} c {{x}}") == ["x", "y"]
 

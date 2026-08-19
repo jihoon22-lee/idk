@@ -14,6 +14,7 @@ from typing import Any
 from idk import config
 
 PLACEHOLDER_RE = re.compile(r"\{\{(\w+)\}\}")
+_DOUBLE_QUOTE_ESCAPABLE = frozenset(("$", "`", '"', "\\", "\n"))
 
 
 @dataclass(frozen=True)
@@ -47,15 +48,24 @@ def quoted_placeholders(cmd: str) -> list[str]:
     """인용된 shell 문맥 안에 있는 플레이스홀더 키를 등장 순서대로 돌려준다.
 
     이 함수는 명령을 완전하게 파싱하려는 것이 아니라, 비-raw 플레이스홀더가
-    이미 열린 single/double quote 안에 들어갔는지만 확인한다. 셸의 unquoted 및
-    double quote 문맥에서 backslash 는 다음 문자를 이스케이프한다.
+    이미 열린 single/double quote 안에 들어갔는지만 확인한다. 셸의 unquoted 문맥에서
+    backslash 는 다음 문자를 이스케이프하고, double quote 문맥에서는 shell이
+    escapable 로 취급하는 문자(`$`, backtick, `"`, `\\`, newline)만 이스케이프한다.
     """
     state = "unquoted"
     quoted: list[str] = []
     index = 0
     while index < len(cmd):
         char = cmd[index]
-        if char == "\\" and state in {"unquoted", "double"}:
+        if char == "\\" and state == "unquoted":
+            index += 2
+            continue
+        if (
+            char == "\\"
+            and state == "double"
+            and index + 1 < len(cmd)
+            and cmd[index + 1] in _DOUBLE_QUOTE_ESCAPABLE
+        ):
             index += 2
             continue
 
