@@ -34,8 +34,10 @@
 
 `vendor/SHA256SUMS` 로 반입 후 무결성을 확인한다.
 
-> zellij 는 기본으로 **no-web** 빌드를 받는다. 내장 웹서버가 없어 반입 심사에서 설명하기 쉽고
-> 4MB 작다. 웹 기능이 필요하면 `ZELLIJ_FLAVOR=full ./scripts/fetch-vendor.sh`.
+> zellij 는 committed checksum manifest가 승인한 **no-web** 빌드만 받는다. 내장 웹서버가 없어
+> 반입 심사에서 설명하기 쉽고 4MB 작다. `ZELLIJ_FLAVOR=full`을 포함한 다른 flavor는
+> 지원하지 않으며 다운로드 전에 거부된다. flavor를 추가하려면 검토된 manifest hash를 먼저
+> 추가해야 한다.
 
 ---
 

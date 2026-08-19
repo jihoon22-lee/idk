@@ -4,9 +4,10 @@
 #   vendor/zellij-*-musl.tar.gz   정적 링크 바이너리 (RHEL 8 의 glibc 2.28 과 무관하게 동작)
 #   vendor/xclip-*.tar.gz         폐쇄망에서 현지 빌드할 소스 (rustc 가 없어도 되는 C 코드)
 #   vendor/SHA256SUMS             반입 후 무결성 확인용
+#   scripts/vendor-checksums.txt  승인한 zellij 바이너리와 xclip 아카이브의 해시
 #
-# 기본은 no-web 빌드다. 폐쇄망 반입 심사에서 내장 웹서버가 없는 쪽이 설명하기 쉽고 4MB 작다.
-# 웹 기능이 필요하면 ZELLIJ_FLAVOR=full 로 바꾼다.
+# 현재 승인 manifest에는 no-web 빌드만 있다. 폐쇄망 반입 심사에서 내장 웹서버가 없는 쪽이
+# 설명하기 쉽고 4MB 작다. 다른 flavor를 추가하려면 검토된 manifest hash가 필요하다.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,9 +20,69 @@ XCLIP_VERSION="${XCLIP_VERSION:-0.13}"
 
 case "$ZELLIJ_FLAVOR" in
     no-web) zellij_name="zellij-no-web-${ZELLIJ_TARGET}" ;;
-    full)   zellij_name="zellij-${ZELLIJ_TARGET}" ;;
-    *)      echo "ZELLIJ_FLAVOR 는 no-web 또는 full" >&2; exit 1 ;;
+    *)
+        echo "unsupported ZELLIJ_FLAVOR=$ZELLIJ_FLAVOR: only no-web is approved by the vendor checksum manifest" >&2
+        echo "다른 flavor를 추가하려면 검토된 manifest hash가 필요합니다." >&2
+        exit 1
+        ;;
 esac
+
+if [ "$ZELLIJ_TARGET" = "x86_64-unknown-linux-musl" ]; then
+    zellij_manifest_key="zellij-${ZELLIJ_VERSION#v}-${ZELLIJ_FLAVOR}-x86_64-musl"
+else
+    zellij_manifest_key="zellij-${ZELLIJ_VERSION#v}-${ZELLIJ_FLAVOR}-${ZELLIJ_TARGET}"
+fi
+xclip_manifest_key="xclip-${XCLIP_VERSION}"
+
+MANIFEST="$ROOT/scripts/vendor-checksums.txt"
+fail() {
+    echo "오류: $*" >&2
+    exit 1
+}
+
+if [ ! -r "$MANIFEST" ]; then
+    fail "vendor checksum manifest를 읽을 수 없습니다: $MANIFEST"
+fi
+
+# Manifest는 공백으로 구분한 <이름> <종류> <sha256> 세 필드만 허용한다.
+# 승인된 두 이름 이외에는 받지 않아, 오타나 추가 행을 조용히 무시하지 않는다.
+manifest_rows="$(awk '
+    /^[[:space:]]*(#.*)?$/ { next }
+    NF != 3 {
+        printf "invalid vendor checksum manifest at line %d: expected 3 fields\\n", NR > "/dev/stderr"
+        exit 2
+    }
+    { print $1 "\t" $2 "\t" $3 }
+' "$MANIFEST")" || fail "vendor checksum manifest를 파싱할 수 없습니다"
+
+zellij_checksum=""
+xclip_checksum=""
+while IFS=$'\t' read -r name kind checksum; do
+    [ -n "$name" ] || continue
+    case "$name:$kind" in
+        "$zellij_manifest_key:binary")
+            [ -z "$zellij_checksum" ] || fail "duplicate vendor checksum manifest entry: $name $kind"
+            ;;
+        "$xclip_manifest_key:archive")
+            [ -z "$xclip_checksum" ] || fail "duplicate vendor checksum manifest entry: $name $kind"
+            ;;
+        *)
+            fail "unapproved vendor checksum manifest entry: $name $kind"
+            ;;
+    esac
+    if [[ ! "$checksum" =~ ^[0-9a-fA-F]{64}$ ]]; then
+        fail "invalid SHA-256 in vendor checksum manifest: $name"
+    fi
+    checksum="${checksum,,}"
+    if [ "$name:$kind" = "$zellij_manifest_key:binary" ]; then
+        zellij_checksum="$checksum"
+    else
+        xclip_checksum="$checksum"
+    fi
+done <<< "$manifest_rows"
+
+[ -n "$zellij_checksum" ] || fail "vendor checksum manifest에 zellij binary entry가 없습니다"
+[ -n "$xclip_checksum" ] || fail "vendor checksum manifest에 xclip archive entry가 없습니다"
 
 base="https://github.com/zellij-org/zellij/releases/download/${ZELLIJ_VERSION}"
 mkdir -p "$VENDOR"
@@ -39,41 +100,57 @@ fetch() { # fetch <url> <파일명>
 
 echo "zellij ${ZELLIJ_VERSION} (${ZELLIJ_FLAVOR}, ${ZELLIJ_TARGET})"
 fetch "${base}/${zellij_name}.tar.gz"    "${zellij_name}.tar.gz"
-fetch "${base}/${zellij_name}.sha256sum" "${zellij_name}.sha256sum"
 
 echo "xclip ${XCLIP_VERSION} (소스 — 폐쇄망에서 현지 빌드)"
 fetch "https://github.com/astrand/xclip/archive/refs/tags/${XCLIP_VERSION}.tar.gz" \
       "xclip-${XCLIP_VERSION}.tar.gz"
 
-# 주의: zellij 가 공개하는 .sha256sum 은 tarball 이 아니라 **압축을 푼 바이너리** 의 해시다
-# (파일 안의 경로가 target/<target>/release/zellij 인 것으로 확인). 그래서 풀어서 대조한다.
+# zellij는 tarball이 아니라 **압축을 푼 바이너리**를 승인 manifest와 대조한다.
 # 어차피 실제로 폐쇄망에 설치될 파일을 검증하는 쪽이 맞다.
-echo "업스트림 sha256 대조 (압축 푼 바이너리 기준)"
+echo "승인 manifest sha256 대조"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 tar xzf "$VENDOR/${zellij_name}.tar.gz" -C "$tmp"
-published="$(awk '{print $1}' "$VENDOR/${zellij_name}.sha256sum")"
 actual="$(sha256sum "$tmp/zellij" | awk '{print $1}')"
-if [ "$published" != "$actual" ]; then
-    echo "zellij 바이너리 체크섬 불일치!" >&2
-    echo "  업스트림: $published" >&2
-    echo "  받은 파일: $actual" >&2
+if [ "$zellij_checksum" != "$actual" ]; then
+    echo "zellij binary checksum mismatch!" >&2
+    echo "  승인 manifest: $zellij_checksum" >&2
+    echo "  받은 파일:     $actual" >&2
+    exit 1
+fi
+echo "  일치: $actual"
+
+actual="$(sha256sum "$VENDOR/xclip-${XCLIP_VERSION}.tar.gz" | awk '{print $1}')"
+if [ "$xclip_checksum" != "$actual" ]; then
+    echo "xclip archive checksum mismatch!" >&2
+    echo "  승인 manifest: $xclip_checksum" >&2
+    echo "  받은 파일:     $actual" >&2
     exit 1
 fi
 echo "  일치: $actual"
 
 # musl 정적 링크가 맞는지 확인 — 동적 링크면 RHEL 8 의 glibc 2.28 에서 깨진다.
-# file(1) 은 이 바이너리를 "static-pie linked" 라고 부른다(정적 맞음). ldd 쪽이 명확하므로
-# ldd 를 우선 쓰고, 없을 때만 file 의 두 표현을 모두 받아준다.
-if command -v ldd >/dev/null; then
-    if ! ldd "$tmp/zellij" 2>&1 | grep -q 'statically linked'; then
-        echo "경고: 정적 링크가 아닙니다 — $(ldd "$tmp/zellij" 2>&1 | head -3)" >&2
-    fi
-elif command -v file >/dev/null; then
-    if ! file -b "$tmp/zellij" | grep -qE 'statically linked|static-pie linked'; then
-        echo "경고: 정적 링크가 아닙니다 — $(file -b "$tmp/zellij")" >&2
+# file(1) 은 이 바이너리를 "static-pie linked" 라고 부를 수 있다(정적 맞음). ldd 를
+# 우선 쓰고, ldd가 없거나 결과가 모호할 때만 file의 두 표현을 모두 받아준다.
+static_info=""
+static_verified=0
+if command -v ldd >/dev/null 2>&1; then
+    static_info="$(ldd "$tmp/zellij" 2>&1 || true)"
+    if grep -qE 'statically linked|static-pie linked' <<< "$static_info"; then
+        static_verified=1
     fi
 fi
+if [ "$static_verified" -ne 1 ] && command -v file >/dev/null 2>&1; then
+    static_info="$(file -b "$tmp/zellij" 2>&1 || true)"
+    if grep -qE 'statically linked|static-pie linked' <<< "$static_info"; then
+        static_verified=1
+    fi
+fi
+if [ "$static_verified" -ne 1 ]; then
+    echo "zellij static-link check failed: ${static_info:-ldd/file verifier unavailable}" >&2
+    exit 1
+fi
+echo "  정적 링크 확인: 통과"
 echo "  버전 확인: $("$tmp/zellij" --version 2>&1 | head -1)"
 
 ( cd "$VENDOR" && sha256sum ./*.tar.gz > SHA256SUMS )
