@@ -33,6 +33,43 @@ class HttpError(Exception):
         self.status = status
 
 
+def origin(url: str) -> tuple[str, str, int | None]:
+    """URL 의 scheme, hostname, 유효 port 로 origin 을 정규화한다."""
+    parsed = urllib.parse.urlsplit(url)
+    scheme = parsed.scheme.lower()
+    port = parsed.port or {"http": 80, "https": 443}.get(scheme)
+    return scheme, (parsed.hostname or "").lower(), port
+
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """인증 헤더를 다른 origin 으로 전달하지 않는 redirect handler."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        old_origin = origin(req.full_url)
+        new_origin = origin(newurl)
+        if old_origin[0] == "https" and new_origin[0] == "http":
+            raise HttpError(
+                "HTTPS 요청을 HTTP로 downgrade하는 redirect를 거부했습니다",
+                url=newurl,
+                status=code,
+            )
+
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None and old_origin != new_origin:
+            for key in tuple(redirected.headers):
+                if key.lower() == "authorization":
+                    redirected.remove_header(key)
+        return redirected
+
+
 @dataclass(frozen=True)
 class Response:
     status: int
@@ -128,7 +165,11 @@ def request(
 
     req = urllib.request.Request(url, data=data, headers=final_headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ssl_context()) as resp:
+        opener = urllib.request.build_opener(
+            SafeRedirectHandler(),
+            urllib.request.HTTPSHandler(context=ssl_context()),
+        )
+        with opener.open(req, timeout=timeout) as resp:
             return Response(
                 status=resp.status,
                 url=resp.geturl(),
