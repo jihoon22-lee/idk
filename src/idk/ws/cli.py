@@ -82,6 +82,16 @@ def _tab_count(session: str) -> int | None:
         return None
 
 
+def _purge_exited(name: str) -> None:
+    try:
+        zellij.kill(name, purge=True)
+    except zellij.ZellijMissing:
+        raise
+    except zellij.ZellijError as exc:
+        typer.echo(f"세션 정리 실패: {exc}", err=True)
+        raise typer.Exit(EXIT_ERROR) from exc
+
+
 def _is_nested() -> bool:
     return bool(os.environ.get("ZELLIJ"))
 
@@ -158,7 +168,7 @@ def _do_up(name: str, ws: model.Workspace, *, attach: bool, print_layout: bool) 
         # EXITED(부활 가능한 죽은 세션) — 같은 이름으로 새로 만들 수 없으므로
         # 자동으로 정리하고 재생성한다. 잔재가 "신규 세션 생성 실패" 의 흔한 원인이다.
         typer.echo(f"종료된 세션 '{name}' 을 제거하고 새로 만듭니다...", err=True)
-        zellij.kill(name, purge=True)
+        _purge_exited(name)
 
     if _is_nested():
         attach = False
@@ -227,7 +237,7 @@ def attach_or_create(name: str) -> None:
             )
             raise typer.Exit(EXIT_CONFLICT)
         typer.echo(f"종료된 세션 '{name}' 을 purge 하고 workspace 정의로 재생성합니다...", err=True)
-        zellij.kill(name, purge=True)
+        _purge_exited(name)
         _do_up(name, ws, attach=True, print_layout=False)
         return
 

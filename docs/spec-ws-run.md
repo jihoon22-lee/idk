@@ -178,7 +178,7 @@ layout {
 | `idk ws up <name>` | 세션 생성 후 attach |
 | `idk ws up <name> --detached` | 생성만 하고 붙지 않는다 |
 | `idk ws up <name> --print-layout` | KDL 만 stdout 으로 출력하고 종료. zellij 를 호출하지 않는다 |
-| `idk ws attach <name>` | attach. 세션이 없으면 정의로 생성 후 attach |
+| `idk ws attach <name>` | running은 attach. 세션이 없으면 정의로 생성 후 attach. 정의된 EXITED는 purge 후 재생성 |
 | `idk ws kill <name>` | `kill-session` — EXITED 로 남아 부활 가능 |
 | `idk ws kill <name> --purge` | `delete-session` — 완전 제거 |
 
@@ -188,11 +188,12 @@ layout {
 정의 로드 → 검증 → KDL 렌더 → (--print-layout 이면 출력 후 종료)
   → 세션 존재 확인
       이미 있음(live)   → "이미 있습니다. idk ws attach 로 붙으세요" 후 exit 3
-      있음(EXITED)      → --purge 없이는 이름 충돌. 안내 후 exit 3
+      있음(EXITED)      → purge 후 workspace 정의로 재생성 → attach
       없음              → 임시파일에 KDL 쓰기 → zellij --new-session-with-layout … --session <name>
 ```
 
 zellij 가 뱉는 `already exists` 에러에 기대지 않고 **먼저 확인해서 더 나은 안내를 준다.**
+정의된 EXITED 세션은 기존 이름을 재사용할 수 있도록 purge하고 같은 workspace 정의로 재생성한다.
 임시 파일은 `tempfile.NamedTemporaryFile(suffix=".kdl")` 로 만들고 종료 시 정리한다.
 (zellij 가 파일을 읽은 뒤에도 유지되어야 하므로 프로세스 종료 후 삭제)
 
@@ -216,6 +217,9 @@ zellij 가 뱉는 `already exists` 에러에 기대지 않고 **먼저 확인해
 | 4 | zellij 미설치 |
 
 zellij 미설치 시 설치 안내(`docs/closed-network-setup.md` 참조)를 출력하고 exit 4.
+zellij가 예상하지 못한 nonzero를 반환하면 명령 인자·exit code·출력과 함께 exit 1이다. 세션
+목록의 정확한 `No active zellij sessions found.`와 purge의 확인된 대상 없음 문구만 멱등 성공으로
+인정한다.
 
 ### 4.4 `ls` 출력
 
@@ -246,15 +250,19 @@ textual. 화면 하나로 끝낸다.
 │  scratch   defined    2                         │
 ├─────────────────────────────────────────────────┤
 │ Enter attach/생성   k kill   p purge   r 새로고침 │
-│ / 검색              q 종료                       │
+│ / 검색(후속 UX)     q 종료                       │
 └─────────────────────────────────────────────────┘
 ```
 
-- `Enter` — running 이면 attach, defined/exited 면 생성 후 attach
+- `Enter` — running 이면 attach, defined 면 생성 후 attach, 정의된 exited 면 purge 후 재생성해 attach
+- 정의가 없는 orphan EXITED 세션은 자동 제거하지 않는다. attach 시 exit 3과 purge 후 workspace를
+  정의하라는 복구 안내를 낸다.
 - attach 는 **TUI 를 종료하고 zellij 로 프로세스를 넘긴다**(`os.execvp`). TUI 아래에서 zellij 를
   중첩 실행하면 키 입력이 꼬인다
-- `k` kill / `p` purge 는 확인 프롬프트
+- `k` kill / `p` purge 는 확인 modal. `Enter`/`y`가 확인이고 `Esc`/`n`이 취소다. `p`는
+  EXITED 흔적까지 영구 제거한다는 경고를 보여 준다.
 - 목록은 진입 시와 `r` 에서만 갱신 (폴링하지 않는다 — 원격 접속에서 불필요한 트래픽)
+- `/` 검색은 아직 구현하지 않은 후속 UX다.
 
 ---
 
