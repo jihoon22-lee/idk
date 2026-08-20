@@ -5,7 +5,7 @@
 데 초점을 맞춘다 — 꼭 필요한 것만 있고, 각 항목이 무엇을 풀어주는지 이유가 붙어 있다.
 
 > 이 양식은 폐쇄망 field acceptance에서 core 아티팩트와 선택 vendor를 확인하는 데 사용한다.
-> field acceptance는 v0.2.0 publish와 분리된 후속 확인으로 남아 있다.
+> field acceptance는 v0.2.1 publish와 분리된 후속 확인으로 남아 있다.
 
 아래 **A → B → C** 순서로 진행하고, 마지막 [답변 양식](#답변-양식)만 채워 오면 된다.
 
@@ -20,12 +20,12 @@
 설치는 [closed-network-setup.md](closed-network-setup.md) 참조. 설치 후:
 
 ```bash
-idk --version          # idk 0.2.0 이 나오면 런처 성공
+idk --version          # idk 0.2.1 이 나오면 런처 성공
 ```
 
 | 결과 | 의미 | 적어올 것 |
 |---|---|---|
-| `idk 0.2.0` | 런처 정상 | "OK" 한 마디면 충분 |
+| `idk 0.2.1` | 런처 정상 | "OK" 한 마디면 충분 |
 | `idk: python 3.10+ 를 찾지 못했습니다` | 탐색 실패 (설계상 예상 가능한 실패) | 아래 A-1 을 수행 |
 | 그 외 에러 | **예상 못 한 실패** | 에러 메시지 첫 3줄을 그대로 |
 
@@ -65,7 +65,7 @@ idk doctor --brief
 **손으로 옮겨 적기 좋게** 줄 수와 글자 수를 줄여 놓았다. 출력 예시(WSL 에서 뽑은 것):
 
 ```
-idk 0.2.0 brief
+idk 0.2.1 brief
 os      wsl:ubuntu-26.04  glibc=2.43  kernel=6.18.33.1-microsoft-standard-WSL2  arch=x86_64  wsl=yes
 shell   /bin/bash  TERM=xterm-256color  COLORTERM=-  LANG=C.UTF-8  utf8=yes
 python  running=3.10.21  IDK_PYTHON=-

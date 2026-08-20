@@ -1,7 +1,7 @@
 name: release
 
 # PR 병합·CI green·최종 공개 승인 뒤 태그를 밀면 idk.pyz 를 빌드해 릴리스에 붙인다.
-#   git tag v0.2.0 && git push origin v0.2.0
+#   git tag v0.2.1 && git push origin v0.2.1
 # 폐쇄망 field acceptance는 publish와 분리된 후속 확인이다.
 #
 # 릴리스 노트는 CHANGELOG.md 의 해당 버전 섹션을 그대로 쓴다.
