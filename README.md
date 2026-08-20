@@ -85,7 +85,7 @@ idk build --file build.log --severity warning
 idk build --file build.log --severity error --exit-code
 ```
 
-기본 `plain` 출력은 `path:line:column: severity: message` 형식이고, `json`은 `total_lines`,
+기본 `plain` 출력은 `path:line[:column]: severity: message` 형식이고, `json`은 `total_lines`,
 `diagnostic_count`, `diagnostics`(path/line/column/severity/message/context/tool) 필드를 갖는다.
 `--severity error`는 fatal/error, `warning`은 warning만, `all`은 note까지 포함한다. `--exit-code`는
 필터 전 전체 결과에 fatal/error가 있으면 exit 1로 끝내며, 출력 필터와 독립적이다.

@@ -9,12 +9,10 @@ from .model import Diagnostic, ParseResult
 
 
 def _diagnostic_line(diagnostic: Diagnostic) -> str:
-    if (
-        diagnostic.path is not None
-        and diagnostic.line is not None
-        and diagnostic.column is not None
-    ):
-        location = f"{diagnostic.path}:{diagnostic.line}:{diagnostic.column}"
+    if diagnostic.path is not None and diagnostic.line is not None:
+        location = f"{diagnostic.path}:{diagnostic.line}"
+        if diagnostic.column is not None:
+            location += f":{diagnostic.column}"
         return f"{location}: {diagnostic.severity}: {diagnostic.message}"
 
     return f"[{diagnostic.tool}] {diagnostic.severity}: {diagnostic.message}"
@@ -23,9 +21,9 @@ def _diagnostic_line(diagnostic: Diagnostic) -> str:
 def render_plain(diagnostics: Sequence[Diagnostic]) -> str:
     """Render diagnostics as grep-friendly text with one trailing newline.
 
-    A diagnostic with a complete source location uses the conventional
-    ``path:line:column`` prefix.  Diagnostics from tools that do not provide a
-    complete location use ``[tool]`` so the output never exposes ``None``.
+    A diagnostic with a source path and line uses the conventional
+    ``path:line[:column]`` prefix. Diagnostics without a source path and line
+    use ``[tool]`` so the output never exposes ``None``.
     Context is emitted immediately after its diagnostic, one line at a time.
     """
 

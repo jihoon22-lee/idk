@@ -16,6 +16,8 @@
   소스 미리보기/editor/클립보드 연동은 후속 범위다.
 
 ### Fixed
+- **build plain 출력의 부분 위치 보존** — column이 없는 compiler/CMake 진단도
+  `path:line: severity: message`로 출력해 파일과 라인 정보를 잃지 않는다.
 - **`idk config check` 추가** — 알려진 TOML 설정을 고정된 순서로 검사해 `skip`/`ok`/`warn`/`fail`
   행과 `file`/`status`/`detail` JSON 출력을 제공한다. 실제로 없는 파일·설정 디렉터리는 정상으로
   건너뛰고, `--strict`에서만 workspace cwd 경고를 exit 1로 올린다.

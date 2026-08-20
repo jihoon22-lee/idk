@@ -52,7 +52,7 @@ def test_plain_golden_preserves_order_context_and_trailing_newline():
     )
 
 
-def test_plain_uses_tool_marker_when_any_source_location_part_is_missing():
+def test_plain_preserves_path_and_line_when_column_is_missing():
     diagnostics = (
         _diagnostic(path="CMakeLists.txt", line=42, column=None, tool="cmake"),
         _diagnostic(path=None, line=9, column=4, tool="qt"),
@@ -60,7 +60,7 @@ def test_plain_uses_tool_marker_when_any_source_location_part_is_missing():
     )
 
     assert render_plain(diagnostics) == (
-        "[cmake] error: failed\n[qt] error: failed\n[make] error: failed\n"
+        "CMakeLists.txt:42: error: failed\n[qt] error: failed\n[make] error: failed\n"
     )
 
 
