@@ -69,8 +69,8 @@ idk 0.2.0 brief
 os      wsl:ubuntu-26.04  glibc=2.43  kernel=6.18.33.1-microsoft-standard-WSL2  arch=x86_64  wsl=yes
 shell   /bin/bash  TERM=xterm-256color  COLORTERM=-  LANG=C.UTF-8  utf8=yes
 python  running=3.10.21  IDK_PYTHON=-
-py.1    python3.14=3.14.7  /home/jihoon/.local/bin/python3.14
-py.2    python3.10=3.10.21  /home/jihoon/.local/bin/python3.10
+py.1    python3.14=3.14.7  /home/example-user/.local/bin/python3.14
+py.2    python3.10=3.10.21  /home/example-user/.local/bin/python3.10
 py.3    python3=3.10.21  /usr/bin/python3
 tools   zellij=0.44.3  xclip=-  git=2.53.0
 build   gcc=15.2.0  g++=15.2.0  make=4.4.1  cmake=-
