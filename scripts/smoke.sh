@@ -32,7 +32,7 @@ check_build_stdin_json() {
 }
 
 check_version() {
-    [ "$("$@" --version)" = "idk 0.2.0" ]
+    [ "$("$@" --version)" = "idk 0.2.1" ]
 }
 
 PY310="$(uv python find 3.10 2>/dev/null || command -v python3.10 || true)"

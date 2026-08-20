@@ -9,6 +9,8 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-20
+
 ### Fixed
 - **TUI 터미널 수명 처리** — `idk ws`/`idk run`/`idk dt tui`가 non-TTY 시작을 exit 2로
   거부하고, 실행 중 터미널이 사라지면 자동으로 종료한다.
@@ -165,13 +167,14 @@
 
 ```bash
 # PR 병합·CI green·최종 공개 승인 뒤에만 실행한다.
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.2.1 && git push origin v0.2.1
 ```
 
 워크플로가 태그와 `__version__` 이 일치하는지 확인하고, 빌드·스모크를 돌린 뒤
 `idk.pyz` 와 `idk.pyz.sha256` 을 릴리스에 붙이고 이 파일의 해당 섹션을 릴리스 노트로 쓴다.
 
-[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/jihoon22-lee/idk/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jihoon22-lee/idk/releases/tag/v0.2.0
 [0.1.1]: https://github.com/jihoon22-lee/idk/releases/tag/v0.1.1
 [0.1.0]: https://github.com/jihoon22-lee/idk/releases/tag/v0.1.0
