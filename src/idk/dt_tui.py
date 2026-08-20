@@ -16,6 +16,7 @@ from textual.widgets import Button, Footer, Header, OptionList, TextArea
 from textual.widgets.option_list import Option
 
 from idk.dt import case, encoding, jsonfmt, jwt, security, timestamp
+from idk.tui_runtime import monitor_terminal_loss, require_interactive_terminal
 
 
 def _jwt_render(token: str) -> str:
@@ -79,6 +80,7 @@ class DtApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        monitor_terminal_loss(self)
         tools = self.query_one("#tools", OptionList)
         tools.highlighted = 0
 
@@ -97,4 +99,5 @@ class DtApp(App[None]):
 
 
 def run() -> None:
+    require_interactive_terminal("idk dt", "대신 `idk dt` 의 일반 하위 명령을 사용하세요.")
     DtApp().run()

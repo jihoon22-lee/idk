@@ -15,6 +15,7 @@ import typer
 
 from idk import config
 from idk.snip import model, render
+from idk.tui_runtime import require_interactive_terminal
 
 EXIT_ERROR = 1
 EXIT_CONFLICT = 3
@@ -211,6 +212,9 @@ def run_cmd(
         typer.echo("--force 는 'run init' 에서만 사용할 수 있습니다.", err=True)
         raise typer.Exit(2)
     if name is None:
+        require_interactive_terminal(
+            "idk run", "목록은 `idk run ls`, 실행은 이름을 지정한 스니펫을 사용하세요."
+        )
         from idk.snip import tui
 
         tui.run()

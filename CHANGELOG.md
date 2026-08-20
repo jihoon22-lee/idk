@@ -9,6 +9,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- **TUI 터미널 수명 처리** — `idk ws`/`idk run`/`idk dt tui`가 non-TTY 시작을 exit 2로
+  거부하고, 실행 중 터미널이 사라지면 자동으로 종료한다.
+
 ## [0.2.0] - 2026-08-20
 
 ### Added

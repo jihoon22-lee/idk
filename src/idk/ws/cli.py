@@ -16,6 +16,7 @@ from typing import Annotated
 import typer
 
 from idk import config
+from idk.tui_runtime import require_interactive_terminal
 from idk.ws import layout as layoutmod
 from idk.ws import model
 from idk.ws.backends import zellij
@@ -32,6 +33,9 @@ def _ws_default(ctx: typer.Context) -> None:
     """서브커맨드 없이 `idk ws` 면 TUI 를 띄운다."""
     if ctx.invoked_subcommand is not None:
         return
+    require_interactive_terminal(
+        "idk ws", "목록은 `idk ws ls`, 실행은 `idk ws up <name>` 을 사용하세요."
+    )
     from idk.ws import tui
 
     tui.run()
