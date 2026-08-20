@@ -5,6 +5,9 @@
 - 배경과 우선순위: [plan.md](plan.md)
 - 구현 규약과 서브커맨드 추가 절차: [ARCHITECTURE.md](ARCHITECTURE.md)
 
+> `idk ws`와 `idk run`의 Phase 1 구현은 완료되어 v0.2.0 동작 계약에 포함되어 있다.
+> `/` 검색처럼 명시된 후속 UX는 여전히 미구현이다.
+
 ---
 
 ## 0. 해결하려는 문제
@@ -407,22 +410,22 @@ tmux 백엔드는 만들지 않되, 이 시그니처가 백엔드 경계가 된�
 
 ---
 
-## 10. 구현 순서
+## 10. 구현 순서 (완료 기록)
 
 의존성이 적고 테스트가 쉬운 것부터. 각 단계는 그 자체로 검증 가능하다.
 
 | # | 작업 | 완료 기준 |
 |---|---|---|
-| 1 | `ws/model.py` + 테스트 | TOML fixture 로드/검증 통과 |
-| 2 | `ws/layout.py` + 골든 테스트 | 예시 workspace → §3 의 KDL 과 일치 |
-| 3 | `backends/zellij.py` + mock 테스트 | 호출 인자 단언, `list_sessions` 파서 |
-| 4 | `ws/cli.py` (`ls`/`up --print-layout`/`up`/`attach`/`kill`) | 종료 코드 표 충족 |
-| 5 | **실동작 확인** — 실제 세션 생성 → detach → 재attach | ETX 끊김 시나리오 재현 |
-| 6 | `snip/model.py` + `snip/render.py` + 테스트 | 인용·raw·누락 처리 |
-| 7 | `snip/cli.py` (`ls`/`run`/`--print`/`--pane`) | `--pane` 이 실제 pane 생성 |
-| 8 | `ws/tui.py` | Enter attach 가 `execvp` 로 넘어가는지 |
-| 9 | `snip/tui.py` | 퍼지 검색 |
-| 10 | 문서 — GUIDE.md 명령표·설정 파일, CHANGELOG | |
+| 1 | `ws/model.py` + 테스트 | ✅ TOML fixture 로드/검증 통과 |
+| 2 | `ws/layout.py` + 골든 테스트 | ✅ 예시 workspace → §3 의 KDL 과 일치 |
+| 3 | `backends/zellij.py` + mock 테스트 | ✅ 호출 인자 단언, `list_sessions` 파서 |
+| 4 | `ws/cli.py` (`ls`/`up --print-layout`/`up`/`attach`/`kill`) | ✅ 종료 코드 표 충족 |
+| 5 | **실동작 확인** — 실제 세션 생성 → detach → 재attach | ⏳ 폐쇄망/WSL 실환경 acceptance로 유지 |
+| 6 | `snip/model.py` + `snip/render.py` + 테스트 | ✅ 인용·raw·누락 처리 |
+| 7 | `snip/cli.py` (`ls`/`run`/`--print`/`--pane`) | ✅ `--pane` 이 실제 pane 생성 |
+| 8 | `ws/tui.py` | ✅ Enter attach 가 `execvp` 로 넘어가는지 |
+| 9 | `snip/tui.py` | ✅ 퍼지 검색 |
+| 10 | 문서 — GUIDE.md 명령표·설정 파일, CHANGELOG | ✅ v0.2.0 문서 반영 완료 |
 
 **5번까지가 실사용 최소선이다.** TUI 없이 `idk ws up`/`attach` 만으로도 목적을 달성한다.
 

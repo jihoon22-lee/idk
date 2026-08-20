@@ -1,11 +1,12 @@
 # idk — Integrated Developer Kit
 
 개발 환경(WSL)과 **폐쇄망**(RHEL 8.10, tcsh) 양쪽에서 **똑같이 동작하는** CLI/TUI 개발 도구 모음.
-반입 파일 하나(`idk.pyz`)로 배포된다.
+핵심 실행 아티팩트 한 개(`idk.pyz`)로 배포된다. `idk ws`와 `idk run --pane`에는 선택
+zellij vendor가, `copy_on_select`에는 선택 xclip vendor가 추가로 필요하다.
 
 ```bash
 $ idk doctor --brief
-idk 0.1.1 brief
+idk 0.2.0 brief
 os      rhel-8.10  glibc=2.28  kernel=4.18.0-553.el8_10.x86_64  arch=x86_64  wsl=no
 shell   /bin/tcsh  TERM=xterm-256color  COLORTERM=-  LANG=en_US.UTF-8  utf8=yes
 python  running=3.10.4  IDK_PYTHON=/opt/python3.10/bin/python3.10
@@ -22,19 +23,20 @@ mirror  skip  미설정  ~/.config/idk/mirror.toml
 
 | 제약 | 결과 |
 |---|---|
-| 파일 반입이 번거롭고 심사 대상 | **단일 zipapp** — 의존성까지 한 파일에 넣는다 |
+| 파일 반입이 번거롭고 심사 대상 | **핵심 zipapp 아티팩트 1개** — 의존성까지 한 파일에 넣고, ws/clipboard용 vendor는 선택 반입한다 |
 | 기본 `python3`가 구버전, 3.10은 `.csh`를 source해야 잡힘 | zipapp 앞에 **`/bin/sh` 런처**를 붙여 3.10+를 스스로 찾는다 |
 | rustc·docker 없음, glibc 2.28 | **순수 파이썬 의존성만** (`py3-none-any`). 네이티브 확장 금지 |
-| 사내 TLS 인터셉션 | HTTP는 **stdlib `urllib`** — `requests`/`httpx`는 `certifi` 번들 CA를 써서 깨진다 |
-| ETX(X11 리모팅)에서 WebView가 느리고, RHEL 8에 webkit2gtk 부재 | **GUI 안 만든다.** CLI/TUI만 |
+| 내부 TLS 인터셉션 | HTTP는 **stdlib `urllib`** — `requests`/`httpx`는 `certifi` 번들 CA를 써서 깨진다 |
+| 원격 X11에서 WebView가 느리고, RHEL 8에 webkit2gtk 부재 | **GUI 안 만든다.** CLI/TUI만 |
 | 파일 반출 불가 | 환경 정보는 `doctor --brief`를 **손으로 옮겨 적어** 가져온다 |
 
 자세한 근거는 [docs/plan.md](docs/plan.md), 실제 구조는 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## 설치
 
-[릴리스](https://github.com/jihoon22-lee/idk/releases)에서 `idk.pyz`를 받아 실행 권한만 주면 끝이다.
-root 권한이 필요 없다.
+[릴리스 페이지](https://github.com/jihoon22-lee/idk/releases)에서 핵심 실행 아티팩트
+`idk.pyz`를 받거나 아래 절차로 소스에서 같은 아티팩트를 빌드할 수 있다. 실행에는 root 권한이
+필요 없다.
 
 ```bash
 mkdir -p ~/.local/bin
@@ -46,10 +48,16 @@ idk doctor
 `idk env --csh` 가 셸 환경파일에 붙여넣을 줄을 만들어 준다.
 폐쇄망 반입 절차는 [docs/closed-network-setup.md](docs/closed-network-setup.md) 참조.
 
+핵심 CLI와 `idk build`만 사용하면 `dist/idk.pyz` 한 개가 필요한 전부다. `idk ws`/`idk run
+--pane`에는 zellij vendor가, `copy_on_select`에는 xclip vendor가 필요하다. 두 선택 구성요소를
+모두 준비하는 `fetch-vendor.sh` 실행은 두 아카이브와 `vendor/SHA256SUMS`를 3개짜리 allowlist
+반입 세트로 지정하며, `idk.pyz`를 더한 전체 준비 bundle은 4개 파일이다. 무결성 파일은 vendor
+아카이브와 함께 반입해야 한다.
+
 ### 소스에서 빌드
 
 ```bash
-./scripts/build-pyz.sh     # dist/idk.pyz
+./scripts/build-pyz.sh     # dist/idk.pyz (핵심 필수 아티팩트 1개)
 ./scripts/smoke.sh         # 반입 전 게이트
 ```
 
@@ -68,9 +76,9 @@ idk doctor
 | `idk ws` | ✅ | 워크스페이스·터미널 매니저 (확인 modal, EXITED 재생성, zellij 백엔드) |
 | `idk run` | ✅ | 명령 런처(스니펫) |
 | `idk dt` | ✅ | 개발 도구 모음 (JSON·Base64·hash·JWT·diff…) |
-| `idk build` | ✅ MVP | 파일/stdin 빌드 로그에서 진단 추출 (plain/JSON) |
+| `idk build` | ✅ MVP (v0.2.0) | 파일/stdin 빌드 로그에서 진단 추출 (plain/JSON) |
 | `idk log` | 📋 Phase 4 | 멀티 로그 뷰어 |
-| `idk mirror` | 📋 Phase 5 | 사내 아티팩토리 미러 검색 |
+| `idk mirror` | 📋 Phase 5 | 내부 패키지 미러 검색 |
 
 ### `idk build` — 빌드 진단 MVP
 
@@ -100,7 +108,7 @@ MVP에는 `idk build -- <command>` 실행 감싸기, TUI, 소스 미리보기, e
 | 문서 | 내용 |
 |---|---|
 | [docs/GUIDE.md](docs/GUIDE.md) | 사용법 — 명령어와 설정 파일 |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 구조 — 단일 파일 배포가 실제로 어떻게 동작하는지, 서브커맨드 추가법 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 구조 — 핵심 단일 아티팩트와 선택 vendor, 서브커맨드 추가법 |
 | [docs/plan.md](docs/plan.md) | 작업 계획서(정본) — 설계 근거와 Phase 0~5 |
 | [docs/closed-network-setup.md](docs/closed-network-setup.md) | 폐쇄망 반입·설치 절차 |
 | [docs/env-survey.md](docs/env-survey.md) | 폐쇄망에서 확인해 올 항목 (답변 양식 포함) |

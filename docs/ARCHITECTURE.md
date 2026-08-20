@@ -5,6 +5,9 @@
 
 기여하기 전에 [§6 새 서브커맨드 추가](#6-새-서브커맨드-추가)와 [AGENTS.md](../AGENTS.md)를 읽으면 된다.
 
+> Phase 0~3과 v0.2.0 보안·안정성·build MVP 작업이 통합되어 있다. `dist/idk.pyz`는
+> 빌드 스크립트가 만드는 하나의 필수 핵심 실행 아티팩트다.
+
 ---
 
 ## 1. 전체 그림
@@ -23,7 +26,8 @@
 
 핵심 성질 셋:
 
-- **파일 1개.** 의존성이 전부 들어 있어 사내 PyPI 미러 상태와 무관하다.
+- **핵심 파일 1개.** 의존성이 전부 들어 있어 내부 패키지 미러 상태와 무관하다. `ws`/`run --pane`의
+  zellij와 `copy_on_select`의 xclip은 별도 선택 vendor 입력이다.
 - **인터프리터를 스스로 찾는다.** `.csh` 를 source 하지 않은 컨텍스트에서도 동작한다.
 - **재현 가능하다.** committed source와 `uv.lock`은 필요한 입력이지만, 같은 Python 대상과
   uv/shiv/hatchling 등 build toolchain, native staging 조건도 맞아야 같은 바이트를 기대할 수
@@ -32,9 +36,9 @@
 
 ---
 
-## 2. 단일 파일 배포 — sh/zip 폴리글롯
+## 2. 핵심 단일 파일 배포 — sh/zip 폴리글롯
 
-`idk.pyz` 는 셸 스크립트이면서 동시에 zip 아카이브다.
+핵심 아티팩트 `idk.pyz` 는 셸 스크립트이면서 동시에 zip 아카이브다.
 
 ```
 ┌─────────────────────────────────────┐  offset 0
@@ -122,7 +126,7 @@ wheel의 해시를 확인한다. 개발은 더 최신 파이썬에서 하더라�
 |---|---|
 | `*.so` / `*.pyd` / `*.dylib` 존재 | 네이티브 확장은 glibc·아키텍처에 묶인다. 폐쇄망 glibc 2.28 에서 깨진다 |
 | WHEEL 의 `Tag:` 가 `-none-any` 로 안 끝남 | 플랫폼 종속 휠 |
-| `certifi/` 디렉터리 존재 | 번들 CA 를 쓰면 사내 TLS 인터셉션 환경에서 접속이 깨진다 |
+| `certifi/` 디렉터리 존재 | 번들 CA 를 쓰면 내부 TLS 인터셉션 환경에서 접속이 깨진다 |
 
 ### 3.3 빌드 흔적 제거 — 재현성
 
@@ -184,6 +188,14 @@ zellij가 정적 링크인지 검사한다. `full` 등 다른 zellij flavor는 �
 즉, 현재 지원 경계는 내장 웹서버가 없는 검토된 `no-web` 빌드이며 flavor를 늘리려면 새
 manifest 승인이 필요하다.
 
+`fetch-vendor.sh` 실행은 두 선택 구성요소의 allowlist 반입 세트를 3개 파일로
+지정한다:
+zellij 아카이브, xclip 아카이브, 그리고 두 아카이브의 무결성을 확인하는
+`vendor/SHA256SUMS`. 여기에 필수 핵심 `dist/idk.pyz`를 더한 전체 준비 bundle은 4개 파일이다.
+zellij 아카이브는 `idk ws`와 `idk run --pane`에, xclip 아카이브는 `copy_on_select`에만
+필요하며, `SHA256SUMS`는 어떤 vendor 아카이브와도 분리해 반입하지 않는다. 재사용한
+`vendor/`에 다른 `.tar.gz`가 남아 있으면 삭제하지 않고 allowlist와 `SHA256SUMS`에서 제외한다.
+
 GitHub Actions의 `checkout`, `setup-uv`, `upload-artifact`는 workflow에 immutable commit
 SHA로 고정하고, 사람이 읽는 upstream 버전은 주석으로만 병기한다. 버전 갱신은 별도 검토에서
 commit과 주석을 함께 바꾸는 방식이다.
@@ -234,7 +246,7 @@ src/idk/
 | `config.py` | TOML 로드/저장과 엄격한 타입 helper. 없는 파일은 빈 dict | `config_directory()`와 `config_file()`이 디렉터리·일반 파일 여부를 공통 분류한다. 없는 경로만 missing이고, 디렉터리/FIFO/끊긴 심볼릭 링크/접근 오류는 `ConfigError`다. 로드는 nonblocking open 뒤 `fstat`으로 regular file을 재확인한다. 저장은 임시파일 → `os.replace` 로 원자적 |
 | `doctor.py` | `collect()` 가 `Check` 목록을 만들고 렌더러 셋이 소비 | 진단 도구라 기본 exit 0. `--strict` 일 때만 fail → 1 |
 | `cli_config.py` | `config check`의 고정된 설정 validator registry와 JSON/표 출력 | JSON 경로는 Rich를 import하지 않으며, 실제로 없는 파일만 `skip`으로 분류한다. cwd 문제는 별도 `warn` 행으로 내고 `--strict`에서만 exit 1로 올린다 |
-| `mirror/model.py` | `mirror.toml`의 artifactory/base_url/auth/token_env 검증과 요청 인증 값 해석 | `base_url`은 printable ASCII HTTP(S) URL이며 공백·userinfo·잘못된 percent escape가 없는 유효한 hostname/port만 허용한다. token_env가 있으면 유효한 bearer 값이 필수다. 토큰·거부된 URL은 모델·출력에 저장하지 않는다 |
+| `mirror/model.py` | `mirror.toml`의 미러 설정 테이블(`artifactory`)/base_url/auth/token_env 검증과 요청 인증 값 해석 | `base_url`은 printable ASCII HTTP(S) URL이며 공백·userinfo·잘못된 percent escape가 없는 유효한 hostname/port만 허용한다. token_env가 있으면 유효한 bearer 값이 필수다. 토큰·거부된 URL은 모델·출력에 저장하지 않는다 |
 | `ws/layout.py` | 모델 → zellij KDL 순수 함수 | 첫 탭에 `tab-bar`/`status-bar` plugin 을 감싼다 (키힌트 바) |
 | `ws/cli.py`·`ws/tui.py` | 세션 lifecycle과 TUI 조작 | running만 attach한다. 정의된 EXITED는 purge 후 workspace 정의로 재생성하고, orphan EXITED는 자동 제거하지 않는다. `k`/`p`는 확인 modal(Enter/y 확인, Esc/n 취소) 뒤에만 backend를 호출한다 |
 | `ws/backends/zellij.py` | zellij 프로세스 호출 전부 | 이 파일 밖에서 zellij 를 부르지 않는다. `list-sessions`의 정확한 세션 없음 문구와 purge의 확인된 대상 없음만 멱등 성공으로 허용하고, 결과를 캡처하는 호출의 나머지 nonzero는 명령 인자·exit code와, 캡처된 stdout/stderr가 있을 때만 그 진단을 함께 `ZellijError`로 올린다 |
@@ -340,5 +352,5 @@ Phase 1~5 의 앱들은 모두 이 절차를 따른다.
 | `TMPDIR`를 비-native 경로로 덮어쓴다 | ZIP entry 퍼미션이 달라질 수 있다. 기본 native `/tmp`를 유지하거나 Linux native 경로를 지정 |
 | 첫 실행에 `~/.shiv` 압축 해제 비용 | 1회성. NFS 홈이면 `SHIV_ROOT` 로 이동 |
 | 런처가 `$0` 에 의존 | `sh idk.pyz` 처럼 상대 경로로 부르는 특수한 경우 취약. PATH·절대경로 실행은 정상 |
-| zellij 는 별도 반입 | musl 정적 바이너리라 rustc 없이도 동작하지만, `idk.pyz` 안에는 못 넣는다 |
-| 루트 커밋 `3642e9b` 가 lint 실패 | 한 줄이 100자를 넘는다. 다음 커밋에서 해소됐고 main HEAD 는 green |
+| zellij 는 별도 선택 반입 | musl 정적 바이너리라 rustc 없이도 동작하지만, `idk.pyz` 안에는 못 넣는다. 두 vendor를 모두 준비하면 핵심 1개 + vendor 3개다 |
+| 루트 커밋 `3642e9b` 가 lint 실패 | 한 줄이 100자를 넘는다. 후속 통합 커밋에서 해소됐고 현재 lint 검증을 통과한다 |

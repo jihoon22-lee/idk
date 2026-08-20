@@ -31,17 +31,21 @@ check_build_stdin_json() {
     "$PY310" -c 'import json, sys; payload = json.load(sys.stdin); assert payload["diagnostic_count"] == 1; diagnostic = payload["diagnostics"][0]; assert diagnostic["path"] == "main.cpp"; assert diagnostic["line"] == 3' <<<"$output"
 }
 
+check_version() {
+    [ "$("$@" --version)" = "idk 0.2.0" ]
+}
+
 PY310="$(uv python find 3.10 2>/dev/null || command -v python3.10 || true)"
 
 echo "== 1. 런처 경유 실행 =="
-check "직접 실행 (sh 런처)"        0 "$PYZ" --version
+check "직접 실행 (sh 런처)"        0 check_version "$PYZ"
 check "doctor"                     0 "$PYZ" doctor
 check "env --csh"                  0 "$PYZ" env --csh
 
 echo "== 2. 3.10 에서 실행 (반입 대상 버전) =="
 if [ -n "$PY310" ]; then
     check "python3.10 <pyz> doctor" 0 "$PY310" "$PYZ" doctor
-    check "python3.10 <pyz> --version" 0 "$PY310" "$PYZ" --version
+    check "python3.10 <pyz> --version" 0 check_version "$PY310" "$PYZ"
     check "python3.10 <pyz> env --csh" 0 "$PY310" "$PYZ" env --csh
     check "python3.10 build stdin JSON" 0 check_build_stdin_json
 else

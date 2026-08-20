@@ -7,12 +7,18 @@
 
 ## 설치
 
-`idk.pyz` 파일 하나면 된다. root 권한이 필요 없다.
+핵심 CLI와 `idk build`에는 `idk.pyz` 파일 하나면 된다. `idk ws`/`idk run --pane`에는
+zellij vendor가, `copy_on_select`에는 xclip vendor가 추가로 필요하다. root 권한은 필요 없다.
 
 ```bash
 mkdir -p ~/.local/bin
 cp idk.pyz ~/.local/bin/idk && chmod +x ~/.local/bin/idk
 ```
+
+`fetch-vendor.sh` 실행은 zellij 아카이브, xclip 아카이브, `vendor/SHA256SUMS`를 3개짜리
+allowlist 반입 세트로 지정한다. 핵심 `idk.pyz`까지 더한 전체 준비 bundle은 4개 파일이며,
+`SHA256SUMS`는 vendor 아카이브와 함께 반입한다. 자세한 필요 조건과 설치는
+[closed-network-setup.md](closed-network-setup.md)를 따른다.
 
 셸 환경파일에 PATH 를 추가한다. `idk env` 가 그 줄을 만들어 준다:
 
@@ -22,7 +28,7 @@ cp idk.pyz ~/.local/bin/idk && chmod +x ~/.local/bin/idk
 ```
 
 ```csh
-# idk 0.1.1 — 아래를 셸 환경파일에 append
+# idk 0.2.0 — 아래를 셸 환경파일에 append
 # (rhel-8.10 에서 생성. 다른 머신에 붙여넣지 말 것)
 setenv PATH "/home/me/.local/bin:$PATH"
 setenv IDK_PYTHON /opt/python3.10/bin/python3.10
@@ -57,7 +63,7 @@ idk doctor
 ```
 
 OS/커널/glibc, python 후보와 각각의 절대경로, zellij·xclip·컴파일러, TERM·LANG,
-설정 파일, 아티팩토리 미러 접속을 점검한다.
+설정 파일, 내부 패키지 미러 접속을 점검한다.
 
 **진단 도구이므로 경고나 미설치 항목이 있어도 exit 0 이다.** 스크립트에서 실패로 다루려면
 `--strict` 를 쓴다 (`fail` 이 하나라도 있으면 exit 1).
@@ -75,7 +81,7 @@ idk doctor --brief
 ```
 
 ```
-idk 0.1.1 brief
+idk 0.2.0 brief
 os      rhel-8.10  glibc=2.28  kernel=4.18.0-553.el8_10.x86_64  arch=x86_64  wsl=no
 shell   /bin/tcsh  TERM=xterm-256color  COLORTERM=-  LANG=en_US.UTF-8  utf8=yes
 python  running=3.10.4  IDK_PYTHON=-
@@ -99,7 +105,7 @@ mirror  skip  미설정  ~/.config/idk/mirror.toml
 | `fail` | 고쳐야 한다 |
 | `skip` | 확인하지 않았다 (설정이 없거나 `--net` 미지정) |
 
-`--net` 을 주면 `mirror.toml` 의 아티팩토리에 실제로 접속해 본다. 기본은 네트워크를 건드리지 않는다.
+`--net` 을 주면 `mirror.toml` 의 내부 패키지 미러에 실제로 접속해 본다. 기본은 네트워크를 건드리지 않는다.
 네트워크 검사에서 2xx는 `ok`, 401/403은 인증 실패 `fail`, 그 밖의 HTTP 상태는 `warn`,
 전송·URL·인증 설정 오류는 `fail`이다.
 
@@ -171,7 +177,7 @@ idk env --bindir /opt/tools/bin
 
 | 파일 | 쓰는 곳 | 상태 |
 |---|---|---|
-| `mirror.toml` | 아티팩토리 접속 정보 | `doctor --net` 이 읽는다. `idk mirror` 는 Phase 5 |
+| `mirror.toml` | 내부 패키지 미러 접속 정보 | `doctor --net` 이 읽는다. `idk mirror` 는 Phase 5 |
 | `workspaces.toml` | 워크스페이스 정의 | `idk ws` |
 | `snippets.toml` | 명령 스니펫 | `idk run` |
 | `logview.toml` | 로그 하이라이팅 규칙 | Phase 4 |
@@ -180,8 +186,8 @@ idk env --bindir /opt/tools/bin
 
 ```toml
 [artifactory]
-base_url = "https://artifactory.example/artifactory"
-auth     = "netrc"          # 또는 token_env = "ARTIFACTORY_TOKEN"
+base_url = "https://mirror.example/package-mirror"
+auth     = "netrc"          # 또는 token_env = "MIRROR_TOKEN"
 ```
 
 인증은 `~/.netrc` 를 읽는다. 별도 토큰 파일을 만들지 않는다.
@@ -199,7 +205,7 @@ percent encoding으로 적는다. 설정 파일이나 설정 디렉터리가 실
 인증값 검증 실패도 원래 URL·토큰을 오류 상세에 재출력하지 않는다.
 
 > HTTP 는 stdlib `urllib` 로만 나간다. `requests`/`httpx` 는 `certifi` 번들 CA 를 쓰기 때문에
-> 사내 TLS 인터셉션 환경에서 접속이 깨진다. 시스템 CA 를 쓰는 것이 이 도구의 전제다.
+> 내부 TLS 인터셉션 환경에서 접속이 깨진다. 시스템 CA 를 쓰는 것이 이 도구의 전제다.
 
 리다이렉트에서도 인증정보를 보호한다. `Authorization` 헤더(`netrc`·토큰·호출자가 직접 준
 헤더)는 **동일 origin**(scheme·호스트·유효 포트)으로 이동할 때만 유지되고, 다른 origin으로
@@ -344,7 +350,7 @@ idk dt tui              # 대화형 입력/출력
 | 명령 | Phase | 무엇을 할 것인가 |
 |---|---|---|
 | `idk log` | 4 | 여러 로그를 한 화면에서 tail·필터·하이라이팅 |
-| `idk mirror` | 5 | 패키지가 사내 미러에 있는지 조회 |
+| `idk mirror` | 5 | 패키지가 내부 미러에 있는지 조회 |
 
 ---
 

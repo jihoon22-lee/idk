@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# 반입 세트를 vendor/ 에 모은다 — idk.pyz 외에 손으로 들고 들어가야 하는 것들.
+# 두 선택 vendor 아카이브와 SHA256SUMS를 vendor/ 에 모은다 — 핵심 반입 아티팩트는 별도의
+# idk.pyz 한 개다. 이 스크립트가 지정하는 allowlist 반입 세트는 항상 3개 파일이다.
 #
-#   vendor/zellij-*-musl.tar.gz   정적 링크 바이너리 (RHEL 8 의 glibc 2.28 과 무관하게 동작)
+#   vendor/zellij-no-web-x86_64-unknown-linux-musl.tar.gz   zellij 0.44.3 정적 링크 바이너리
+#                                                           (RHEL 8 의 glibc 2.28 과 무관하게 동작)
 #   vendor/xclip-*.tar.gz         폐쇄망에서 현지 빌드할 소스 (rustc 가 없어도 되는 C 코드)
 #   vendor/SHA256SUMS             반입 후 무결성 확인용
 #   scripts/vendor-checksums.txt  승인한 zellij 바이너리와 xclip 아카이브의 해시
@@ -33,6 +35,8 @@ else
     zellij_manifest_key="zellij-${ZELLIJ_VERSION#v}-${ZELLIJ_FLAVOR}-${ZELLIJ_TARGET}"
 fi
 xclip_manifest_key="xclip-${XCLIP_VERSION}"
+zellij_archive="${zellij_name}.tar.gz"
+xclip_archive="xclip-${XCLIP_VERSION}.tar.gz"
 
 MANIFEST="$ROOT/scripts/vendor-checksums.txt"
 fail() {
@@ -99,18 +103,18 @@ fetch() { # fetch <url> <파일명>
 }
 
 echo "zellij ${ZELLIJ_VERSION} (${ZELLIJ_FLAVOR}, ${ZELLIJ_TARGET})"
-fetch "${base}/${zellij_name}.tar.gz"    "${zellij_name}.tar.gz"
+fetch "${base}/${zellij_archive}"    "$zellij_archive"
 
 echo "xclip ${XCLIP_VERSION} (소스 — 폐쇄망에서 현지 빌드)"
 fetch "https://github.com/astrand/xclip/archive/refs/tags/${XCLIP_VERSION}.tar.gz" \
-      "xclip-${XCLIP_VERSION}.tar.gz"
+      "$xclip_archive"
 
 # zellij는 tarball이 아니라 **압축을 푼 바이너리**를 승인 manifest와 대조한다.
 # 어차피 실제로 폐쇄망에 설치될 파일을 검증하는 쪽이 맞다.
 echo "승인 manifest sha256 대조"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-tar xzf "$VENDOR/${zellij_name}.tar.gz" -C "$tmp"
+tar xzf "$VENDOR/$zellij_archive" -C "$tmp"
 actual="$(sha256sum "$tmp/zellij" | awk '{print $1}')"
 if [ "$zellij_checksum" != "$actual" ]; then
     echo "zellij binary checksum mismatch!" >&2
@@ -120,7 +124,7 @@ if [ "$zellij_checksum" != "$actual" ]; then
 fi
 echo "  일치: $actual"
 
-actual="$(sha256sum "$VENDOR/xclip-${XCLIP_VERSION}.tar.gz" | awk '{print $1}')"
+actual="$(sha256sum "$VENDOR/$xclip_archive" | awk '{print $1}')"
 if [ "$xclip_checksum" != "$actual" ]; then
     echo "xclip archive checksum mismatch!" >&2
     echo "  승인 manifest: $xclip_checksum" >&2
@@ -153,10 +157,23 @@ fi
 echo "  정적 링크 확인: 통과"
 echo "  버전 확인: $("$tmp/zellij" --version 2>&1 | head -1)"
 
-( cd "$VENDOR" && sha256sum ./*.tar.gz > SHA256SUMS )
+# Reused vendor directories may contain old archives. Keep them in place for the user, but make
+# the transfer checksum an explicit allowlist of exactly the two archives this run approves.
+for archive_path in "$VENDOR"/*.tar.gz; do
+    [ -e "$archive_path" ] || continue
+    archive_name="${archive_path##*/}"
+    case "$archive_name" in
+        "$zellij_archive"|"$xclip_archive") ;;
+        *) echo "  주의: allowlist 밖의 기존 아카이브는 반입 세트에서 제외합니다 (삭제하지 않음): $archive_name" ;;
+    esac
+done
+( cd "$VENDOR" && sha256sum -- "$zellij_archive" "$xclip_archive" > SHA256SUMS )
 
 echo
-echo "반입 세트 (vendor/):"
-ls -1sh "$VENDOR" | sed 's/^/  /'
+echo "반입 준비 결과 (allowlist vendor/ 파일 3개):"
+echo "  1. vendor/$zellij_archive (idk ws/run --pane용 선택 zellij)"
+echo "  2. vendor/$xclip_archive (copy_on_select용 선택 xclip)"
+echo "  3. vendor/SHA256SUMS (위 두 아카이브와 함께 반입할 무결성 파일)"
 echo
-echo "여기에 dist/idk.pyz 를 더해 총 3개 파일을 반입한다. 설치는 docs/closed-network-setup.md 참조."
+echo "핵심만 반입: dist/idk.pyz 1개. 위 vendor 3개까지 더한 전체 준비 bundle: 4개 파일."
+echo "설치와 선택 구성요소 필요 조건은 docs/closed-network-setup.md 를 참조한다."

@@ -19,7 +19,7 @@ from idk import config
 
 @dataclass(frozen=True)
 class MirrorConfig:
-    """검증된 아티팩토리 접속 설정."""
+    """검증된 내부 패키지 미러 접속 설정."""
 
     base_url: str
     auth: str | None = None
@@ -155,7 +155,7 @@ def load() -> MirrorConfig | None:
     """mirror.toml을 읽고 검증한다.
 
     파일이 없거나 비어 있으면 미러를 설정하지 않은 것으로 보고 ``None``을 반환한다.
-    아티팩토리 테이블이 존재하면 ``base_url``은 필수다.
+    내부 미러 설정 테이블이 존재하면 ``base_url``은 필수다.
     """
     raw = config.load("mirror.toml")
     if not raw:

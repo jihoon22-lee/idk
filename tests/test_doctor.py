@@ -53,14 +53,14 @@ def test_mirror_reports_broken_config():
 
 
 def test_mirror_without_net_does_not_touch_network():
-    config.save("mirror.toml", {"artifactory": {"base_url": "https://artifactory.invalid/x"}})
+    config.save("mirror.toml", {"artifactory": {"base_url": "https://mirror.invalid/x"}})
     check = next(c for c in doctor.collect(net=False) if c.section == "mirror")
     assert check.status == doctor.SKIP
     assert "--net" in check.detail
 
 
 def test_mirror_with_net_reports_unreachable_host():
-    config.save("mirror.toml", {"artifactory": {"base_url": "http://127.0.0.1:1/artifactory"}})
+    config.save("mirror.toml", {"artifactory": {"base_url": "http://127.0.0.1:1/mirror"}})
     check = next(c for c in doctor.collect(net=True) if c.section == "mirror")
     assert check.status == doctor.FAIL
 

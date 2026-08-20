@@ -5,14 +5,16 @@
 - 배경: [plan.md](plan.md)
 - 구현 규약: [ARCHITECTURE.md](ARCHITECTURE.md)
 
+> `idk dt`의 Phase 2 구현과 TUI는 완료되어 v0.2.0 동작 계약에 포함되어 있다.
+> 이 문서는 동작 계약을 설명하는 명세다.
+
 ---
 
 ## 1. 원본 명세
 
-devbox `apps/developer-toolbox` 의 도구 목록을 그대로 옮긴다.
-`src/tools/index.tsx` 와 `src-tauri/src/commands/tools.rs` 에서 확인한 13개다.
+기존 도구에서 폐쇄망에 유용한 변환 기능 13개를 옮긴다.
 
-| devbox id | 그룹 | idk 명령 | stdlib |
+| 기존 도구 식별자 | 그룹 | idk 명령 | stdlib |
 |---|---|---|---|
 | `json-format` | JSON | `idk dt json fmt` | `json` |
 | `json-minify` | JSON | `idk dt json min` | `json` |
@@ -275,7 +277,7 @@ stdin·출력은 전부 `cli_dt.py` 가 담당한다.
 
 | 대상 | 방법 |
 |---|---|
-| 각 변환 함수 | 표 기반 케이스. devbox `transformers.test.ts` 와 `tools.rs` 의 테스트 벡터를 옮긴다 |
+| 각 변환 함수 | 표 기반 케이스. 기존 도구와 독립 스크립트의 테스트 벡터를 옮긴다 |
 | hash | 알려진 벡터(`""`, `"abc"`)로 4종 전부 |
 | 대용량 hash | 3 MiB 파일의 알려진 digest와 1 MiB 청크 스트리밍, `Path.read_bytes` 미호출 |
 | case | §4.5 표를 그대로 파라미터화 |
@@ -304,8 +306,8 @@ Phase 1 과 달리 도구들이 서로 독립이라 병렬로 나가도 되지�
 | 5 | `timestamp` · `jwt` | 왕복, 만료 표시 |
 | 6 | `regexq` · `textdiff` | 매치 없음/차이 없음이 exit 0 |
 | 7 | `cli_dt.py` 배선 완료 + `CliRunner` 테스트 | 13개 전부 동작 |
-| 8 | `idk dt tui` | |
-| 9 | 문서 — GUIDE.md, CHANGELOG | |
+| 8 | `idk dt tui` | ✅ TUI와 실행 버튼/F2 동작 |
+| 9 | 문서 — GUIDE.md, CHANGELOG | ✅ v0.2.0 문서 반영 완료 |
 
 **7번까지가 실사용선이다.** TUI 는 파이프로 안 되는 경우를 위한 보조다.
 
@@ -318,11 +320,13 @@ Phase 1 과 달리 도구들이 서로 독립이라 병렬로 나가도 되지�
 | A | Phase 1 의 1~5 (모델·KDL·백엔드·CLI·실동작) | `idk ws` 실사용 가능 |
 | B | Phase 1 의 6~7 (`idk run`) | `--pane` 으로 ws 와 연결 |
 | C | Phase 2 의 1~7 (`idk dt`) | 13개 도구 |
-| D | Phase 1 의 8~9 + Phase 2 의 8 (TUI 3종) | |
-| E | 문서 갱신 + CHANGELOG `[0.2.0]` + 태그 | 릴리스 |
+| D | Phase 1 의 8~9 + Phase 2 의 8 (TUI 3종) | ✅ 구현 완료 |
+| E | 문서 갱신 + CHANGELOG `[0.2.0]` + 버전 정합성 | ✅ v0.2.0 문서·버전 정합성 완료 |
 
 A~C 가 실사용 가치의 대부분이다. D 는 없어도 동작하므로 시간이 밀리면 뒤로 미룬다.
 E 에서 `docs/GUIDE.md` 의 "아직 없는 명령" 표를 정리하고 `README.md` 의 상태 표를 갱신한다.
 
-릴리스는 [CHANGELOG.md](../CHANGELOG.md) 의 절차대로 `__version__` → `0.2.0`,
-`[Unreleased]` → `[0.2.0]` 이동 후 `git tag v0.2.0`.
+릴리스 준비는 [CHANGELOG.md](../CHANGELOG.md)의 절차대로 `__version__` → `0.2.0`,
+`[Unreleased]` → `[0.2.0]` 이동까지 수행한다. PR 병합·CI green·최종 공개 승인이 publish
+gate이며, 그 뒤에 `git tag v0.2.0` 생성과 push, GitHub Release 생성을 진행한다.
+폐쇄망 field acceptance와 `env-survey.md` 확인은 publish와 분리된 후속 단계다.

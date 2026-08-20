@@ -3,7 +3,7 @@
 zellij 0.44.3 실측 근거:
 - `-n <layout> -s <name>` (--new-session-with-layout) 가 새 세션을 만든다. `--layout` 은
   기존 세션에 탭을 추가하는 플래그라 세션이 없으면 `There is no active session!` 로 실패한다.
-- 세션은 클라이언트가 죽어도 서버에 남는다 (ETX 끊김 복원의 전제). detached 생성은 사설
+- 세션은 클라이언트가 죽어도 서버에 남는다 (원격 X11 연결 끊김 복원의 전제). detached 생성은 사설
   pty 에서 클라이언트를 띄운 뒤 SIGTERM 으로 떨어뜨려 구현한다.
 - `list-sessions --no-formatting` 은 `name [Created X ago]`, 죽은 세션은
   `name [Created X ago] (EXITED - attach to resurrect)`. 세션이 없으면 그 메시지는 stderr 로
@@ -159,7 +159,7 @@ def list_sessions() -> list[Session]:
 def _new_session_detached(name: str, layout_path: Path) -> None:
     """사설 pty 에서 새 세션을 만들고 클라이언트를 떨어뜨린다.
 
-    세션은 서버에 남아 있으므로 (ETX 끊김 복원) 클라이언트를 종료해도 세션은 살아 있다.
+    세션은 서버에 남아 있으므로 (원격 X11 연결 끊김 복원) 클라이언트를 종료해도 세션은 살아 있다.
     """
     path = _binary()
     master, slave = pty.openpty()

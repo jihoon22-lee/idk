@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dist/idk.pyz 를 만든다 — 반입 파일 1개.
+# dist/idk.pyz 를 만든다 — 필수 핵심 실행 아티팩트 1개.
 #
 #   1) 3.10 을 대상으로 uv.lock 에서 의존성을 풀어 native tmp 에 설치
 #   2) 네이티브 확장이 섞이지 않았는지 검사 (AGENTS.md 규약의 기계적 강제)
@@ -57,8 +57,8 @@ if [ -n "$bad_tags" ]; then
     exit 1
 fi
 if [ -d "$SITE/certifi" ]; then
-    echo "certifi 가 딸려 들어왔습니다 — 번들 CA 를 쓰면 사내 TLS 인터셉션 환경에서" >&2
-    echo "아티팩토리 접속이 깨집니다. 어떤 의존성이 끌고 왔는지 확인하세요 (AGENTS.md)." >&2
+    echo "certifi 가 딸려 들어왔습니다 — 번들 CA 를 쓰면 내부 TLS 인터셉션 환경에서" >&2
+    echo "내부 패키지 미러 접속이 깨집니다. 어떤 의존성이 끌고 왔는지 확인하세요 (AGENTS.md)." >&2
     exit 1
 fi
 echo "      $(find "$SITE" -maxdepth 1 -name '*.dist-info' | wc -l) 개 배포판 전부 py3-none-any, certifi 없음"

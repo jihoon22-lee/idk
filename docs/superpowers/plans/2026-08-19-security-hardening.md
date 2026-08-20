@@ -10,17 +10,22 @@
 
 **Spec:** `docs/superpowers/plans/2026-08-19-immediate-roadmap.md`의 `v0.2.0` 보안 작업군 및 `docs/spec-ws-run.md` §7.1
 
+> 완료 기록 (2026-08-20): 보안 작업군과 공급망 작업은 v0.2.0 범위에 반영됐다. 아래 단계는
+> 당시 구현·문서 통합 과정을 보존하며, 최종 changelog는 `[0.2.0]` 섹션으로 이동했다.
+> 각 Task 제목의 상태 표기가 원래 단계별 체크리스트보다 현재 진행 상태의 기준이다.
+
 ## Global Constraints
 
 - Python 하한은 3.10이며 3.11+ 문법을 사용하지 않는다.
 - 런타임 의존성은 `py3-none-any` 순수 Python만 허용한다.
 - HTTP는 `src/idk/httpc.py`의 stdlib `urllib`만 사용한다.
-- 산출물은 `dist/idk.pyz` 한 파일이며 root 권한을 요구하지 않는다.
+- 필수 핵심 산출물은 `dist/idk.pyz` 한 파일이며 root 권한을 요구하지 않는다. ws/run pane의
+  zellij와 copy_on_select의 xclip은 선택 vendor 입력이다.
 - 모든 수정은 실패하는 회귀 테스트를 먼저 추가한다.
 
 ---
 
-### Task 1: 스니펫 shell 문맥 검증
+### Task 1: 스니펫 shell 문맥 검증 ✅ 완료
 
 **Files:**
 - Modify: `src/idk/snip/model.py`
@@ -110,7 +115,7 @@ git commit -m "fix(run): reject unsafe placeholder contexts"
 
 ---
 
-### Task 2: HTTP redirect 인증 경계
+### Task 2: HTTP redirect 인증 경계 ✅ 완료
 
 **Files:**
 - Modify: `src/idk/httpc.py`
@@ -182,7 +187,7 @@ git commit -m "fix(http): protect authorization across redirects"
 
 ---
 
-### Task 3: lock 기반 ext4 staging 빌드
+### Task 3: lock 기반 ext4 staging 빌드 ✅ 완료
 
 **Files:**
 - Modify: `pyproject.toml`
@@ -272,7 +277,7 @@ git commit -m "build: consume lockfile in reproducible staging"
 
 ---
 
-### Task 4: vendor와 CI 공급망 pin
+### Task 4: vendor와 CI 공급망 pin ✅ 완료
 
 **Files:**
 - Create: `scripts/vendor-checksums.txt`
@@ -330,7 +335,7 @@ git commit -m "build: pin vendor and CI supply chain inputs"
 
 ---
 
-### Task 5: 보안 작업군 문서와 통합 게이트
+### Task 5: 보안 작업군 문서와 통합 게이트 ✅ 완료
 
 **Files:**
 - Modify: `docs/GUIDE.md`
@@ -359,10 +364,10 @@ Run: `uvx ruff check . && uvx ruff format --check .`
 
 Run: `./scripts/build-pyz.sh && ./scripts/smoke.sh`
 
-- [ ] **Step 4: changelog의 `[Unreleased]`를 갱신하고 커밋한다**
+- [ ] **Step 4: 최종 changelog의 `[0.2.0]` 섹션을 확인하고 커밋한다**
 
-보안·공급망 변경을 `[Unreleased]`에 기록한다. 중간 버전 상승과 태그는 만들지 않으며 최종
-`idk build` 통합 단계에서 한 번만 `0.2.0`으로 올린다.
+보안·공급망 변경은 2026-08-20 release-prep 기록에서 `[0.2.0]` 섹션으로 이동했다. 당시에는
+중간 버전 상승을 하지 않고 이 단계에서 소스의 버전을 한 번 `0.2.0`으로 올렸다.
 
 ```bash
 git add docs/GUIDE.md docs/ARCHITECTURE.md CHANGELOG.md
