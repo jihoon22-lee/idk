@@ -29,8 +29,8 @@ native staging 조건도 같을 때 바이트 재현성을 기대할 수 있으�
 대조할 수 있다.
 
 핵심만 쓰는 반입 세트는 `dist/idk.pyz` **1개**다. 두 선택 구성요소를 모두 준비하는
-`fetch-vendor.sh`는 vendor 디렉터리에 정확히 3개 파일을 만든다. 즉 zellij 아카이브,
-xclip 아카이브, 두 아카이브의 체크섬을 담은 `vendor/SHA256SUMS`다. 핵심 아티팩트까지
+`fetch-vendor.sh`는 zellij 아카이브, xclip 아카이브, 두 아카이브의 체크섬을 담은
+`vendor/SHA256SUMS`를 3개짜리 allowlist 반입 세트로 지정한다. 핵심 아티팩트까지
 더한 전체 준비 bundle은 **4개 파일**이다. zellij는 `idk ws`와 `idk run --pane`에,
 xclip은 `copy_on_select`에만 필요하며, `SHA256SUMS`는 vendor 아카이브와 반드시 함께 반입한다:
 

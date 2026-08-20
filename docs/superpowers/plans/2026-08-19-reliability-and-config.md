@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/plans/2026-08-19-immediate-roadmap.md`의 `v0.2.0` 안정성 작업군, `docs/spec-ws-run.md`, `docs/spec-dt.md`
 
-> 완료 기록 (2026-08-20): 설정·ws·dt·`config check` 작업과 문서 통합은 완료되어 통합 브랜치에
+> 완료 기록 (2026-08-20): 설정·ws·dt·`config check` 작업과 문서 통합은 v0.2.0 범위에
 > 반영됐다. 아래 단계는 당시 구현·문서 통합 과정을 보존하며, changelog 항목은 최종 `[0.2.0]`
 > 섹션으로 이동했다.
 > 각 Task 제목의 상태 표기가 원래 단계별 체크리스트보다 현재 진행 상태의 기준이다.

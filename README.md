@@ -34,9 +34,9 @@ mirror  skip  미설정  ~/.config/idk/mirror.toml
 
 ## 설치
 
-릴리스가 게시되면 [릴리스 페이지](https://github.com/jihoon22-lee/idk/releases)에서 핵심
-실행 아티팩트 `idk.pyz`를 받아 실행 권한만 주면 된다. 지금은 아래 소스 빌드로 같은 핵심
-아티팩트를 만들 수 있다. root 권한이 필요 없다.
+[릴리스 페이지](https://github.com/jihoon22-lee/idk/releases)에서 핵심 실행 아티팩트
+`idk.pyz`를 받거나 아래 절차로 소스에서 같은 아티팩트를 빌드할 수 있다. 실행에는 root 권한이
+필요 없다.
 
 ```bash
 mkdir -p ~/.local/bin
@@ -50,9 +50,9 @@ idk doctor
 
 핵심 CLI와 `idk build`만 사용하면 `dist/idk.pyz` 한 개가 필요한 전부다. `idk ws`/`idk run
 --pane`에는 zellij vendor가, `copy_on_select`에는 xclip vendor가 필요하다. 두 선택 구성요소를
-모두 준비하는 `fetch-vendor.sh` 실행은 vendor 파일 3개(두 아카이브와 `vendor/SHA256SUMS`)를 만들며,
-`idk.pyz`를 더한 전체 준비 bundle은 4개 파일이다. 무결성 파일은 vendor 아카이브와 함께
-반입해야 한다.
+모두 준비하는 `fetch-vendor.sh` 실행은 두 아카이브와 `vendor/SHA256SUMS`를 3개짜리 allowlist
+반입 세트로 지정하며, `idk.pyz`를 더한 전체 준비 bundle은 4개 파일이다. 무결성 파일은 vendor
+아카이브와 함께 반입해야 한다.
 
 ### 소스에서 빌드
 

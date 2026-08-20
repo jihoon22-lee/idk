@@ -3,7 +3,7 @@
 > **이 저장소의 작업 계획서(정본)다.** Phase 0부터 순서대로 진행한다.
 > 규약은 `AGENTS.md` 에 요약되어 있고, 상세 근거는 이 문서에 있다.
 
-> Phase 0~3과 v0.2.0 보안·안정성·build MVP 작업은 통합 브랜치에 반영되어 있다.
+> Phase 0~3과 v0.2.0 보안·안정성·build MVP 작업은 v0.2.0 범위에 반영되어 있다.
 > 핵심 실행 아티팩트는 `dist/idk.pyz` 한 개이며, ws/run pane/clipboard용 vendor는 선택 입력이다.
 
 ## Context
@@ -141,8 +141,8 @@ exit 1
 
 공개 GitHub pull이 가능하므로 **소스 반입 절차가 통째로 사라진다.** `build-pyz.sh`는
 필수 핵심 실행 아티팩트 `dist/idk.pyz` 한 개만 만든다. `fetch-vendor.sh`는 두 선택
-구성요소의 vendor 파일 3개(zellij tarball, xclip 소스 아카이브,
-`vendor/SHA256SUMS`)를 준비한다. 따라서 핵심 `idk.pyz`까지 포함한 full bundle은 4개 파일이다.
+구성요소의 3개짜리 allowlist 반입 세트(zellij tarball, xclip 소스 아카이브,
+`vendor/SHA256SUMS`)를 지정한다. 따라서 핵심 `idk.pyz`까지 포함한 full bundle은 4개 파일이다.
 zellij는 `ws`/`run --pane`에, xclip은 `copy_on_select`에만 필요한 선택 vendor 입력이며,
 `SHA256SUMS`는 vendor 아카이브와 함께 반입한다.
 

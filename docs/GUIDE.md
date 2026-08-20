@@ -15,9 +15,9 @@ mkdir -p ~/.local/bin
 cp idk.pyz ~/.local/bin/idk && chmod +x ~/.local/bin/idk
 ```
 
-`fetch-vendor.sh` 실행은 두 선택 구성요소의 vendor 파일 3개(zellij 아카이브,
-xclip 아카이브, `vendor/SHA256SUMS`)를 만든다. 핵심 `idk.pyz`까지 더한 전체 준비 bundle은
-4개 파일이며, `SHA256SUMS`는 vendor 아카이브와 함께 반입한다. 자세한 필요 조건과 설치는
+`fetch-vendor.sh` 실행은 zellij 아카이브, xclip 아카이브, `vendor/SHA256SUMS`를 3개짜리
+allowlist 반입 세트로 지정한다. 핵심 `idk.pyz`까지 더한 전체 준비 bundle은 4개 파일이며,
+`SHA256SUMS`는 vendor 아카이브와 함께 반입한다. 자세한 필요 조건과 설치는
 [closed-network-setup.md](closed-network-setup.md)를 따른다.
 
 셸 환경파일에 PATH 를 추가한다. `idk env` 가 그 줄을 만들어 준다:

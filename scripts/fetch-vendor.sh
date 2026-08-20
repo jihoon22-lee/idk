@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 두 선택 vendor 아카이브와 SHA256SUMS를 vendor/ 에 모은다 — 핵심 반입 아티팩트는 별도의
-# idk.pyz 한 개다. 이 스크립트가 준비하는 vendor 파일은 항상 3개다.
+# idk.pyz 한 개다. 이 스크립트가 지정하는 allowlist 반입 세트는 항상 3개 파일이다.
 #
 #   vendor/zellij-no-web-x86_64-unknown-linux-musl.tar.gz   zellij 0.44.3 정적 링크 바이너리
 #                                                           (RHEL 8 의 glibc 2.28 과 무관하게 동작)

@@ -306,8 +306,8 @@ Phase 1 과 달리 도구들이 서로 독립이라 병렬로 나가도 되지�
 | 5 | `timestamp` · `jwt` | 왕복, 만료 표시 |
 | 6 | `regexq` · `textdiff` | 매치 없음/차이 없음이 exit 0 |
 | 7 | `cli_dt.py` 배선 완료 + `CliRunner` 테스트 | 13개 전부 동작 |
-| 8 | `idk dt tui` | |
-| 9 | 문서 — GUIDE.md, CHANGELOG | |
+| 8 | `idk dt tui` | ✅ TUI와 실행 버튼/F2 동작 |
+| 9 | 문서 — GUIDE.md, CHANGELOG | ✅ v0.2.0 문서 반영 완료 |
 
 **7번까지가 실사용선이다.** TUI 는 파이프로 안 되는 경우를 위한 보조다.
 
@@ -320,7 +320,7 @@ Phase 1 과 달리 도구들이 서로 독립이라 병렬로 나가도 되지�
 | A | Phase 1 의 1~5 (모델·KDL·백엔드·CLI·실동작) | `idk ws` 실사용 가능 |
 | B | Phase 1 의 6~7 (`idk run`) | `--pane` 으로 ws 와 연결 |
 | C | Phase 2 의 1~7 (`idk dt`) | 13개 도구 |
-| D | Phase 1 의 8~9 + Phase 2 의 8 (TUI 3종) | |
+| D | Phase 1 의 8~9 + Phase 2 의 8 (TUI 3종) | ✅ 구현 완료 |
 | E | 문서 갱신 + CHANGELOG `[0.2.0]` + 버전 정합성 | ✅ v0.2.0 문서·버전 정합성 완료 |
 
 A~C 가 실사용 가치의 대부분이다. D 는 없어도 동작하므로 시간이 밀리면 뒤로 미룬다.

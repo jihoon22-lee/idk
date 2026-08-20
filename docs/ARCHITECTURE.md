@@ -188,8 +188,8 @@ zellij가 정적 링크인지 검사한다. `full` 등 다른 zellij flavor는 �
 즉, 현재 지원 경계는 내장 웹서버가 없는 검토된 `no-web` 빌드이며 flavor를 늘리려면 새
 manifest 승인이 필요하다.
 
-`fetch-vendor.sh` 실행은 두 선택 구성요소의 vendor 파일을 `vendor/`에 정확히 3개
-준비한다:
+`fetch-vendor.sh` 실행은 두 선택 구성요소의 allowlist 반입 세트를 3개 파일로
+지정한다:
 zellij 아카이브, xclip 아카이브, 그리고 두 아카이브의 무결성을 확인하는
 `vendor/SHA256SUMS`. 여기에 필수 핵심 `dist/idk.pyz`를 더한 전체 준비 bundle은 4개 파일이다.
 zellij 아카이브는 `idk ws`와 `idk run --pane`에, xclip 아카이브는 `copy_on_select`에만
