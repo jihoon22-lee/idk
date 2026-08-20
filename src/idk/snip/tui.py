@@ -17,6 +17,7 @@ from textual.widgets import Footer, Header, Input, Label, OptionList
 from textual.widgets.option_list import Option
 
 from idk.snip import cli, model, render
+from idk.tui_runtime import monitor_terminal_loss, require_interactive_terminal
 
 
 def _is_subsequence(query: str, text: str) -> bool:
@@ -102,6 +103,7 @@ class RunApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        monitor_terminal_loss(self)
         self._snippets = cli.list_snippets()
         self._refresh("")
 
@@ -150,6 +152,9 @@ class RunApp(App[None]):
 
 def run() -> None:
     """TUI 를 실행하고, 선택된 스니펫이 있으면 실행을 CLI 로 이양한다."""
+    require_interactive_terminal(
+        "idk run", "목록은 `idk run ls`, 실행은 이름을 지정한 스니펫을 사용하세요."
+    )
     app = RunApp()
     app.run()
     if app.target is not None:

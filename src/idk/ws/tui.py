@@ -15,6 +15,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Label
 
+from idk.tui_runtime import monitor_terminal_loss, require_interactive_terminal
 from idk.ws import cli
 
 
@@ -110,6 +111,7 @@ class WsApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        monitor_terminal_loss(self)
         table = self.query_one("#table", DataTable)
         table.add_columns("NAME", "STATE", "TABS", "DESC")
         self._refresh()
@@ -183,6 +185,9 @@ class WsApp(App[None]):
 
 def run() -> None:
     """TUI 를 실행하고, Enter 로 선택했으면 zellij attach 로 이양한다."""
+    require_interactive_terminal(
+        "idk ws", "목록은 `idk ws ls`, 실행은 `idk ws up <name>` 을 사용하세요."
+    )
     app = WsApp()
     app.run()
     if app.attach_target:

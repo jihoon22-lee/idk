@@ -18,6 +18,7 @@ from typing import Annotated, Any
 import typer
 
 from idk.dt import case, encoding, jsonfmt, jwt, regexq, security, textdiff, timestamp
+from idk.tui_runtime import require_interactive_terminal
 
 dt_app = typer.Typer(
     name="dt", help="개발 도구 모음 (JSON·Base64·hash·JWT·diff…)", no_args_is_help=True
@@ -342,6 +343,7 @@ def jwt_cmd(
 @dt_app.command("tui")
 def dt_tui_cmd() -> None:
     """대화형 입력/출력 모드."""
+    require_interactive_terminal("idk dt", "대신 `idk dt` 의 일반 하위 명령을 사용하세요.")
     from idk import dt_tui
 
     dt_tui.run()

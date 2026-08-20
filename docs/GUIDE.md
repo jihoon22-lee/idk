@@ -219,6 +219,10 @@ percent encoding으로 적는다. 설정 파일이나 설정 디렉터리가 실
 끊겨도 세션은 살아 있어 재접속하면 그대로 복구된다. 세션은 기본 zellij 와 마찬가지로
 하단 키힌트 바를 보여준다.
 
+`idk ws`, `idk run`, `idk dt tui`는 stdin/stdout이 터미널인 대화형 환경에서만 실행할 수
+있다. 파이프나 리디렉션으로 실행하면 안내를 stderr에 출력하고 exit 2로 끝나며, 실행 중
+터미널 연결이 끊기면 TUI가 자동으로 종료된다.
+
 ```bash
 idk ws init              # 기본 workspaces.toml 생성 (첫 사용 추천)
 ```
