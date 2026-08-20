@@ -131,8 +131,8 @@ idk build --file build.log --severity warning      # 경고만
 idk build --file build.log --severity error --exit-code
 ```
 
-`--format`은 `plain`(기본) 또는 `json`이다. plain 출력은 `path:line:column: severity: message`
-형식이며, 위치가 없는 make/CMake/Qt 진단은 `[tool] severity: message`로 표시한다. JSON의 최상위
+`--format`은 `plain`(기본) 또는 `json`이다. plain 출력은 `path:line[:column]: severity: message`
+형식이며, source path/line이 없는 make/Qt 진단은 `[tool] severity: message`로 표시한다. JSON의 최상위
 필드는 `total_lines`, `diagnostic_count`, `diagnostics`이고 각 진단에는 `path`, `line`, `column`,
 `severity`, `message`, `context`, `tool`이 들어간다. `--severity error`는 fatal/error,
 `warning`은 warning, `all`은 note까지 출력한다. `--exit-code`는 필터링하지 않은 전체 결과에
