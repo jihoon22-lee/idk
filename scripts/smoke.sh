@@ -32,7 +32,7 @@ check_build_stdin_json() {
 }
 
 check_version() {
-    [ "$("$@" --version)" = "idk 0.3.0" ]
+    [ "$("$@" --version)" = "idk 0.3.1" ]
 }
 
 check_log_tail() {

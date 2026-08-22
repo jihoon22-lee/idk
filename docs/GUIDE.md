@@ -28,7 +28,7 @@ allowlist 반입 세트로 지정한다. 핵심 `idk.pyz`까지 더한 전체 �
 ```
 
 ```csh
-# idk 0.3.0 — 아래를 셸 환경파일에 append
+# idk 0.3.1 — 아래를 셸 환경파일에 append
 # (rhel-8.10 에서 생성. 다른 머신에 붙여넣지 말 것)
 setenv PATH "/home/me/.local/bin:$PATH"
 setenv IDK_PYTHON /opt/python3.10/bin/python3.10
@@ -81,7 +81,7 @@ idk doctor --brief
 ```
 
 ```
-idk 0.3.0 brief
+idk 0.3.1 brief
 os      rhel-8.10  glibc=2.28  kernel=4.18.0-553.el8_10.x86_64  arch=x86_64  wsl=no
 shell   /bin/tcsh  TERM=xterm-256color  COLORTERM=-  LANG=en_US.UTF-8  utf8=yes
 python  running=3.10.4  IDK_PYTHON=-
