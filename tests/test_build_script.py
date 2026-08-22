@@ -160,7 +160,7 @@ def _smoke_fixture(tmp_path: Path, mode: int) -> Path:
         archive.writestr(info, "")
     path.write_bytes(
         b'#!/bin/sh\nif [ -z "$PATH" ]; then exit 1; fi\n'
-        b'if [ "${1:-}" = "--version" ]; then echo "idk 0.2.1"; fi\n'
+        b'if [ "${1:-}" = "--version" ]; then echo "idk 0.3.0"; fi\n'
         b"exit 0\n" + payload.getvalue()
     )
     path.chmod(path.stat().st_mode | stat.S_IXUSR)

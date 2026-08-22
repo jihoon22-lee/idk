@@ -9,6 +9,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-22
+
 ### Added
 - **`idk log` CLI MVP** — 여러 경로/glob 의 로그를 한 스트림으로 tail 한다. 시작 시 마지막
   N줄을 출력하고 `tail -F` 시맨틱으로 뒤따르며, 로테이션(inode 변경)과 truncate(크기 축소)를
@@ -20,6 +22,15 @@
   개별 `base_url` override), 저장소 이름 컬럼이 있는 표와 `--json` 출력을 제공한다. 404는
   "미등록" 결과, 401/403은 접근 거부 행으로 보고하며 어느 저장소에서든 찾으면 exit 0이다.
   인증은 기존 공통 설정(netrc 폴백)을 그대로 쓴다. npm/cargo/maven/rpm 은 후속 범위다.
+
+### Fixed
+- **Python 3.14 에서 심볼릭 링크 루프 설정이 통과하던 문제** — 3.14 부터 `Path.resolve()` 가
+  루프에서 예외를 던지지 않고 경로를 그대로 반환한다. workspace cwd 해석을 strict
+  realpath 로 바꿔 모든 버전에서 루프를 결정적인 설정 오류(`ELOOP`)로 분류한다. 없는 경로는
+  기존처럼 lenient 로 유지해 존재 여부 warn 동작을 바꾸지 않는다.
+- **CI 러너에서 mirror 설정 격리가 깨지던 테스트** — GitHub Actions 러너는
+  `XDG_CONFIG_HOME` 을 미리 설정해 둔다. HOME 만 교체한 테스트 헬퍼가 실제 홈 설정을
+  읽게 되는 문제를 고쳤다.
 
 ### Build / Supply chain
 - **mypy 타입 검사 도입** — dev group 에 mypy 를 추가하고 `python_version = "3.10"`,
@@ -193,7 +204,8 @@ git tag v0.2.1 && git push origin v0.2.1
 워크플로가 태그와 `__version__` 이 일치하는지 확인하고, 빌드·스모크를 돌린 뒤
 `idk.pyz` 와 `idk.pyz.sha256` 을 릴리스에 붙이고 이 파일의 해당 섹션을 릴리스 노트로 쓴다.
 
-[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jihoon22-lee/idk/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/jihoon22-lee/idk/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jihoon22-lee/idk/releases/tag/v0.2.0
 [0.1.1]: https://github.com/jihoon22-lee/idk/releases/tag/v0.1.1
