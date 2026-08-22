@@ -20,6 +20,25 @@
 - **`idk log` glob 패턴의 `~` 가 확장되지 않던 문제** — `idk log '~/logs/*.log'` 처럼
   glob 을 따옴표로 감싸면(GUIDE.md 권장) 셸이 `~` 를 확장해 주지 않고 `glob.glob()` 도
   틸드를 모른다. glob 이전에 직접 확장한다.
+- **`idk mirror --repo` 오타가 조용히 무시되던 문제** — `[[repo]]` 를 정의하지 않은
+  설정(암묵 단일 저장소)에서 `--repo <없는 이름>` 을 주면 오류 없이 default 저장소를
+  조회했다. `wanted` 를 항상 먼저 확인하도록 고쳤다.
+- **`idk mirror` 의 token_env bearer 가 다른 host 로 새던 문제** — `[[repo]]` 의
+  개별 `base_url` override 가 메인 미러와 다른 host 를 가리키면, 그 요청에도 메인
+  미러의 bearer token 을 그대로 실어 보냈다. cross-origin redirect 에서 이미 하던
+  것과 같은 규칙으로 origin 이 다르면 bearer 를 보내지 않는다. netrc 인증은 요청
+  host 별로 다시 조회되므로 원래도 영향이 없었다.
+- **`idk mirror` 표가 `미등록`/`오류` 행에서 어긋나던 문제** — 수동 f-string 패딩은
+  문자 수로 맞추는데 이 라벨들은 터미널에서 문자 수보다 넓은 폭을 차지한다.
+  `doctor`/`config check` 처럼 `rich.Table` 로 바꿨다.
+
+- **`idk mirror` 가 `.tgz`/`.tar.xz` sdist 를 못 알아보던 문제** — 인식하는 확장자에
+  둘 다 추가했다(`.tar.gz`/`.zip`/`.tar.bz2` 는 기존대로).
+
+### Changed
+- **`idk mirror` 가 미등록과 접속 실패를 다른 exit code 로 구분한다** — 조회한 저장소가
+  전부 정상 응답인데 없으면 exit 1(확실히 없음), 하나라도 접속/인증 오류가 있었고
+  다른 곳에서도 못 찾았으면 exit 3(결과 불확실)이다. 어디서든 찾으면 exit 0 은 그대로다.
 
 ## [0.3.0] - 2026-08-22
 

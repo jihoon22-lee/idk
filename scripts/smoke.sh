@@ -44,6 +44,23 @@ check_log_tail() {
     [ "$rc" = 0 ] && [ "$out" = "$(printf 'l2\nl3')" ]
 }
 
+check_mirror_unknown_repo() {
+    # 네트워크 없이 mirror.toml 파싱 + --repo 검증 경로를 확인한다(오타 --repo 를
+    # 조용히 무시하지 않고 exit 2 로 거부해야 한다).
+    local tmp rc
+    tmp="$(mktemp -d)"
+    mkdir -p "$tmp/.config/idk"
+    printf '[artifactory]\nbase_url = "https://mirror.example/pkg"\n' \
+        >"$tmp/.config/idk/mirror.toml"
+    (
+        unset XDG_CONFIG_HOME
+        HOME="$tmp" "$PY310" "$PYZ" mirror somepkg --repo does-not-exist
+    ) >/dev/null 2>&1
+    rc=$?
+    rm -rf "$tmp"
+    [ "$rc" = 2 ]
+}
+
 PY310="$(uv python find 3.10 2>/dev/null || command -v python3.10 || true)"
 
 echo "== 1. 런처 경유 실행 =="
@@ -58,6 +75,7 @@ if [ -n "$PY310" ]; then
     check "python3.10 <pyz> env --csh" 0 "$PY310" "$PYZ" env --csh
     check "python3.10 build stdin JSON" 0 check_build_stdin_json
     check "python3.10 log tail -n" 0 check_log_tail
+    check "python3.10 mirror unknown --repo" 0 check_mirror_unknown_repo
 else
     echo "  SKIP python3.10 없음 (uv python install 3.10)"
 fi
