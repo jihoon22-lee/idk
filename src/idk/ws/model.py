@@ -57,7 +57,13 @@ def _resolve(value: str, base: Path) -> Path:
     path = Path(os.path.expandvars(os.path.expanduser(value)))
     if not path.is_absolute():
         path = base / path
-    return path.resolve()
+    try:
+        # 3.14 부터 Path.resolve() 가 심볼릭 링크 루프를 조용히 통과시키므로
+        # strict realpath 로 루프를 감지한다(모든 버전에서 OSError ELOOP).
+        return Path(os.path.realpath(path, strict=True))
+    except FileNotFoundError:
+        # 없는 경로는 기존 동작을 유지한다 — 존재 여부는 상위에서 warn 으로 다룬다.
+        return path.resolve()
 
 
 def _parse_size(value: Any, where: str) -> int | str:
