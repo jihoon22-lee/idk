@@ -109,6 +109,17 @@ def test_expand_specs_keeps_missing_literal_for_follow(tmp_path: Path):
     assert specs == [(str(missing), missing)]
 
 
+def test_log_glob_expands_tilde(tmp_path: Path, monkeypatch):
+    # glob.glob() 은 ~ 를 확장하지 않는다. GUIDE.md 가 glob 을 따옴표로 감싸라고
+    # 안내하므로 셸 확장도 기대할 수 없다 — expand_specs() 가 직접 풀어야 한다.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "a.log").write_text("1\n", encoding="utf-8")
+
+    specs = expand_specs(["~/*.log"])
+
+    assert specs == [(str(tmp_path / "a.log"), tmp_path / "a.log")]
+
+
 def test_log_no_paths_after_empty_glob_fails(tmp_path: Path):
     result = runner.invoke(app, ["log", str(tmp_path / "none-*.log"), "--no-follow"])
 
