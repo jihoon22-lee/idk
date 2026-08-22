@@ -30,6 +30,9 @@ def _write_mirror_toml(tmp_path: Path, body: str) -> Path:
 
 def _patch_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
+    # GitHub Actions 러너는 XDG_CONFIG_HOME 을 미리 설정해 둔다 — 반드시 제거해야
+    # config_directory() 가 HOME 기반 경로로 떨어진다.
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
 
 
