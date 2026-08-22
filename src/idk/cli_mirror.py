@@ -57,10 +57,23 @@ def _query(
     return results
 
 
+_STATUS_LABEL = {"ok": "ok", "not_found": "미등록", "error": "오류"}
+
+
 def _print_table(package: str, results: list[_RepoResult]) -> None:
+    # 수동 f-string 패딩(`:<N`)은 문자 수로 맞추는데 "미등록"/"오류" 는 터미널에서
+    # 문자 수보다 넓은 폭(동아시아 wide)을 차지해 열이 어긋난다. rich.Table 이
+    # 표시 폭을 계산해 주므로 doctor.py/cli_config.py 와 같은 방식을 쓴다.
+    from rich.console import Console
+    from rich.table import Table
+
     typer.echo(f"package {package}")
-    name_width = max(len("repo"), *(len(r.repo) for r in results))
-    typer.echo(f"{'repo':<{name_width}}  상태      최신       버전 수")
+    table = Table(show_header=True, box=None, pad_edge=False)
+    table.add_column("repo")
+    table.add_column("상태")
+    table.add_column("최신")
+    table.add_column("버전 수", justify="right")
+    table.add_column("", style="dim", overflow="fold")
     for r in results:
         if r.status == "ok":
             latest = r.versions[-1] if r.versions else "-"
@@ -68,11 +81,9 @@ def _print_table(package: str, results: list[_RepoResult]) -> None:
         else:
             latest = "-"
             count = "-"
-        status = {"ok": "ok", "not_found": "미등록", "error": "오류"}[r.status]
-        line = f"{r.repo:<{name_width}}  {status:<8}  {latest:<9}  {count}"
-        if r.status == "error":
-            line += f"  ({r.detail})"
-        typer.echo(line)
+        detail = f"({r.detail})" if r.status == "error" else ""
+        table.add_row(r.repo, _STATUS_LABEL[r.status], latest, count, detail)
+    Console().print(table)
 
 
 def mirror_cmd(
@@ -114,5 +125,10 @@ def mirror_cmd(
     else:
         _print_table(package, results)
 
-    found_any = any(r.versions for r in results)
-    raise typer.Exit(0 if found_any else 1)
+    if any(r.versions for r in results):
+        raise typer.Exit(0)
+    if any(r.status == "error" for r in results):
+        # 미등록(확실히 없음)과 접속/인증 실패(모름)를 스크립트가 구분할 수 있게
+        # 다른 exit code 를 쓴다 — ws 의 orphan EXITED 안내가 exit 3 을 쓰는 것과 같다.
+        raise typer.Exit(3)
+    raise typer.Exit(1)

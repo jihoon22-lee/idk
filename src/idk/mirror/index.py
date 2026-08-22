@@ -13,7 +13,7 @@ from html.parser import HTMLParser
 from idk import httpc
 from idk.mirror.model import MirrorConfig, Repo
 
-SDIST_EXTENSIONS = (".tar.gz", ".zip", ".tar.bz2")
+SDIST_EXTENSIONS = (".tar.gz", ".tgz", ".zip", ".tar.bz2", ".tar.xz")
 
 
 def normalize(name: str) -> str:
@@ -40,8 +40,12 @@ class _AnchorParser(HTMLParser):
                     self.filenames.append(filename)
 
 
-def version_from_filename(filename: str, package: str) -> str | None:
-    """휠/소스 아카이브 파일명에서 버전 부분만 추출한다."""
+def version_from_filename(filename: str) -> str | None:
+    """휠/소스 아카이브 파일명에서 버전 부분만 추출한다.
+
+    요청 자체가 이미 패키지 하나로 scope 됐으므로(package_url) 파일명이 그
+    패키지 것이라고 전제한다 — 여기서 패키지 이름으로 다시 거르지 않는다.
+    """
     lower = filename.lower()
     if lower.endswith(".whl"):
         parts = filename.split("-")
@@ -75,6 +79,25 @@ def package_url(mirror: MirrorConfig, repo: Repo, package: str) -> str:
     return base.rstrip("/") + "/simple/" + normalize(package) + "/"
 
 
+def _auth_for_repo(mirror: MirrorConfig, repo: Repo) -> str | tuple[str, str] | None:
+    """저장소별 요청에 실제로 실어 보낼 인증 값.
+
+    ``repo.base_url`` override 가 메인 미러와 다른 origin 을 가리키면 token_env
+    bearer 토큰을 보내지 않는다 — SafeRedirectHandler 가 redirect 에 적용하는 것과
+    같은 규칙을 설정으로 선언된 cross-host 저장소에도 적용한다. netrc 인증은
+    httpc._auth_header() 가 요청 URL 의 host 로 매번 새로 조회하므로 이미 안전하다.
+    """
+    auth = mirror.auth_for_request()
+    if (
+        isinstance(auth, tuple)
+        and auth[0] == "bearer"
+        and repo.base_url is not None
+        and httpc.origin(repo.base_url) != httpc.origin(mirror.base_url)
+    ):
+        return None
+    return auth
+
+
 def fetch_versions(
     mirror: MirrorConfig,
     repo: Repo,
@@ -87,7 +110,7 @@ def fetch_versions(
     미등록(404)은 빈 목록. 그 외 non-2xx 는 HttpError 로 올라간다(status 보존).
     """
     url = package_url(mirror, repo, package)
-    resp = httpc.request(url, timeout=timeout, auth=mirror.auth_for_request())
+    resp = httpc.request(url, timeout=timeout, auth=_auth_for_repo(mirror, repo))
     if resp.status == 404:
         return []
     if not resp.ok:
@@ -98,6 +121,6 @@ def fetch_versions(
     versions = {
         version
         for filename in parser.filenames
-        if (version := version_from_filename(filename, package)) is not None
+        if (version := version_from_filename(filename)) is not None
     }
     return sorted(versions, key=version_key)

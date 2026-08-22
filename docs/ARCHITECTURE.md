@@ -251,7 +251,7 @@ src/idk/
 | `doctor.py` | `collect()` 가 `Check` 목록을 만들고 렌더러 셋이 소비 | 진단 도구라 기본 exit 0. `--strict` 일 때만 fail → 1 |
 | `cli_config.py` | `config check`의 고정된 설정 validator registry와 JSON/표 출력 | JSON 경로는 Rich를 import하지 않으며, 실제로 없는 파일만 `skip`으로 분류한다. cwd 문제는 별도 `warn` 행으로 내고 `--strict`에서만 exit 1로 올린다 |
 | `mirror/model.py` | `mirror.toml`의 미러 설정 테이블(`artifactory`)/base_url/auth/token_env 검증과 요청 인증 값 해석. `[[repo]]` 배열로 저장소를 정의한다(이름 중복 거부, 여러 저장소면 `default=true` 필수, eco는 pypi만) | `base_url`은 printable ASCII HTTP(S) URL이며 공백·userinfo·잘못된 percent escape가 없는 유효한 hostname/port만 허용한다. token_env가 있으면 유효한 bearer 값이 필수다. 토큰·거부된 URL은 모델·출력에 저장하지 않는다 |
-| `mirror/index.py` | pypi simple index(PEP 503) 클라이언트 — 이름 정규화, 앵커 파일명 파싱, 버전 추출·정렬 | 404(미등록)는 빈 목록으로, 그 외 non-2xx는 status를 보존한 `HttpError`로 올린다. 버전 정렬은 숫자 덩어리 수 비교(2.10 > 2.9)까지이고 PEP 440 프리릴리스 순서는 보장하지 않는다 |
+| `mirror/index.py` | pypi simple index(PEP 503) 클라이언트 — 이름 정규화, 앵커 파일명 파싱, 버전 추출·정렬 | 404(미등록)는 빈 목록으로, 그 외 non-2xx는 status를 보존한 `HttpError`로 올린다. 버전 정렬은 숫자 덩어리 수 비교(2.10 > 2.9)까지이고 PEP 440 프리릴리스 순서는 보장하지 않는다. `repo.base_url` override 가 메인 미러와 다른 origin 이면 token_env bearer 를 보내지 않는다(`_auth_for_repo`) |
 | `logview/follow.py` | tail -F 시맨틱 추적 — 폴링으로 로테이션(inode)/truncate 감지, 재오픈 | 완결 라인만 내보내고 미완 조각은 보류한다(손실 없음). `poll()`은 블록하지 않는다 — 대기 루프는 `cli_log.py`가 담당 |
 | `logview/filter.py` | include/exclude 정규식 컴파일·판정 | exclude가 include보다 우선한다. 잘못된 정규식은 `FilterError`로 exit 2 |
 | `ws/layout.py` | 모델 → zellij KDL 순수 함수 | 첫 탭에 `tab-bar`/`status-bar` plugin 을 감싼다 (키힌트 바) |
