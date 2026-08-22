@@ -21,18 +21,21 @@ def test_normalize_pep503():
 
 
 def test_version_from_wheel_filenames():
-    assert version_from_filename("requests-2.32.3-py3-none-any.whl", "requests") == "2.32.3"
+    assert version_from_filename("requests-2.32.3-py3-none-any.whl") == "2.32.3"
     # 빌드 태그가 있는 7필드 휠
-    assert version_from_filename("foo-1.0-1-py3-none-any.whl", "foo") == "1.0"
+    assert version_from_filename("foo-1.0-1-py3-none-any.whl") == "1.0"
 
 
 def test_version_from_sdist_filenames():
-    assert version_from_filename("requests-2.32.3.tar.gz", "requests") == "2.32.3"
-    assert version_from_filename("some_pkg-1.2.zip", "some-pkg") == "1.2"
+    assert version_from_filename("requests-2.32.3.tar.gz") == "2.32.3"
+    assert version_from_filename("some_pkg-1.2.zip") == "1.2"
+    assert version_from_filename("some_pkg-1.3.tgz") == "1.3"
+    assert version_from_filename("some_pkg-1.4.tar.bz2") == "1.4"
+    assert version_from_filename("some_pkg-1.5.tar.xz") == "1.5"
 
 
 def test_version_from_unknown_extension_returns_none():
-    assert version_from_filename("index.html", "requests") is None
+    assert version_from_filename("index.html") is None
 
 
 def test_version_key_numeric_awareness():

@@ -13,7 +13,7 @@ from html.parser import HTMLParser
 from idk import httpc
 from idk.mirror.model import MirrorConfig, Repo
 
-SDIST_EXTENSIONS = (".tar.gz", ".zip", ".tar.bz2")
+SDIST_EXTENSIONS = (".tar.gz", ".tgz", ".zip", ".tar.bz2", ".tar.xz")
 
 
 def normalize(name: str) -> str:
@@ -40,8 +40,12 @@ class _AnchorParser(HTMLParser):
                     self.filenames.append(filename)
 
 
-def version_from_filename(filename: str, package: str) -> str | None:
-    """휠/소스 아카이브 파일명에서 버전 부분만 추출한다."""
+def version_from_filename(filename: str) -> str | None:
+    """휠/소스 아카이브 파일명에서 버전 부분만 추출한다.
+
+    요청 자체가 이미 패키지 하나로 scope 됐으므로(package_url) 파일명이 그
+    패키지 것이라고 전제한다 — 여기서 패키지 이름으로 다시 거르지 않는다.
+    """
     lower = filename.lower()
     if lower.endswith(".whl"):
         parts = filename.split("-")
@@ -117,6 +121,6 @@ def fetch_versions(
     versions = {
         version
         for filename in parser.filenames
-        if (version := version_from_filename(filename, package)) is not None
+        if (version := version_from_filename(filename)) is not None
     }
     return sorted(versions, key=version_key)
