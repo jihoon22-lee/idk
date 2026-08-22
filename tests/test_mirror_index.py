@@ -4,6 +4,8 @@ import pytest
 
 from idk.mirror.index import (
     _AnchorParser,
+    _auth_for_repo,
+    fetch_versions,
     normalize,
     package_url,
     version_from_filename,
@@ -80,3 +82,49 @@ def test_package_url_repo_override_wins():
 )
 def test_normalize_cases(name: str, expected: str):
     assert normalize(name) == expected
+
+
+def test_auth_for_repo_drops_bearer_for_cross_host_override(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TOK", "s3cret-token")
+    mirror = MirrorConfig(base_url="https://main.example/pkgs", token_env="TOK")
+    repo = Repo(name="other", base_url="https://elsewhere.example/simple/")
+
+    assert _auth_for_repo(mirror, repo) is None
+
+
+def test_auth_for_repo_keeps_bearer_for_same_host_override(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TOK", "s3cret-token")
+    mirror = MirrorConfig(base_url="https://main.example/pkgs", token_env="TOK")
+    repo = Repo(name="other-path", base_url="https://main.example/pkgs2")
+
+    assert _auth_for_repo(mirror, repo) == ("bearer", "s3cret-token")
+
+
+def test_auth_for_repo_keeps_bearer_without_override(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TOK", "s3cret-token")
+    mirror = MirrorConfig(base_url="https://main.example/pkgs", token_env="TOK")
+    repo = Repo(name="default")
+
+    assert _auth_for_repo(mirror, repo) == ("bearer", "s3cret-token")
+
+
+def test_fetch_versions_does_not_leak_bearer_to_cross_host_repo(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("TOK", "s3cret-token")
+    mirror = MirrorConfig(base_url="https://main.example/pkgs", token_env="TOK")
+    repo = Repo(name="other", base_url="https://elsewhere.example/simple/")
+
+    seen_auth = []
+
+    def fake_request(url, **kwargs):
+        seen_auth.append(kwargs.get("auth"))
+        from idk import httpc
+
+        return httpc.Response(status=404, url=url, headers={}, body=b"")
+
+    monkeypatch.setattr("idk.mirror.index.httpc.request", fake_request)
+
+    fetch_versions(mirror, repo, "requests")
+
+    assert seen_auth == [None]
