@@ -345,8 +345,8 @@ OS/커널/glibc/Python/컴파일러/zellij/xclip/locale/TERM + 미러 접속 가
 | **1** ✅ | `idk ws` + `idk run` | 완료 (v0.1.0~0.1.1). 모델·KDL·백엔드·CLI·TUI. 상세 명세: [spec-ws-run.md](spec-ws-run.md) |
 | **2** ✅ | `idk dt` | 완료 (v0.1.0~0.1.1). 13개 도구 + TUI. `src/idk/dt/` 의존성 0. 상세 명세: [spec-dt.md](spec-dt.md) |
 | **3** ✅ | `idk build` CLI MVP | 파일/stdin streaming parser + plain/JSON + 필터/exit code (v0.2.0 구현·문서 완료) |
-| **4** | `idk log` | |
-| **5** | `idk mirror` | 실제 내부 미러 URL·repo key 확보 후 |
+| **4** ✅ | `idk log` | CLI MVP 구현. 여러 경로/glob, tail -F 시맨틱 회전·truncate 감지, include/exclude 필터. TUI·색상 테마는 후속 |
+| **5** ◐ | `idk mirror` | pypi simple index 코어만 선구현(`[[repo]]` 설정 포함). npm/cargo/maven/rpm 과 실미러 검증은 내부 미러 정보 확인 후 |
 
 **Phase 0~3은 `v0.2.0` 범위에 포함되며**, 폐쇄망에서 실제로 써본 뒤 4~5의 우선순위를
 조정한다. Phase 1·2의 초기 반입은 `v0.1.0`/`v0.1.1`에서 끝났고, v0.2.0은 보안·안정성

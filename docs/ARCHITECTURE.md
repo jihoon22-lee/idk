@@ -224,10 +224,14 @@ src/idk/
 ├─ doctor.py       진단 — Check 목록을 모아 표/JSON/brief 로 렌더
 ├─ cli_config.py   `idk config check` CLI 배선 (검사 registry, JSON/표 출력)
 ├─ cli_build.py    `idk build` CLI 배선 (입력 선택, 필터, exit code, plain/JSON)
+├─ cli_log.py      `idk log` CLI 배선 (glob 확장, prefix, follow 루프)
+├─ cli_mirror.py   `idk mirror` CLI 배선 (저장소 선택, 표/JSON, exit code)
 ├─ cli_dt.py       `idk dt` CLI 배선 (typer). 공통 I/O 규약 담당
 ├─ dt_tui.py       `idk dt tui` — 입력/출력 2패널 (textual)
-├─ mirror/         mirror.toml 최소 모델·인증 해석
-│  └─ model.py
+├─ logview/        `idk log` core — tail -F 추적과 정규식 필터 (**stdlib 만**)
+│  └─ follow.py  filter.py
+├─ mirror/         mirror.toml 모델·인증 해석 + pypi simple index 클라이언트
+│  └─ model.py  index.py
 ├─ ws/             `idk ws` — workspace/tab/pane 모델·검증, KDL 렌더러, CLI, TUI
 │  ├─ model.py  layout.py  cli.py  tui.py
 │  └─ backends/zellij.py   zellij 호출의 유일한 지점 (AGENTS.md 규약)
@@ -246,7 +250,10 @@ src/idk/
 | `config.py` | TOML 로드/저장과 엄격한 타입 helper. 없는 파일은 빈 dict | `config_directory()`와 `config_file()`이 디렉터리·일반 파일 여부를 공통 분류한다. 없는 경로만 missing이고, 디렉터리/FIFO/끊긴 심볼릭 링크/접근 오류는 `ConfigError`다. 로드는 nonblocking open 뒤 `fstat`으로 regular file을 재확인한다. 저장은 임시파일 → `os.replace` 로 원자적 |
 | `doctor.py` | `collect()` 가 `Check` 목록을 만들고 렌더러 셋이 소비 | 진단 도구라 기본 exit 0. `--strict` 일 때만 fail → 1 |
 | `cli_config.py` | `config check`의 고정된 설정 validator registry와 JSON/표 출력 | JSON 경로는 Rich를 import하지 않으며, 실제로 없는 파일만 `skip`으로 분류한다. cwd 문제는 별도 `warn` 행으로 내고 `--strict`에서만 exit 1로 올린다 |
-| `mirror/model.py` | `mirror.toml`의 미러 설정 테이블(`artifactory`)/base_url/auth/token_env 검증과 요청 인증 값 해석 | `base_url`은 printable ASCII HTTP(S) URL이며 공백·userinfo·잘못된 percent escape가 없는 유효한 hostname/port만 허용한다. token_env가 있으면 유효한 bearer 값이 필수다. 토큰·거부된 URL은 모델·출력에 저장하지 않는다 |
+| `mirror/model.py` | `mirror.toml`의 미러 설정 테이블(`artifactory`)/base_url/auth/token_env 검증과 요청 인증 값 해석. `[[repo]]` 배열로 저장소를 정의한다(이름 중복 거부, 여러 저장소면 `default=true` 필수, eco는 pypi만) | `base_url`은 printable ASCII HTTP(S) URL이며 공백·userinfo·잘못된 percent escape가 없는 유효한 hostname/port만 허용한다. token_env가 있으면 유효한 bearer 값이 필수다. 토큰·거부된 URL은 모델·출력에 저장하지 않는다 |
+| `mirror/index.py` | pypi simple index(PEP 503) 클라이언트 — 이름 정규화, 앵커 파일명 파싱, 버전 추출·정렬 | 404(미등록)는 빈 목록으로, 그 외 non-2xx는 status를 보존한 `HttpError`로 올린다. 버전 정렬은 숫자 덩어리 수 비교(2.10 > 2.9)까지이고 PEP 440 프리릴리스 순서는 보장하지 않는다 |
+| `logview/follow.py` | tail -F 시맨틱 추적 — 폴링으로 로테이션(inode)/truncate 감지, 재오픈 | 완결 라인만 내보내고 미완 조각은 보류한다(손실 없음). `poll()`은 블록하지 않는다 — 대기 루프는 `cli_log.py`가 담당 |
+| `logview/filter.py` | include/exclude 정규식 컴파일·판정 | exclude가 include보다 우선한다. 잘못된 정규식은 `FilterError`로 exit 2 |
 | `ws/layout.py` | 모델 → zellij KDL 순수 함수 | 첫 탭에 `tab-bar`/`status-bar` plugin 을 감싼다 (키힌트 바) |
 | `ws/cli.py`·`ws/tui.py` | 세션 lifecycle과 TUI 조작 | running만 attach한다. 정의된 EXITED는 purge 후 workspace 정의로 재생성하고, orphan EXITED는 자동 제거하지 않는다. `k`/`p`는 확인 modal(Enter/y 확인, Esc/n 취소) 뒤에만 backend를 호출한다 |
 | `ws/backends/zellij.py` | zellij 프로세스 호출 전부 | 이 파일 밖에서 zellij 를 부르지 않는다. `list-sessions`의 정확한 세션 없음 문구와 purge의 확인된 대상 없음만 멱등 성공으로 허용하고, 결과를 캡처하는 호출의 나머지 nonzero는 명령 인자·exit code와, 캡처된 stdout/stderr가 있을 때만 그 진단을 함께 `ZellijError`로 올린다 |
