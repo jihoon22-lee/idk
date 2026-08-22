@@ -10,7 +10,7 @@ from collections.abc import Callable
 from typing import ClassVar
 
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, OptionList, TextArea
 from textual.widgets.option_list import Option
@@ -62,7 +62,7 @@ class DtApp(App[None]):
 
     TITLE = "idk dt"
 
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         # ctrl+enter 는 터미널에 따라 시퀀스가 안 오기도 한다. 확실한 경로는 '실행' 버튼.
         Binding("ctrl+enter", "run", "실행 (또는 버튼)", priority=True),
         Binding("f2", "run", "실행", priority=True),

@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Label
@@ -22,7 +22,7 @@ from idk.ws import cli
 class ConfirmSessionAction(ModalScreen[bool]):
     """세션 kill/purge 동작을 확인받는 재사용 가능한 모달."""
 
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "confirm", "확인"),
         Binding("y", "confirm", "확인"),
         Binding("escape", "cancel", "취소"),
@@ -91,7 +91,7 @@ class WsApp(App[None]):
 
     TITLE = "idk ws"
 
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "activate", "attach/생성"),
         Binding("k", "kill", "kill"),
         Binding("p", "purge", "purge"),

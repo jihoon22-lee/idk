@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import typer
 
@@ -28,11 +28,15 @@ def require_interactive_terminal(command: str, alternative: str) -> None:
 
 def _discard_terminal_output() -> None:
     """Keep interpreter shutdown from flushing into a closed terminal."""
+    stdout = sys.__stdout__
+    stderr = sys.__stderr__
     try:
-        stdout_fd = sys.__stdout__.fileno()
-        stderr_fd = sys.__stderr__.fileno()
+        if stdout is None or stderr is None:
+            return
+        stdout_fd = stdout.fileno()
+        stderr_fd = stderr.fileno()
         null_fd = os.open(os.devnull, os.O_WRONLY)
-    except (AttributeError, OSError, ValueError):
+    except (OSError, ValueError):
         return
     try:
         os.dup2(null_fd, stdout_fd)
@@ -44,7 +48,7 @@ def _discard_terminal_output() -> None:
         os.close(null_fd)
 
 
-def monitor_terminal_loss(app: App[object], *, interval: float = 0.25) -> None:
+def monitor_terminal_loss(app: App[Any], *, interval: float = 0.25) -> None:
     if app.is_headless:
         return
 
