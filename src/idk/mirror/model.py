@@ -61,16 +61,18 @@ class MirrorConfig:
     def repos_for_query(self, wanted: str | None = None) -> tuple[Repo, ...]:
         """조회 대상 저장소를 고른다.
 
-        ``wanted`` 가 있으면 그 이름의 저장소 하나를, 없으면 ``default=true`` 인
-        저장소 전부를 돌려준다. [[repo]] 가 정의되지 않았으면 암묵 단일 저장소다.
+        ``wanted`` 가 있으면 그 이름의 저장소 하나를(없으면 오류), 없으면
+        ``default=true`` 인 저장소 전부를 돌려준다. [[repo]] 가 정의되지 않았으면
+        이름이 "default" 인 암묵 단일 저장소로 취급한다.
         """
-        if not self.repos:
-            return (Repo(name="default"),)
+        pool = self.repos or (Repo(name="default"),)
         if wanted is not None:
-            for repo in self.repos:
+            for repo in pool:
                 if repo.name == wanted:
                     return (repo,)
             raise _error("mirror.toml.repo", f"알 수 없는 저장소 이름입니다: {wanted}")
+        if not self.repos:
+            return pool
         marked = tuple(repo for repo in self.repos if repo.default)
         return marked or self.repos[:1]
 

@@ -119,6 +119,16 @@ def test_repos_for_query_defaults_and_named():
         mirror.repos_for_query("nope")
 
 
+def test_repos_for_query_rejects_unknown_name_with_no_repo_table():
+    # [[repo]] 가 없는 설정(암묵 단일 저장소)에서도 --repo 오타를 조용히 무시하고
+    # default 저장소를 돌려주면 안 된다.
+    mirror = MirrorConfig(base_url="https://m.example")
+
+    assert [r.name for r in mirror.repos_for_query("default")] == ["default"]
+    with pytest.raises(ConfigError):
+        mirror.repos_for_query("nope")
+
+
 def test_fetch_versions_sorts_and_dedupes(monkeypatch: pytest.MonkeyPatch):
     mirror = MirrorConfig(base_url="https://m.example")
     repo = Repo(name="r")
