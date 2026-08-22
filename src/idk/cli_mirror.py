@@ -125,5 +125,10 @@ def mirror_cmd(
     else:
         _print_table(package, results)
 
-    found_any = any(r.versions for r in results)
-    raise typer.Exit(0 if found_any else 1)
+    if any(r.versions for r in results):
+        raise typer.Exit(0)
+    if any(r.status == "error" for r in results):
+        # 미등록(확실히 없음)과 접속/인증 실패(모름)를 스크립트가 구분할 수 있게
+        # 다른 exit code 를 쓴다 — ws 의 orphan EXITED 안내가 exit 3 을 쓰는 것과 같다.
+        raise typer.Exit(3)
+    raise typer.Exit(1)

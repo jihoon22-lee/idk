@@ -222,7 +222,9 @@ def test_cli_not_found_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert "미등록" in result.stdout
 
 
-def test_cli_transport_error_reports_and_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_cli_transport_error_reports_and_exits_3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # 접속/인증 실패는 "확실히 미등록"(exit 1)과 구분해야 스크립트가 재시도할지
+    # 판단할 수 있다.
     _patch_home(monkeypatch, tmp_path)
     config_dir = tmp_path / ".config" / "idk"
     config_dir.mkdir(parents=True)
@@ -238,8 +240,39 @@ def test_cli_transport_error_reports_and_exits_1(tmp_path: Path, monkeypatch: py
 
     result = runner.invoke(app, ["mirror", "requests"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "오류" in result.stdout
+
+
+def test_cli_found_in_one_repo_exits_0_despite_error_in_another(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # 한 저장소에서라도 찾으면, 다른 저장소가 에러여도 exit 0 이어야 한다.
+    _patch_home(monkeypatch, tmp_path)
+    config_dir = tmp_path / ".config" / "idk"
+    config_dir.mkdir(parents=True)
+    (config_dir / "mirror.toml").write_text(
+        '[artifactory]\nbase_url = "https://mirror.example/pkg"\n\n'
+        '[[repo]]\nname = "ok-repo"\ndefault = true\n\n'
+        '[[repo]]\nname = "broken-repo"\ndefault = true\n',
+        encoding="utf-8",
+    )
+
+    def flaky(url, **kw):
+        if "broken" in url:
+            raise httpc.HttpError("접속 실패", url=url)
+        return _fake_response(200, SIMPLE_HTML)
+
+    def fake_package_url(mirror, repo, package):
+        host = "broken.example" if repo.name == "broken-repo" else "mirror.example"
+        return f"https://{host}/simple/{package}/"
+
+    monkeypatch.setattr(index, "package_url", fake_package_url)
+    monkeypatch.setattr(index.httpc, "request", flaky)
+
+    result = runner.invoke(app, ["mirror", "requests"])
+
+    assert result.exit_code == 0
 
 
 def test_cli_requires_mirror_toml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
