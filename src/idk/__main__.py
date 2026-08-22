@@ -6,13 +6,12 @@
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
-from . import MIN_PYTHON, __version__, cli_build, cli_config, cli_dt, doctor
+from . import MIN_PYTHON, __version__, cli_build, cli_config, cli_dt, cli_log, cli_mirror, doctor
 from . import env as envmod
 from .snip import cli as snip_cli
 from .ws import cli as ws_cli
@@ -29,6 +28,8 @@ app.command("run")(snip_cli.run_cmd)
 app.add_typer(cli_dt.dt_app, name="dt")
 app.add_typer(cli_config.config_app, name="config")
 app.command("build")(cli_build.build_cmd)
+app.command("log")(cli_log.log_cmd)
+app.command("mirror")(cli_mirror.mirror_cmd)
 
 
 def _version_callback(value: bool) -> None:
@@ -127,4 +128,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

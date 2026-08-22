@@ -18,12 +18,23 @@ from idk import config
 
 
 @dataclass(frozen=True)
+class Repo:
+    """미러 안의 개별 저장소([[repo]] 항목)."""
+
+    name: str
+    eco: str = "pypi"
+    base_url: str | None = None  # 서버가 다르면 개별 override
+    default: bool = False
+
+
+@dataclass(frozen=True)
 class MirrorConfig:
     """검증된 내부 패키지 미러 접속 설정."""
 
     base_url: str
     auth: str | None = None
     token_env: str | None = None
+    repos: tuple[Repo, ...] = ()
 
     def auth_for_request(self) -> str | tuple[str, str] | None:
         """httpc가 이해하는 인증 값.
@@ -46,6 +57,22 @@ class MirrorConfig:
             return ("bearer", token)
         # token_env가 없을 때만 기존 doctor 동작처럼 사용자 netrc를 시도한다.
         return self.auth or "netrc"
+
+    def repos_for_query(self, wanted: str | None = None) -> tuple[Repo, ...]:
+        """조회 대상 저장소를 고른다.
+
+        ``wanted`` 가 있으면 그 이름의 저장소 하나를, 없으면 ``default=true`` 인
+        저장소 전부를 돌려준다. [[repo]] 가 정의되지 않았으면 암묵 단일 저장소다.
+        """
+        if not self.repos:
+            return (Repo(name="default"),)
+        if wanted is not None:
+            for repo in self.repos:
+                if repo.name == wanted:
+                    return (repo,)
+            raise _error("mirror.toml.repo", f"알 수 없는 저장소 이름입니다: {wanted}")
+        marked = tuple(repo for repo in self.repos if repo.default)
+        return marked or self.repos[:1]
 
     request_auth = auth_for_request
 
@@ -177,7 +204,48 @@ def load() -> MirrorConfig | None:
     token_env = _string(artifactory, "token_env", where)
     if token_env is not None and not token_env:
         raise _error(f"{where}.token_env", "빈 문자열일 수 없습니다")
-    mirror = MirrorConfig(base_url=base_url, auth=auth, token_env=token_env)
+    repos = _parse_repos(raw.get("repo"))
+    mirror = MirrorConfig(base_url=base_url, auth=auth, token_env=token_env, repos=repos)
     if token_env is not None:
         mirror.auth_for_request()
     return mirror
+
+
+def _parse_repos(raw_repos: Any) -> tuple[Repo, ...]:
+    """[[repo]] 배열을 검증해 Repo 튜플로 만든다. 없으면 빈 튜플(암묵 단일 저장소)."""
+    if raw_repos is None:
+        return ()
+    if type(raw_repos) is not list:
+        raise _error("mirror.toml.repo", "테이블 배열이어야 합니다")
+
+    repos: list[Repo] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw_repos):
+        where = f"mirror.toml.repo[{index}]"
+        if type(item) is not dict:
+            raise _error(where, "테이블이어야 합니다")
+        name = _string(item, "name", where, required=True)
+        assert name is not None
+        if name in seen:
+            raise _error(f"{where}.name", f"저장소 이름이 중복됩니다: {name}")
+        seen.add(name)
+
+        eco = _string(item, "eco", where) or "pypi"
+        if eco != "pypi":
+            raise _error(f"{where}.eco", "아직 pypi 생태계만 지원합니다")
+
+        repo_base = _string(item, "base_url", where)
+        if repo_base is not None:
+            _validate_base_url(repo_base, f"{where}.base_url")
+
+        default = item.get("default")
+        if default is not None and type(default) is not bool:
+            raise _error(f"{where}.default", "불리언이어야 합니다")
+        repos.append(Repo(name=name, eco=eco, base_url=repo_base, default=bool(default)))
+
+    if len(repos) > 1 and not any(repo.default for repo in repos):
+        raise _error(
+            "mirror.toml.repo",
+            "여러 저장소가 있으면 default=true 로 기본 저장소를 지정해야 합니다",
+        )
+    return tuple(repos)
