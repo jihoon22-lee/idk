@@ -35,6 +35,15 @@ check_version() {
     [ "$("$@" --version)" = "idk 0.3.0" ]
 }
 
+check_log_tail() {
+    local tmp out rc
+    tmp="$(mktemp -d)"
+    printf 'l1\nl2\nl3\n' >"$tmp/a.log"
+    out="$("$PY310" "$PYZ" log "$tmp/a.log" --no-follow -n 2)" && rc=0 || rc=$?
+    rm -rf "$tmp"
+    [ "$rc" = 0 ] && [ "$out" = "$(printf 'l2\nl3')" ]
+}
+
 PY310="$(uv python find 3.10 2>/dev/null || command -v python3.10 || true)"
 
 echo "== 1. 런처 경유 실행 =="
@@ -48,6 +57,7 @@ if [ -n "$PY310" ]; then
     check "python3.10 <pyz> --version" 0 check_version "$PY310" "$PYZ"
     check "python3.10 <pyz> env --csh" 0 "$PY310" "$PYZ" env --csh
     check "python3.10 build stdin JSON" 0 check_build_stdin_json
+    check "python3.10 log tail -n" 0 check_log_tail
 else
     echo "  SKIP python3.10 없음 (uv python install 3.10)"
 fi

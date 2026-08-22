@@ -7,6 +7,7 @@ glob 이 아닌 경로가 아직 없으면 나타날 때까지 기다린다(tail
 from __future__ import annotations
 
 import glob as globmod
+import os
 import sys
 import time
 from pathlib import Path
@@ -36,7 +37,9 @@ def expand_specs(patterns: list[str]) -> list[tuple[str, Path]]:
     seen: set[str] = set()
     for pattern in patterns:
         if any(ch in pattern for ch in "*?["):
-            matches = sorted(globmod.glob(pattern))
+            # glob.glob() 은 ~ 를 확장하지 않는다. glob 을 따옴표로 감싸 셸 확장을
+            # 막으라고 안내하므로(GUIDE.md) 여기서 직접 풀어 줘야 한다.
+            matches = sorted(globmod.glob(os.path.expanduser(pattern)))
             if not matches:
                 typer.echo(f"idk log: '{pattern}' 에 해당하는 파일이 없습니다", err=True)
                 continue
