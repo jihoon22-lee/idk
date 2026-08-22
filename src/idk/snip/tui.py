@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from textual.app import App, ComposeResult
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Footer, Header, Input, Label, OptionList
@@ -50,7 +50,7 @@ def filter_snippets(query: str, snippets: list[model.Snippet]) -> list[model.Sni
 class ParamsScreen(ModalScreen[dict[str, str]]):
     """누락 파라미터를 입력받는 모달."""
 
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "submit", "실행", priority=True),
         Binding("escape", "cancel", "취소", priority=True),
     ]
@@ -84,7 +84,7 @@ class RunApp(App[None]):
 
     TITLE = "idk run"
 
-    BINDINGS: ClassVar[list[Binding]] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         Binding("enter", "run_selected", "실행", priority=True),
         Binding("q", "quit", "종료", priority=True),
     ]

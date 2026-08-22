@@ -94,7 +94,7 @@ def _python_checks(info: env.SystemInfo) -> list[Check]:
     )
     for name, path, version in env.python_candidates():
         ver_str = ".".join(str(p) for p in version) if version else "확인 불가"
-        usable = bool(version) and version[: len(MIN_PYTHON)] >= MIN_PYTHON
+        usable = version is not None and version[: len(MIN_PYTHON)] >= MIN_PYTHON
         checks.append(
             Check("python", f"후보 {name}", OK if usable else WARN, ver_str, path),
         )
@@ -216,13 +216,12 @@ def _mirror_checks(*, net: bool) -> list[Check]:
     if type(status) is not int or not 100 <= status <= 599:
         return [Check("mirror", "base_url", FAIL, base_url, "미러 응답 상태가 올바르지 않습니다")]
     status_code = status
-    if 200 <= status < 300:
-        status = OK
-    elif status in {401, 403}:
-        status = FAIL
-    else:
-        status = WARN
-    return [Check("mirror", "base_url", status, base_url, f"HTTP {status_code}")]
+    verdict = OK
+    if status in {401, 403}:
+        verdict = FAIL
+    elif not 200 <= status < 300:
+        verdict = WARN
+    return [Check("mirror", "base_url", verdict, base_url, f"HTTP {status_code}")]
 
 
 def collect(*, net: bool = False) -> list[Check]:

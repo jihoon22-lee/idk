@@ -77,8 +77,8 @@ idk doctor
 | `idk run` | ✅ | 명령 런처(스니펫) |
 | `idk dt` | ✅ | 개발 도구 모음 (JSON·Base64·hash·JWT·diff…) |
 | `idk build` | ✅ MVP (v0.2.0) | 파일/stdin 빌드 로그에서 진단 추출 (plain/JSON) |
-| `idk log` | 📋 Phase 4 | 멀티 로그 뷰어 |
-| `idk mirror` | 📋 Phase 5 | 내부 패키지 미러 검색 |
+| `idk log` | ✅ MVP | 멀티 로그 tail — 여러 파일/glob, 회전·truncate 감지, include/exclude 필터 |
+| `idk mirror` | ✅ MVP | 내부 패키지 미러 조회 — pypi simple index, 저장소별 버전 나열 |
 
 ### `idk build` — 빌드 진단 MVP
 

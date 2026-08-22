@@ -177,10 +177,10 @@ idk env --bindir /opt/tools/bin
 
 | 파일 | 쓰는 곳 | 상태 |
 |---|---|---|
-| `mirror.toml` | 내부 패키지 미러 접속 정보 | `doctor --net` 이 읽는다. `idk mirror` 는 Phase 5 |
+| `mirror.toml` | 내부 패키지 미러 접속 정보 | `doctor --net`, `idk mirror` |
 | `workspaces.toml` | 워크스페이스 정의 | `idk ws` |
 | `snippets.toml` | 명령 스니펫 | `idk run` |
-| `logview.toml` | 로그 하이라이팅 규칙 | Phase 4 |
+| `logview.toml` | 로그 하이라이팅 규칙 | log TUI 와 함께 후속 |
 
 `mirror.toml` 예시:
 
@@ -188,7 +188,13 @@ idk env --bindir /opt/tools/bin
 [artifactory]
 base_url = "https://mirror.example/package-mirror"
 auth     = "netrc"          # 또는 token_env = "MIRROR_TOKEN"
+
+[[repo]]
+name = "pypi-main"
+default = true
 ```
+
+`idk mirror` 가 쓰는 `[[repo]]` 항목 전체는 앞의 `idk mirror` 절을 참조한다.
 
 인증은 `~/.netrc` 를 읽는다. 별도 토큰 파일을 만들지 않는다.
 `token_env`를 쓰면 해당 환경변수의 값이 bearer token으로 요청에만 사용되며 `doctor`와
@@ -347,14 +353,73 @@ idk dt tui              # 대화형 입력/출력
 
 ---
 
-## 후속 예정 명령
+## `idk log` — 멀티 로그 뷰어 MVP
 
-아직 구현되지 않은 명령이다. 설계는 [plan.md](plan.md) 의 "앱별 설계" 에 있다.
+여러 로그를 한 스트림으로 본다. 시작 시 각 파일의 마지막 N줄을 출력하고 기본으로
+`tail -F` 처럼 뒤따른다. 로테이션(inode 변경)과 truncate(크기 축소)를 감지해 알아서
+재오픈하므로, 로테이트되는 로그도 끊기지 않는다.
 
-| 명령 | Phase | 무엇을 할 것인가 |
-|---|---|---|
-| `idk log` | 4 | 여러 로그를 한 화면에서 tail·필터·하이라이팅 |
-| `idk mirror` | 5 | 패키지가 내부 미러에 있는지 조회 |
+```bash
+idk log app.log error.log              # 여러 파일을 [이름] prefix 로 구분해 tail
+idk log 'logs/*.log'                   # glob 도 된다
+idk log app.log -n 50                  # 시작 시 마지막 50줄부터
+idk log app.log --include ERROR        # 이 정규식이 맞는 줄만 (중복 가능)
+idk log app.log --exclude DEBUG        # 이 정규식이 맞는 줄은 버림 (중복 가능)
+idk log app.log --no-follow            # 마지막 N줄만 출력하고 끝낸다
+idk log app.log -q                     # 소스 prefix 를 붙이지 않는다
+```
+
+규칙:
+
+- 완결 라인(개행으로 끝나는)만 내보낸다. 개행 없이 끝난 조각은 라인이 완성될 때까지 보류한다.
+- glob 이 아닌 경로가 아직 없으면 나타날 때까지 기다린다(`tail -F` 관례). glob 이 비면 경고하고 건너뛴다.
+- exclude 가 include 보다 우선한다. 필터는 라인 내용에 적용되고 prefix 는 대상이 아니다.
+- 폴링 간격은 `--interval`(초, 최소 0.05)로 바꾼다. 종료는 Ctrl+C(exit 0).
+- 사용 오류(경로 없음, 잘못된 정규식)는 exit 2다.
+
+TUI·색상 테마·타임스탬프 정렬 merge 는 후속 범위다.
+
+---
+
+## `idk mirror` — 내부 패키지 미러 조회 MVP
+
+"이 패키지가 내부 미러에 있나?"를 터미널에서 바로 확인한다. pypi simple index(PEP 503)
+표준 엔드포인트를 쓰므로 읽기 권한만 있으면 되고 별도 인증 키가 필요 없다.
+
+```bash
+idk mirror requests                    # 기본 저장소(default=true) 전체 조회
+idk mirror requests --repo pypi-extra  # 저장소 하나만
+idk mirror requests --json             # 스크립트용 JSON
+```
+
+출력 예:
+
+```
+package requests
+repo       상태      최신       버전 수
+pypi-main  ok        2.32.3     128
+pypi-extra 미등록    -          -
+```
+
+저장소가 여러 개면 `default = true` 로 기본을 지정한다:
+
+```toml
+[artifactory]
+base_url = "https://mirror.example/package-mirror"
+
+[[repo]]
+name = "pypi-main"
+default = true
+
+[[repo]]
+name = "pypi-extra"
+# base_url = "https://other.example/simple"   # 서버가 다르면 개별 override
+```
+
+- 어느 저장소에서든 버전을 찾으면 exit 0, 전부 미등록이거나 오류면 exit 1, 설정/사용 오류는 exit 2다.
+- 404(미등록)는 오류가 아니라 "없음" 결과다. 401/403은 접근 거부 행으로 표시한다.
+- 버전 정렬은 숫자 덩어리를 수로 비교한다(2.10 > 2.9). PEP 440 프리릴리스 순서까지는 보장하지 않는다.
+- npm/cargo/maven/rpm 생태계와 publish 는 후속 범위다.
 
 ---
 

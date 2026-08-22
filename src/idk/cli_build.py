@@ -59,13 +59,16 @@ def _redirect_stdout_to_devnull() -> None:
             if redirected:
                 return
 
+    replacement: io.TextIOBase
     try:
         replacement = os.fdopen(os.open(os.devnull, os.O_WRONLY), "w")
     except OSError:
         replacement = io.StringIO()
     old_stdout = sys.stdout
-    with suppress(AttributeError, OSError, ValueError):
-        old_stdout.detach()
+    detach = getattr(old_stdout, "detach", None)
+    if callable(detach):
+        with suppress(OSError, ValueError):
+            detach()
     sys.stdout = replacement
 
 

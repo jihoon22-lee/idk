@@ -15,18 +15,24 @@ jobs:
           enable-cache: true
 
       # Ubuntu 24.04 apt 에는 3.10 이 없다. 산출물이 돌아야 하는 버전이므로 직접 확보한다.
-      - run: uv python install 3.10 3.9
+      - run: uv python install 3.10 3.9 3.14
 
       - name: ruff
         run: |
           uvx ruff check .
           uvx ruff format --check .
 
-      - name: pytest (3.10 — 폐쇄망과 같은 버전)
-        run: uv run --python 3.10 --group dev pytest
+      - name: mypy
+        run: uv run --python 3.10 --group dev mypy
+
+      - name: pytest (3.10 — 폐쇄망과 같은 버전, 커버리지 게이트)
+        run: uv run --python 3.10 --group dev pytest --cov --cov-report=term-missing
 
       - name: pytest (3.12 — WSL 개발 버전)
         run: uv run --python 3.12 --group dev pytest
+
+      - name: pytest (3.14 — 최신 안정 버전)
+        run: uv run --python 3.14 --group dev pytest
 
   artifact:
     runs-on: ubuntu-latest

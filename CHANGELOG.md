@@ -9,6 +9,26 @@
 
 ## [Unreleased]
 
+### Added
+- **`idk log` CLI MVP** — 여러 경로/glob 의 로그를 한 스트림으로 tail 한다. 시작 시 마지막
+  N줄을 출력하고 `tail -F` 시맨틱으로 뒤따르며, 로테이션(inode 변경)과 truncate(크기 축소)를
+  감지해 재오픈한다. 완결 라인만 내보내고 미완 조각은 보류해 손실이 없다. `--include/--exclude`
+  정규식 필터, 소스 prefix, `--no-follow`, `--interval`, `-q` 를 제공한다. stdlib 만 사용하며
+  TUI·색상 테마는 후속 범위다.
+- **`idk mirror` CLI MVP** — 내부 패키지 미러의 pypi simple index(PEP 503)에서 패키지 버전을
+  조회한다. `mirror.toml` 에 `[[repo]]` 테이블 배열로 저장소를 정의하고(`default = true`,
+  개별 `base_url` override), 저장소 이름 컬럼이 있는 표와 `--json` 출력을 제공한다. 404는
+  "미등록" 결과, 401/403은 접근 거부 행으로 보고하며 어느 저장소에서든 찾으면 exit 0이다.
+  인증은 기존 공통 설정(netrc 폴백)을 그대로 쓴다. npm/cargo/maven/rpm 은 후속 범위다.
+
+### Build / Supply chain
+- **mypy 타입 검사 도입** — dev group 에 mypy 를 추가하고 `python_version = "3.10"`,
+  `check_untyped_defs` 수준으로 전체 소스를 검사한다. CI lint 잡에 한 줄로 걸린다.
+- **커버리지 게이트 도입** — dev group 에 pytest-cov 를 추가하고 실측값(87%)을
+  `fail_under` 로 고정한다. 일반 pytest 실행 속도는 유지하고 CI 의 `--cov` 실행에서 강제한다.
+- **CI Python 매트릭스 확장** — 3.10/3.12 에 3.14(최신 안정)를 추가해 신버전 회귀를 조기에
+  잡는다. requires-python 하한(3.10)은 폐쇄망 설치 버전 때문에 유지한다.
+
 ## [0.2.1] - 2026-08-20
 
 ### Fixed

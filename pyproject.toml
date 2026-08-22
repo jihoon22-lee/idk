@@ -22,7 +22,7 @@ idk = "idk.__main__:main"
 
 [dependency-groups]
 build = ["hatchling", "shiv"]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "mypy>=1.11"]
 
 [tool.hatch.version]
 path = "src/idk/__init__.py"
@@ -58,3 +58,24 @@ addopts = "-q"
 markers = [
     "zellij: zellij 바이너리가 PATH 에 있을 때만 도는 통합 테스트 (ci.yml integration 잡)",
 ]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src"]
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["tomli", "tomli_w"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["src/idk"]
+
+[tool.coverage.report]
+precision = 1
+# 실측 87.7%(로컬)에서 환경 편차 여유를 두고 85 로 고정한다(2026-08-22).
+# env.py·런처 경로 등 실행 환경에 따라 달라지는 분기가 있어 CI/로컬 차이가 난다.
+fail_under = 85.0
