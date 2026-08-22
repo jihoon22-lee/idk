@@ -83,7 +83,7 @@ idk doctor
 
 ## 3. 확인 항목
 
-- `idk --version` 이 `idk 0.3.0` → 아티팩트와 문서 버전이 일치한다는 뜻
+- `idk --version` 이 `idk 0.3.1` → 아티팩트와 문서 버전이 일치한다는 뜻
 - `idk doctor` 의 `python / running` 이 3.10 이상 → 런처가 올바른 인터프리터를 골랐다는 뜻
 - `terminal / locale` 이 UTF-8 → 아니면 TUI 박스 문자가 깨진다
 - `tools / zellij` 가 ok

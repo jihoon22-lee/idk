@@ -9,6 +9,8 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-22
+
 ### Fixed
 - **`idk log` 가 개행 없이 끝난 조각을 이어붙일 때 중복 출력하던 문제** — 초기 tail 이
   미완 조각을 만나면(`seed_tail`) 그 내용을 메모리에도 남기고 파일에서도 다시 읽어 두
@@ -31,7 +33,6 @@
 - **`idk mirror` 표가 `미등록`/`오류` 행에서 어긋나던 문제** — 수동 f-string 패딩은
   문자 수로 맞추는데 이 라벨들은 터미널에서 문자 수보다 넓은 폭을 차지한다.
   `doctor`/`config check` 처럼 `rich.Table` 로 바꿨다.
-
 - **`idk mirror` 가 `.tgz`/`.tar.xz` sdist 를 못 알아보던 문제** — 인식하는 확장자에
   둘 다 추가했다(`.tar.gz`/`.zip`/`.tar.bz2` 는 기존대로).
 
@@ -229,13 +230,14 @@
 
 ```bash
 # PR 병합·CI green·최종 공개 승인 뒤에만 실행한다.
-git tag v0.2.1 && git push origin v0.2.1
+git tag v0.3.1 && git push origin v0.3.1
 ```
 
 워크플로가 태그와 `__version__` 이 일치하는지 확인하고, 빌드·스모크를 돌린 뒤
 `idk.pyz` 와 `idk.pyz.sha256` 을 릴리스에 붙이고 이 파일의 해당 섹션을 릴리스 노트로 쓴다.
 
-[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/jihoon22-lee/idk/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jihoon22-lee/idk/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/jihoon22-lee/idk/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jihoon22-lee/idk/releases/tag/v0.2.0
