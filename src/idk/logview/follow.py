@@ -84,20 +84,23 @@ class _TrackedFile:
     def seed_tail(self, count: int) -> list[Entry]:
         """존재하는 파일의 마지막 *count* 줄을 읽고 추적 위치를 잡는다."""
         try:
-            lines, self._pos, self._pending = tail_lines(self.path, count)
-        except (FileNotFoundError, OSError):
+            lines, self._pos, _pending = tail_lines(self.path, count)
+        except OSError:
             return []
         if not self._open():
             return []
         assert self._fd is not None
         self._fd.seek(self._pos)
+        # tail_lines() 의 오프셋은 미완 조각의 시작 위치를 가리킨다(다시 읽을 것을
+        # 전제로 한다). 그 조각 내용을 여기서도 _pending 에 채우면 다음 poll()이
+        # 같은 바이트를 fd 로 또 읽어 이어붙여 중복된다. 비워 둬야 poll() 이 그
+        # 바이트를 디스크에서 정상적으로 다시 읽어 들인다.
+        self._pending = b""
         return [Entry(self.source, line) for line in lines]
 
     def _open(self) -> bool:
         try:
             fd = self.path.open("rb")
-        except FileNotFoundError:
-            return False
         except OSError:
             return False
         self._fd = fd
@@ -128,7 +131,10 @@ class _TrackedFile:
                 self._close()
                 return entries
             if current != self._ident:
-                # 로테이션: 남은 미완 조각을 내보내고 새 파일을 처음부터 읽는다.
+                # 로테이션: 구 파일에 마지막 poll 이후 쓰였을 수 있는 바이트가 아직
+                # 남아 있을 수 있다. 새 파일로 넘어가기 전에 구 fd 를 EOF 까지 읽어
+                # 완결 라인을 모두 뽑아내고, 그래도 남는 미완 조각만 flush 한다.
+                entries.extend(self._read_available())
                 entries.extend(self._flush_pending())
                 self._close()
                 if not self._open():
@@ -142,6 +148,12 @@ class _TrackedFile:
                 self._pos = 0
                 self._pending = b""
 
+        entries.extend(self._read_available())
+        return entries
+
+    def _read_available(self) -> list[Entry]:
+        """열린 fd 에서 지금 읽을 수 있는 바이트를 EOF 까지 소진한다(블록하지 않음)."""
+        entries: list[Entry] = []
         while True:
             assert self._fd is not None
             try:

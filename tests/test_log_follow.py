@@ -135,3 +135,59 @@ def test_follower_multiple_sources_keep_order(tmp_path: Path):
 
     sources = [(e.source, e.line) for e in follower.initial_entries()]
     assert sources == [("a.log", "a1"), ("b.log", "b1")]
+
+
+def test_follower_completes_seeded_partial_line_without_duplication(tmp_path: Path):
+    # 초기 tail 이 개행 없이 끝난 조각을 만나면(seed_tail), 그 조각을 다음 poll 이
+    # 디스크에서 다시 읽어 완성해야 한다 — 메모리에 남겨 뒀다가 이어붙이면 중복된다.
+    log = tmp_path / "a.log"
+    _write(log, "line1\nPARTIAL")
+    follower = Follower([("a.log", log)], tail_lines=10)
+
+    assert [e.line for e in follower.initial_entries()] == ["line1"]
+
+    with log.open("a", encoding="utf-8") as f:
+        f.write("-done\n")
+
+    lines = [e.line for e in follower.poll()]
+    assert lines == ["PARTIAL-done"]
+
+
+def test_follower_drains_old_file_before_switching_on_rotation(tmp_path: Path):
+    # 로테이션 직전에 구 파일에 쓰인 완결 라인은 아직 fd 로 읽지 않은 상태일 수
+    # 있다. 새 파일로 넘어가기 전에 그 바이트까지 읽어야 손실이 없다.
+    log = tmp_path / "a.log"
+    _write(log, "old-1\n")
+    follower = Follower([("a.log", log)], tail_lines=5)
+    follower.initial_entries()
+
+    with log.open("a", encoding="utf-8") as f:
+        f.write("old-2-written-just-before-rotation\n")
+
+    rotated = tmp_path / "a.log.1"
+    os.replace(log, rotated)
+    _write(log, "new-1\n")
+
+    lines = [e.line for e in follower.poll()]
+    assert lines == ["old-2-written-just-before-rotation", "new-1"]
+
+
+def test_follower_zero_tail_starts_from_current_eof_without_duplication(tmp_path: Path):
+    # tail_lines=0 은 기존 내용을 전혀 내보내지 않고 "지금부터" 만 따라간다(설계상
+    # count=0 오프셋은 항상 현재 EOF). 그 뒤로 append 되는 내용은 정상적으로,
+    # 중복 없이 나와야 한다.
+    log = tmp_path / "a.log"
+    _write(log, "already-here\n")
+    follower = Follower([("a.log", log)], tail_lines=0)
+
+    assert follower.initial_entries() == []
+
+    with log.open("a", encoding="utf-8") as f:
+        f.write("PARTIAL")
+    assert follower.poll() == []  # 개행 없는 조각은 아직 보류
+
+    with log.open("a", encoding="utf-8") as f:
+        f.write("-done\n")
+
+    lines = [e.line for e in follower.poll()]
+    assert lines == ["PARTIAL-done"]
