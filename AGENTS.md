@@ -33,10 +33,13 @@ WSL Ubuntu 24.04 와 폐쇄망 RHEL 8.10(원격 X11 접속) 양쪽에서 동일�
 네이티브 확장 금지는 `scripts/build-pyz.sh` 의 순수성 검사로 기계적으로 강제된다.
 
 ## 작업 환경 주의
-- 이 워킹트리는 Windows 드라이브(`/mnt/e`)에 있어 **`core.filemode=false`** 다.
-  `chmod +x` 를 해도 git 이 기록하지 않는다. `scripts/` 에 실행 스크립트를 새로 추가하면
-  반드시 `git update-index --chmod=+x <파일>` 을 함께 실행할 것 — 빼먹으면 CI 와
-  신규 클론에서 `Permission denied` 로 깨진다.
+- Windows 드라이브(`/mnt/*`)의 워킹트리는 **`core.filemode=false`** 일 수 있고,
+  WSL 내부 ext4 워킹트리는 보통 **`core.filemode=true`** 다. 현재 값은
+  `git config --get core.filemode` 로 확인한다.
+- `scripts/` 에 실행 스크립트를 새로 추가하면 ext4에서는 `chmod +x <파일>` 로 기록하고,
+  Windows 드라이브에서 실행 비트 변경이 감지되지 않으면
+  `git update-index --chmod=+x <파일>` 을 사용한다 — 빼먹으면 CI 와 신규 클론에서
+  `Permission denied` 로 깨진다.
   (`scripts/launcher.sh` 는 예외: 실행되지 않고 build-pyz.sh 가 읽어 붙이는 텍스트라 644.)
 
 ## 문서 규약
