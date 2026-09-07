@@ -75,6 +75,15 @@ jobs:
           mkdir -p "$RUNNER_TEMP/idk-native-first"
           cp dist/idk-linux-x86_64 "$RUNNER_TEMP/idk-native-first/idk-linux-x86_64"
 
+      - name: Exact static candidate CLI, host and full menu regressions
+        env:
+          IDK_TEST_SHELL: /usr/bin/tcsh
+          IDK_TEST_LAUNCHER: ${{ github.workspace }}/dist/idk-linux-x86_64
+        run: |
+          cargo test --locked -p idk-workspace --test cli_projects --test cli_runs \
+            --test host_runtime --test host_git --test host_runs --test project_flow -- --nocapture
+          cargo test --locked -p idk-workspace --test ui_runs complete_menu_flow -- --nocapture
+
       - name: Independent build directory reproducibility
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/idk-native-second-target
