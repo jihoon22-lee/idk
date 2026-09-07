@@ -1127,3 +1127,66 @@ time.sleep(30)
     }
     stop(&mut client, &mut host);
 }
+
+#[test]
+fn explicitly_escaped_session_is_preserved_and_not_claimed_as_terminal_cleanup() {
+    let fixture = Fixture::new();
+    let project = fixture.project("escaped-session", &["echo READY\n"]);
+    fs::write(
+        fixture.root.join("escaped-session.py"),
+        r#"import os, signal, time
+if os.fork():
+    os._exit(0)
+os.setsid()
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+open('escaped.pid', 'w').write(str(os.getpid()))
+time.sleep(5)
+open('escaped-done', 'w').write('completed naturally')
+"#,
+    )
+    .unwrap();
+    let (mut host, mut client) = fixture.host();
+    let created = client
+        .start(
+            &project.id,
+            &project.terminals[0].id,
+            fixture.env.clone(),
+            24,
+            100,
+            false,
+        )
+        .unwrap();
+    let initialized = ready(&mut client, &created.session_id);
+    let attached = client.attach(&created.session_id, false).unwrap();
+    client
+        .input(
+            &created.session_id,
+            attached.input_epoch,
+            b"python3 escaped-session.py &\n",
+        )
+        .unwrap();
+    let escaped = fixture_pid(&fixture.root.join("escaped.pid"));
+    let escaped_start = process_start(escaped).unwrap();
+    assert_eq!(unsafe { libc::getsid(escaped as i32) }, escaped as i32);
+    assert_ne!(escaped, initialized.child_pid.unwrap());
+    client
+        .close(&created.session_id, attached.input_epoch, true)
+        .unwrap();
+    wait(&mut client, &created.session_id, |info| {
+        info.state == SessionState::Closed
+    });
+    assert_eq!(
+        process_start(escaped),
+        Some(escaped_start),
+        "an explicitly escaped session was signalled"
+    );
+    stop(&mut client, &mut host);
+    let deadline = Instant::now() + Duration::from_secs(6);
+    while !fixture.root.join("escaped-done").exists() {
+        assert!(
+            Instant::now() < deadline,
+            "escaped synthetic process did not finish naturally"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

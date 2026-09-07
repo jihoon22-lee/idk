@@ -956,8 +956,20 @@ impl Actor {
     }
 
     fn poll_child_inventory(&mut self) {
-        let Ok(report) = self.child_reports.try_recv() else {
-            return;
+        let report = match self.child_reports.try_recv() {
+            Ok(report) => report,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.scan_inflight = false;
+                for slot in self
+                    .slots
+                    .values_mut()
+                    .filter(|slot| slot.info.exit.is_some() && slot.runtime.is_some())
+                {
+                    cleanup_notice(slot, "inventory worker unavailable; exit is not confirmed");
+                }
+                return;
+            }
         };
         self.scan_inflight = false;
         let host_pid = std::process::id() as libc::pid_t;
@@ -1138,7 +1150,6 @@ impl Actor {
                         if cutoff {
                             if let Err(error) = runtime.terminal.end_collection() {
                                 slot.info.error = Some(safe_error(error));
-                                continue;
                             }
                             if slot
                                 .info
@@ -1160,7 +1171,12 @@ impl Actor {
                     }
                     // Final-screen collection and descendant cleanup are separate:
                     // dropping PTY endpoints cannot release the leader SID anchor.
-                    if slot.cleanup.done && slot.frozen.is_some() {
+                    if slot.cleanup.done
+                        && (slot.frozen.is_some()
+                            || slot
+                                .exited_at
+                                .is_some_and(|time| time.elapsed() >= Duration::from_secs(2)))
+                    {
                         match runtime.terminal.reap_exit() {
                             Ok(exit) => {
                                 slot.info.exit = Some(exit);

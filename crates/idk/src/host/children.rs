@@ -101,7 +101,12 @@ fn inventory(report: &mut Report) -> Result<()> {
             .and_then(|file| file.take(8193).read_to_end(&mut bytes))
         {
             Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    || error.raw_os_error() == Some(libc::ESRCH) =>
+            {
+                continue
+            }
             Err(error) => return Err(error).context("read process session inventory"),
         }
         ensure!(
