@@ -7,66 +7,74 @@
 
 ## 검증
 
-### v0.4 네이티브 기반
+제품과 actual native gate는 [native.yml](../.github/workflows/native.yml), 남아 있는 Python
+빌드/릴리스 도구는 [ci.yml](../.github/workflows/ci.yml)로 검사한다. Python 제품의 mypy·pytest
+커버리지·pyz/Zellij gate는 해당 제품 경로와 함께 종료했으며 native 검사 PASS로 위장하지 않는다.
 
-실제 csh/tcsh를 테스트 환경에 준비하고 `IDK_TEST_SHELL`에 절대 경로를 지정한다.
-고정 Rust toolchain은 `rust-toolchain.toml`, 의존성은 `Cargo.lock`을 따른다.
+| 변경 | 필요한 검증 |
+|---|---|
+| 문서·지침 | diff 공백, 링크·실제 CLI/규약 일치; 이 변경만으로 전체 실행 검사를 반복하지 않음 |
+| native 동작 | 관련 회귀·실패 사례, fmt/Clippy/workspace 검사와 연결된 실제 csh/PTY/Git/Run 경로 |
+| 셸·host·Run 수명 | 실제 tcsh와 BSD csh, 재접속·취소·소유 자손 정리·장애 복구·source gate |
+| Python 빌드/릴리스 도구 | Ruff와 stdlib unittest를 Python 3.10/3.14에서 실행 |
+| 의존성·패키지·배포 | 전체 notice, 정적 ELF, 독립 빌드 재현성, 동일 후보 smoke/UBI/설치·실패 복구 |
+
+### Native 제품
+
+고정 Rust toolchain은 `rust-toolchain.toml`, 의존성은 `Cargo.lock`을 따른다. 실제 tcsh와
+traditional BSD csh, Git, compiler/Qt·CMake/make/Python fixture 도구를 검증 환경에 준비한다.
+이들은 제품의 기본 반입 의존성이 아니라 해당 실제 통합 검증에 필요한 개발 도구다.
 
 ```bash
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked --workspace
-cargo test --locked --test terminal_core -- --ignored
+RUST_TEST_THREADS=4 cargo test --locked --workspace
+IDK_TEST_SHELL=/usr/bin/tcsh cargo test --locked -p idk-workspace --test terminal_core -- --ignored
+```
+
+host fixture는 별도 호스트와 여러 실제 PTY를 생성하므로 병렬 테스트 수를 4로 제한한다.
+`IDK_TEST_SHELL`과 필요한 경우 `IDK_TEST_LAUNCHER`에 실제 실행 파일의 절대 경로를 사용한다.
+BSD csh는 설치된 실제 경로로 같은 검사를 수행한다. 필수 actual 도구가 없거나 검사가 ignored인
+경우 실행했다고 표시하지 않는다. native CI는 software SHA-256 경로 등 별도 회귀도 수행하며
+정확한 명령 집합은 workflow를 따른다.
+
+### 빌드·릴리스 도구
+
+`pyproject.toml`은 Ruff 설정만 제공한다. Python 제품 package, runtime 의존성, `uv.lock`은 없다.
+남은 Python 도구는 stdlib만 사용하며 두 버전의 실제 interpreter에서 fixture를 실행한다.
+
+```bash
+uvx ruff==0.16.6 check .
+uvx ruff==0.16.6 format --check .
+for tooling_python in 3.10 3.14; do
+  uv run --no-project --python "$tooling_python" python tests/test_native_packaging.py
+  uv run --no-project --python "$tooling_python" python tests/test_native_release.py
+done
+actionlint .github/workflows/ci.yml .github/workflows/native.yml .github/workflows/release.yml
+```
+
+`actionlint`는 설치된 ShellCheck로 workflow의 shell 구간도 검사한다. 신규 실행 스크립트의
+실행 비트와 명령 인자 quoting을 확인한다. 릴리스 fixture는 오프라인이며 태그·게시·후보 실행을
+실제로 수행하지 않는다.
+
+### 동일 후보 패키지
+
+```bash
 ./scripts/build-native.sh
 ./scripts/smoke-native.sh
+./scripts/build-native-bundle.sh
 ```
 
-실제 셸 테스트의 환경 미준비는 실패이며 ignored native 검사는 두 번째 test 명령으로 명시 실행한다.
-정적 바이너리는 Ubuntu 및 UBI 8.10의 격리된 rootless/network-none 환경에서도 검사한다.
-이 결과가 실제 폐쇄망 정책이나 사용자 startup 파일을 검증한 것은 아니다.
+빌드에는 Rust/Python/binutils가 필요하지만 제품에는 필요하지 않다. 정적 executable, manifest,
+checksum, 전체 license inventory/notice를 같은 빌드 입력과 연결한다. Native CI는 독립 target
+디렉터리의 두 빌드 bytes를 비교하고 같은 후보를 UBI 8.10/glibc 2.28 nonroot/network-none,
+실제 UID 분리, 설치·noexec/권한/read-only/disk-full 실패와 live host 보존 경로에서 실행한다.
+`tests/containers/ubi8.Dockerfile`, `scripts/test-native-install.sh`, `scripts/test-native-peer.sh`,
+`test-native-storage.py`가 패키지·UID·파일시스템 실패 검증에 사용된다. 검증한 후보가 바뀌면 이전 결과를 재사용하지 않는다.
 
-### 기존 Python 구현
-
-아래는 기존 Python 구현의 검사다. CI의 실행 정본은
-[ci.yml](../.github/workflows/ci.yml), 커버리지 기준은 [pyproject.toml](../pyproject.toml)이다.
-
-| 변경 | 로컬 검증 | PR에서 확인할 근거 |
-|---|---|---|
-| 문서·지침만 | diff 공백, 링크·경로, 규약 일관성; 스킬이면 형식·대표 요청 검토 | 변경 내용과 실제 검토 결과. 코드 테스트는 이 변경만으로 재실행하지 않음 |
-| Python 동작·타입 | 관련 회귀 테스트 후 아래 기본 검사 | Python 버전별 테스트·타입·lint·커버리지 CI |
-| 의존성·빌드·런처·CLI 배선 | 기본 검사와 build/smoke | 패키지 smoke·두 빌드의 SHA-256 일치 |
-| Zellij 연동 | 기본 검사와 실제 바이너리 대상 통합 테스트 | integration job. skip을 통합 PASS로 보지 않음 |
-| 신규 v0.4 코드 | B01에서 선택 스택에 맞는 검사·실제 csh/PTY/Git harness·후보 bundle smoke를 정의 | 신규 gate와 해당 R/S 증거. 기존 Python PASS가 대체하지 않음 |
-
-기존 Python 기본 검사:
-
-```bash
-uv run --python 3.10 --group dev pytest -q
-uv run --python 3.10 --group dev mypy
-uvx ruff check . && uvx ruff format --check .
-```
-
-커버리지·버전별 검사(CI 필수, 로컬은 관련 변경이나 실패 재현 시):
-
-```bash
-uv run --python 3.10 --group dev pytest --cov --cov-report=term-missing
-uv run --python 3.12 --group dev pytest
-uv run --python 3.14 --group dev pytest
-```
-
-커버리지 하한은 현재 85%다. 위 커버리지 실행은 동일 소스의 3.10 기본 pytest를 겸한다.
-관련 테스트 후 완료 검증에 커버리지 실행을 선택했다면 기본 pytest를 다시 반복할 필요는 없다.
-
-패키지 검사:
-
-```bash
-./scripts/build-pyz.sh && ./scripts/smoke.sh
-```
-
-재현성은 CI가 같은 환경에서 두 번 빌드한 SHA-256으로 확인한다. 빌드 재현성 변경 시 로컬에서도
-같은 검사를 수행한다. smoke는 Python 3.9/3.10 런처 조건을 사용한다. Zellij 통합 검사는 검증된
-vendor 바이너리를 PATH에 준비하고 `uv run --python 3.10 --group dev pytest -m zellij`로 실행한다.
-환경 미준비·실패·skip을 기록하고, 검사를 없애거나 항상 성공으로 바꾸어 통과시키지 않는다.
+main push에서만 exact-main provenance가 부여된다. 공개는 [릴리스 프로토콜](native-release.md)에
+따라 그 성공한 CI artifact를 재빌드 없이 게시하고 다시 다운로드해 비교한다. 대상 RHEL/폐쇄망
+사용자 환경과 정책은 아래 별도 수용 층에 미실행으로 남긴다.
 
 ## v0.4 증거와 완료 판단
 

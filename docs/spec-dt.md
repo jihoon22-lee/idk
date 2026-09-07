@@ -1,9 +1,12 @@
 # Phase 2 명세 — `idk dt`
 
+> **v0.3 이하 Python 제품의 역사적 명세다.** 현재 명령은 [사용 안내](GUIDE.md)를 따른다.
+> 당시 구현 규약은 [v0.3.1 구조 문서](https://github.com/jihoon22-lee/idk/blob/v0.3.1/docs/ARCHITECTURE.md)에 보존되어 있다.
+
 개발 도구 모음. 폐쇄망에서 jsonformatter·jwt.io 같은 웹 도구를 열 수 없다는 것이 존재 이유다.
 
 - 배경: [plan.md](plan.md)
-- 구현 규약: [ARCHITECTURE.md](ARCHITECTURE.md)
+- 구현 규약: [v0.3.1 ARCHITECTURE.md](https://github.com/jihoon22-lee/idk/blob/v0.3.1/docs/ARCHITECTURE.md)
 
 > `idk dt`의 Phase 2 구현과 TUI는 완료되어 v0.2.0 동작 계약에 포함되어 있다.
 > 이 문서는 동작 계약을 설명하는 명세다.

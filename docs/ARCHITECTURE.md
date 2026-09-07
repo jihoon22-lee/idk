@@ -1,365 +1,87 @@
-# 구조
+# idk v0.4 구조
 
-현재 `idk`의 **기존 Python 구현이 실제로 어떻게 만들어져 있는지**를 설명한다.
-왜 이런 선택을 했는지(설계 근거)는 [plan.md](plan.md), 쓰는 법은 [GUIDE.md](GUIDE.md).
+제품은 `crates/idk/`의 Rust CLI/TUI와 사용자별 백그라운드 host로 구성한다. 기본 실행에
+Python, Zellij, GUI 서버나 사외 서비스가 필요하지 않다. 선택 근거와 측정 예산은
+[ADR 0001](adr/0001-native-terminal-foundation.md), 검증은 [개발 안내](development.md)를 따른다.
 
-기존 CLI 변경은 [§6 새 서브커맨드 추가](#6-새-서브커맨드-추가)와 [AGENTS.md](../AGENTS.md)를 따른다.
-v0.4 구조는 [WP01 #40](https://github.com/jihoon22-lee/idk/issues/40)의 검증·ADR로 정한다.
-이 문서의 Python/pyz/Zellij 선택을 신규 구현의 필수 조건으로 적용하지 않는다.
+## 실행 경계
 
-> Phase 0~3과 v0.2.0 보안·안정성·build MVP 작업이 통합되어 있다. `dist/idk.pyz`는
-> 빌드 스크립트가 만드는 하나의 필수 핵심 실행 아티팩트다.
-
----
-
-## 1. 전체 그림
-
-```
-[개발 머신 WSL]                    [빌드]                      [폐쇄망]
- src/idk/**.py  ──────────────►  build-pyz.sh  ──►  idk.pyz  ──►  ~/.local/bin/idk
- pyproject.toml                    │                (2.7MB)         │
-                                   │                                ▼
-                                   ├─ 1. uv.lock 고정 export + 해시 설치
-                                   ├─ 2. 잠긴 build group으로 wheel 생성
-                                   ├─ 3. 순수성 검사 + 빌드 흔적 정규화
-                                   ├─ 4. shiv --reproducible → zipapp
-                                   └─ 5. sh 런처 부착 → dist/idk.pyz 원자 게시
+```mermaid
+flowchart LR
+    UI[CLI / TUI client] -->|같은 사용자·protocol·binary 확인| Host[사용자별 host]
+    Host --> Terminal[터미널 PTY / 실제 csh]
+    Host --> Git[Git worker / 전용 작업 PTY]
+    Host --> Run[Run worker / 전용 task PTY]
+    Run --> Log[별도 bounded raw log]
+    Log --> Problem[Problems / 위치 검토]
+    Problem --> Editor[명시 설정 편집기 / 별도 PTY]
+    Git <--> Gate[SourceGate]
+    Run <--> Gate
 ```
 
-핵심 성질 셋:
+UI의 수명과 host/셸의 수명은 다르다. client를 닫아도 host가 실제 셸과 출력 수집을 유지하며,
+재접속은 기존 runtime identity와 화면을 사용한다. 같은 csh/tcsh에서 source한 상태를 계속
+사용하고, 접속 때문에 초기화를 반복하지 않는다. 종료한 터미널은 명시적으로 다시 열 때만
+새 셸로 초기화한다.
 
-- **핵심 파일 1개.** 의존성이 전부 들어 있어 내부 패키지 미러 상태와 무관하다. `ws`/`run --pane`의
-  zellij와 `copy_on_select`의 xclip은 별도 선택 vendor 입력이다.
-- **인터프리터를 스스로 찾는다.** `.csh` 를 source 하지 않은 컨텍스트에서도 동작한다.
-- **재현 가능하다.** committed source와 `uv.lock`은 필요한 입력이지만, 같은 Python 대상과
-  uv/shiv/hatchling 등 build toolchain, native staging 조건도 맞아야 같은 바이트를 기대할 수
-  있다. CI는 같은 job에서 새 staging으로 두 번 빌드한 SHA-256을 비교하고, smoke는 ZIP 권한과
-  무결성을 검사한다.
+프로젝트는 Git 대상과 초기화 정의를 소유한다. 터미널은 프로젝트 소속을 유지하면서 프로젝트
+밖의 테스트 cwd를 가질 수 있다. 현재 terminal cwd가 바뀌었다고 Git 작업 대상을 바꾸지 않는다.
 
----
+## 주요 모듈
 
-## 2. 핵심 단일 파일 배포 — sh/zip 폴리글롯
-
-핵심 아티팩트 `idk.pyz` 는 셸 스크립트이면서 동시에 zip 아카이브다.
-
-```
-┌─────────────────────────────────────┐  offset 0
-│ #!/bin/sh                           │
-│ # scripts/launcher.sh 의 내용       │  ← 1205 bytes. 셸이 읽는 부분
-│ for c in "$IDK_PYTHON" python3.14 …│
-│ exit 1                              │
-├─────────────────────────────────────┤
-│ PK\x03\x04 …                        │  ← shiv 가 만든 zipapp
-│   __main__.py        (shiv 부트스트랩)│
-│   site-packages/     (의존성 전부)   │
-│   environment.json   (entry_point)  │
-│ … 中央 디렉터리 · EOCD              │  ← zip 은 여기서부터 역방향으로 읽힌다
-└─────────────────────────────────────┘  EOF
-```
-
-**왜 성립하는가.** zip 은 파일 끝의 End-Of-Central-Directory 레코드를 먼저 찾고, 거기 적힌
-오프셋으로 앞쪽을 되짚는다. 앞에 임의의 바이트가 있으면 CPython 의 `zipimport` 가 그 차이를
-계산해 보정한다 — shebang 한 줄이 붙는 것과 정확히 같은 원리이고, 줄 수만 늘어난 것이다.
-
-따라서 두 실행 경로가 모두 유효하다.
-
-| 실행 | 무슨 일이 일어나는가 |
+| 코드 | 책임 |
 |---|---|
-| `./idk.pyz` | 커널이 `#!/bin/sh` 를 보고 sh 실행 → 런처가 python 을 찾아 `exec "$p" "$0" "$@"` |
-| `python3.10 idk.pyz` | 셸 부분은 그냥 무시되고 zipimport 가 zipapp 으로 연다 |
-
-`exec "$p" "$0" "$@"` 의 `$0` 이 자기 자신의 경로이므로 **파일을 두 번 읽을 뿐 복사는 없다.**
-
-> 이 방식은 Phase 0 에서 가장 먼저 검증했다. 실패했다면 `idk`(sh) + `idk.pyz` 2파일로
-> 나누는 것이 대안이었고, 설계는 그대로 두고 포장만 바꾸면 됐다.
-
-### 런처 ([scripts/launcher.sh](../scripts/launcher.sh))
-
-```sh
-for c in "$IDK_PYTHON" python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
-    [ -n "$c" ] || continue
-    p=$(command -v "$c" 2>/dev/null) || continue
-    "$p" -c 'import sys; sys.exit(0 if sys.version_info>=(3,10) else 1)' 2>/dev/null \
-        && exec "$p" "$0" "$@"
-done
-```
-
-- **`/bin/sh` 고정** — 로그인 셸이 tcsh 여도 무관하다.
-- **버전을 직접 물어본다** — 이름만 보고 믿지 않는다. `python3.10` 이라는 이름의 심볼릭 링크가
-  다른 버전을 가리키는 경우가 실제로 있다.
-- **`IDK_PYTHON` 이 탈출구** — 지정하면 탐색을 건너뛴다. 기동도 빨라진다.
-- 하나도 못 찾으면 **조용히 실패하지 않고** 안내 후 exit 1.
-
-> **불변식.** 이 후보 목록은 [`src/idk/env.py`](../src/idk/env.py) 의 `PYTHON_CANDIDATES` 와
-> 순서까지 같아야 한다. 어긋나면 "`doctor` 는 찾았다는데 런처는 못 찾는" 상태가 되어 진단이
-> 거짓말을 한다. [`tests/test_launcher.py`](../tests/test_launcher.py) 가 두 목록의 일치를 강제한다.
-
----
-
-## 3. 빌드 파이프라인 ([scripts/build-pyz.sh](../scripts/build-pyz.sh))
-
-### 3.1 `uv.lock`을 기준으로 3.10 대상 설치
-
-`uv.lock`이 산출물에 들어가는 runtime 의존성과 빌드 도구 버전의 **정본**이다.
-`pyproject.toml`은 직접 의존성과 `build` 그룹을 선언하지만, 산출물 빌드에서 새로 해석하지
-않는다.
-
-```bash
-uv export --frozen --no-dev --no-emit-project \
-  --format requirements.txt --output-file "$BUILD/runtime.lock"
-uv pip install --quiet --python 3.10 --target "$SITE" \
-  --require-hashes --requirements "$BUILD/runtime.lock"
-uv run --frozen --only-group build -- \
-  uv build --wheel --no-build-isolation --out-dir "$BUILD/wheels"
-uv pip install --quiet --python 3.10 --target "$SITE" \
-  --no-deps "$BUILD/wheels"/idk-*.whl
-```
-
-`--frozen`은 lockfile을 변경하지 않고, runtime 설치의 `--require-hashes`는 export된 각
-wheel의 해시를 확인한다. 개발은 더 최신 파이썬에서 하더라도 **산출물은 3.10 기준**이어야
-3.11+를 요구하는 배포판이 딸려 들어오지 않는다. wheel과 shiv 모두 `uv run --frozen
---only-group build`로 잠긴 build group에서 실행한다.
-
-### 3.2 순수성 검사 — 규약을 기계적으로 강제
-
-셋 중 하나라도 걸리면 빌드가 실패한다.
-
-| 검사 | 왜 |
-|---|---|
-| `*.so` / `*.pyd` / `*.dylib` 존재 | 네이티브 확장은 glibc·아키텍처에 묶인다. 폐쇄망 glibc 2.28 에서 깨진다 |
-| WHEEL 의 `Tag:` 가 `-none-any` 로 안 끝남 | 플랫폼 종속 휠 |
-| `certifi/` 디렉터리 존재 | 번들 CA 를 쓰면 내부 TLS 인터셉션 환경에서 접속이 깨진다 |
-
-### 3.3 빌드 흔적 제거 — 재현성
-
-동일한 source·`uv.lock`·Python 대상·build toolchain·native staging인데도 정규화하지 않으면
-빌드할 때마다 체크섬이 달라질 수 있다. uv와 wheel 빌드가 남기는 경로·시각·권한 흔적을 zip에
-넣지 않는다.
-
-| 흔적 | 무엇이 들어 있었나 |
-|---|---|
-| `site-packages/.lock` | uv pip의 설치 잠금 파일. zip entry에 쓰기 권한이 실릴 수 있다 |
-| `site-packages/bin/*` | 콘솔 스크립트 래퍼의 shebang에 빌드에 쓴 인터프리터 절대경로 |
-| `*.dist-info/direct_url.json` | 빌드한 체크아웃의 절대경로 |
-| `*.dist-info/uv_cache.json` | 빌드 타임스탬프 + 디렉터리 inode |
-| `*.dist-info/uv_build.json` | wheel 빌드 메타데이터 |
-| `*.dist-info/RECORD` | 위 파일들의 해시 (파일을 지워도 RECORD 에 남는다) |
-
-`bin/` 을 지워도 되는 이유: shiv 는 `environment.json` 의 `entry_point`
-(`idk.__main__:main`)로 바로 진입하고 그 디렉터리를 쓰지 않는다.
-
-### 3.4 shiv → 프리앰블 부착
-
-```bash
-uv run --frozen --only-group build -- shiv \
-  --site-packages "$SITE" --console-script idk --compressed --reproducible -o "$RAW"
-```
-
-pip 인자를 **하나도** 넘기지 않아야 shiv 가 pip 을 건너뛴다. `--no-deps` 같은 걸 붙이면
-그게 pip 인자로 전달돼 "requirement 가 없다"며 실패한다.
-
-그 다음 shiv 가 붙인 shebang 한 줄을 떼고 `launcher.sh` 를 앞에 붙인다.
-zip 시그니처(`PK\x03\x04`)와 프리앰블의 끝 개행을 확인한 뒤에만 쓴다.
-
-### 3.5 native staging·권한·재현성 게이트
-
-checkout이 `/mnt/*`에 있어도 `build-pyz.sh`는 project root의 `build/`를 staging으로 쓰지
-않는다. `BUILD="$(mktemp -d -p "${TMPDIR:-/tmp}" idk-build.XXXXXX)"`로 기본 Linux native
-임시 디렉터리(`/tmp`, WSL에서는 ext4 rootfs)에 site-packages, wheel, build 도구 환경과 중간 zip을 만들고, 끝에서
-`dist/idk.pyz.tmp`를 거쳐 `dist/idk.pyz`로 원자적으로 교체한다. 따라서 drvfs의 `0777`
-권한이 ZIP entry로 전파되지 않는다. `TMPDIR`를 지정한다면 Linux native 경로를 사용해야
-한다.
-
-`scripts/smoke.sh`는 모든 ZIP entry의 Unix mode를 확인해 group/other write bit(`0o022`)가
-하나라도 있으면 실패시키고, `zipfile.testzip()`으로 내용 무결성도 확인한다. CI의 artifact
-job은 매번 새 staging을 만들어 두 번 빌드한 `dist/idk.pyz`의 SHA-256을 비교하고, 다르면
-upload 전에 실패한다. 이 세 게이트가 권한·재현성·무결성을 함께 확인한다.
-
-### 3.6 vendor와 Actions 공급망 경계
-
-`scripts/vendor-checksums.txt`는 반입용 vendor 입력을 저장소에 커밋된 두 SHA-256으로
-고정한다.
-
-| 입력 | 승인 범위 |
-|---|---|
-| zellij | 0.44.3 `no-web`, `x86_64-unknown-linux-musl` tarball에서 추출한 바이너리의 SHA-256 |
-| xclip | 0.13 source archive 자체의 SHA-256 |
-
-`fetch-vendor.sh`는 manifest의 형식·중복·허용된 이름을 확인한 뒤 두 checksum을 대조하고,
-zellij가 정적 링크인지 검사한다. `full` 등 다른 zellij flavor는 다운로드 전에 거부한다.
-즉, 현재 지원 경계는 내장 웹서버가 없는 검토된 `no-web` 빌드이며 flavor를 늘리려면 새
-manifest 승인이 필요하다.
-
-`fetch-vendor.sh` 실행은 두 선택 구성요소의 allowlist 반입 세트를 3개 파일로
-지정한다:
-zellij 아카이브, xclip 아카이브, 그리고 두 아카이브의 무결성을 확인하는
-`vendor/SHA256SUMS`. 여기에 필수 핵심 `dist/idk.pyz`를 더한 전체 준비 bundle은 4개 파일이다.
-zellij 아카이브는 `idk ws`와 `idk run --pane`에, xclip 아카이브는 `copy_on_select`에만
-필요하며, `SHA256SUMS`는 어떤 vendor 아카이브와도 분리해 반입하지 않는다. 재사용한
-`vendor/`에 다른 `.tar.gz`가 남아 있으면 삭제하지 않고 allowlist와 `SHA256SUMS`에서 제외한다.
-
-GitHub Actions의 `checkout`, `setup-uv`, `upload-artifact`는 workflow에 immutable commit
-SHA로 고정하고, 사람이 읽는 upstream 버전은 주석으로만 병기한다. 버전 갱신은 별도 검토에서
-commit과 주석을 함께 바꾸는 방식이다.
-
----
-
-## 4. 런타임
-
-첫 실행 때 shiv 부트스트랩이 zip 안의 `site-packages` 를 `~/.shiv/idk_<hash>/` 로 풀고,
-`sys.path` 에 얹은 뒤 `idk.__main__:main` 을 호출한다. 두 번째 실행부터는 압축 해제가 없다.
-
-- 홈이 NFS 라 느리면 `SHIV_ROOT` 로 로컬 디스크로 옮긴다.
-- `<hash>` 가 내용 기반이라 **버전을 올려도 이전 캐시와 충돌하지 않는다.**
-
----
-
-## 5. 패키지 구조
-
-```
-src/idk/
-├─ __init__.py     __version__, MIN_PYTHON — 버전의 단일 출처
-├─ __main__.py     typer 앱 루트. 모든 서브커맨드를 여기 등록한다
-├─ config.py       ~/.config/idk/*.toml 로드·저장 (XDG, tomli)
-├─ env.py          환경 판별 — os-release, glibc, WSL, python 후보 탐색
-├─ httpc.py        stdlib urllib HTTP 클라이언트 (netrc, 시스템 CA)
-├─ doctor.py       진단 — Check 목록을 모아 표/JSON/brief 로 렌더
-├─ cli_config.py   `idk config check` CLI 배선 (검사 registry, JSON/표 출력)
-├─ cli_build.py    `idk build` CLI 배선 (입력 선택, 필터, exit code, plain/JSON)
-├─ cli_log.py      `idk log` CLI 배선 (glob 확장, prefix, follow 루프)
-├─ cli_mirror.py   `idk mirror` CLI 배선 (저장소 선택, 표/JSON, exit code)
-├─ cli_dt.py       `idk dt` CLI 배선 (typer). 공통 I/O 규약 담당
-├─ dt_tui.py       `idk dt tui` — 입력/출력 2패널 (textual)
-├─ logview/        `idk log` core — tail -F 추적과 정규식 필터 (**stdlib 만**)
-│  └─ follow.py  filter.py
-├─ mirror/         mirror.toml 모델·인증 해석 + pypi simple index 클라이언트
-│  └─ model.py  index.py
-├─ ws/             `idk ws` — workspace/tab/pane 모델·검증, KDL 렌더러, CLI, TUI
-│  ├─ model.py  layout.py  cli.py  tui.py
-│  └─ backends/zellij.py   zellij 호출의 유일한 지점 (AGENTS.md 규약)
-├─ snip/           `idk run` — snippets.toml 모델·치환·CLI·TUI
-│  └─ model.py  render.py  cli.py  tui.py
-├─ build/          빌드 로그 진단 core — streaming parser와 plain/JSON renderer
-│  └─ model.py  parsers.py  render.py
-└─ dt/             `idk dt` 변환 로직 — **stdlib 만 (의존성 0)**
-   └─ jsonfmt/encoding/timestamp/case/security/regexq/textdiff/jwt
-```
-
-| 모듈 | 책임 | 주의할 점 |
-|---|---|---|
-| `env.py` | 두 환경의 **차이를 만드는 값**만 읽는다 (glibc, 셸, locale, python 후보) | `PYTHON_CANDIDATES` 는 `launcher.sh` 와 동기화 |
-| `httpc.py` | HTTP 전부. **4xx/5xx 도 예외 없이 `Response` 로 반환** | `Authorization`은 동일 origin redirect에서만 유지하고, origin 변경 시 제거한다. HTTPS→HTTP downgrade는 `HttpError`로 거부한다 |
-| `config.py` | TOML 로드/저장과 엄격한 타입 helper. 없는 파일은 빈 dict | `config_directory()`와 `config_file()`이 디렉터리·일반 파일 여부를 공통 분류한다. 없는 경로만 missing이고, 디렉터리/FIFO/끊긴 심볼릭 링크/접근 오류는 `ConfigError`다. 로드는 nonblocking open 뒤 `fstat`으로 regular file을 재확인한다. 저장은 임시파일 → `os.replace` 로 원자적 |
-| `doctor.py` | `collect()` 가 `Check` 목록을 만들고 렌더러 셋이 소비 | 진단 도구라 기본 exit 0. `--strict` 일 때만 fail → 1 |
-| `cli_config.py` | `config check`의 고정된 설정 validator registry와 JSON/표 출력 | JSON 경로는 Rich를 import하지 않으며, 실제로 없는 파일만 `skip`으로 분류한다. cwd 문제는 별도 `warn` 행으로 내고 `--strict`에서만 exit 1로 올린다 |
-| `mirror/model.py` | `mirror.toml`의 미러 설정 테이블(`artifactory`)/base_url/auth/token_env 검증과 요청 인증 값 해석. `[[repo]]` 배열로 저장소를 정의한다(이름 중복 거부, 여러 저장소면 `default=true` 필수, eco는 pypi만) | `base_url`은 printable ASCII HTTP(S) URL이며 공백·userinfo·잘못된 percent escape가 없는 유효한 hostname/port만 허용한다. token_env가 있으면 유효한 bearer 값이 필수다. 토큰·거부된 URL은 모델·출력에 저장하지 않는다 |
-| `mirror/index.py` | pypi simple index(PEP 503) 클라이언트 — 이름 정규화, 앵커 파일명 파싱, 버전 추출·정렬 | 404(미등록)는 빈 목록으로, 그 외 non-2xx는 status를 보존한 `HttpError`로 올린다. 버전 정렬은 숫자 덩어리 수 비교(2.10 > 2.9)까지이고 PEP 440 프리릴리스 순서는 보장하지 않는다. `repo.base_url` override 가 메인 미러와 다른 origin 이면 token_env bearer 를 보내지 않는다(`_auth_for_repo`) |
-| `logview/follow.py` | tail -F 시맨틱 추적 — 폴링으로 로테이션(inode)/truncate 감지, 재오픈 | 완결 라인만 내보내고 미완 조각은 보류한다(손실 없음). `poll()`은 블록하지 않는다 — 대기 루프는 `cli_log.py`가 담당 |
-| `logview/filter.py` | include/exclude 정규식 컴파일·판정 | exclude가 include보다 우선한다. 잘못된 정규식은 `FilterError`로 exit 2 |
-| `ws/layout.py` | 모델 → zellij KDL 순수 함수 | 첫 탭에 `tab-bar`/`status-bar` plugin 을 감싼다 (키힌트 바) |
-| `ws/cli.py`·`ws/tui.py` | 세션 lifecycle과 TUI 조작 | running만 attach한다. 정의된 EXITED는 purge 후 workspace 정의로 재생성하고, orphan EXITED는 자동 제거하지 않는다. `k`/`p`는 확인 modal(Enter/y 확인, Esc/n 취소) 뒤에만 backend를 호출한다 |
-| `ws/backends/zellij.py` | zellij 프로세스 호출 전부 | 이 파일 밖에서 zellij 를 부르지 않는다. `list-sessions`의 정확한 세션 없음 문구와 purge의 확인된 대상 없음만 멱등 성공으로 허용하고, 결과를 캡처하는 호출의 나머지 nonzero는 명령 인자·exit code와, 캡처된 stdout/stderr가 있을 때만 그 진단을 함께 `ZellijError`로 올린다 |
-| `snip/model.py`·`snip/render.py` | `snippets.toml` 검증·placeholder 치환 | non-raw placeholder를 기존 single/double quote 안에서 거부한다. raw는 신뢰된 고정 셸 조각 전용이며, `shlex.quote()`의 경계는 한 번의 local shell이다 |
-| `dt/` | 변환 순수 함수와 `hash_stream` 대용량 스트림 해시 | **typer/rich/textual import 금지** — AST 테스트로 강제. Base64는 ASCII whitespace만 허용하고 모드별 알파벳을 엄격히 검증한다(표준은 영숫자와 `+/`, URL-safe는 영숫자와 `-_`) |
-| `dt_tui.py` | 대화형 도구 TUI | dt 로직은 `dt/` 를 호출만 한다 |
-
-### Build core
-
-`build/model.py`, `build/parsers.py`, and `build/render.py` form the internal build-diagnostic
-core. The parser consumes logs one line at a time; the renderer emits plain text or a
-JSON-ready payload without importing Typer, Rich, or Textual. Fixtures are synthetic by
-design because closed-network logs cannot be exported. `cli_build.py` is the Typer-only root
-adapter: it selects exactly one file/stdin source, passes the source iterator directly to the
-parser, applies the output severity filter, and computes optional exit status from the complete
-result. The MVP intentionally does not execute a build command or provide TUI/source/editor/
-clipboard integrations.
-
-### 버전은 한 곳에만
-
-`src/idk/__init__.py` 의 `__version__` 이 유일한 출처다.
-`pyproject.toml` 은 `dynamic = ["version"]` 으로 여기서 읽고, 릴리스 워크플로가 태그와 대조한다.
-
-### TLS 디버깅 함정
-
-`ctx.get_ca_certs()` 가 빈 리스트라고 해서 CA 가 없는 게 아니다. CA 가 capath(해시 디렉터리)로만
-제공되면 OpenSSL 이 지연 로딩해서, 핸드셰이크가 멀쩡히 되는데도 빈 리스트가 나온다.
-실제 신뢰 경로는 `ssl.get_default_verify_paths()` 로 확인할 것.
-
-### HTTP redirect 인증 경계
-
-`httpc.request()`는 고정된 `SafeRedirectHandler`와 시스템 CA 컨텍스트를 사용하는 opener를
-만든다. origin은 소문자 scheme·호스트와 유효 포트(HTTP 80, HTTPS 443 기본값 포함)로
-비교한다. 같은 origin이면 `auth` tuple, `netrc`, 호출자가 준 `Authorization`을 유지하지만,
-하나라도 다르면 새 요청에서 헤더를 제거한다. HTTPS에서 HTTP로 내려가는 redirect는 origin
-비교보다 먼저 거부한다. 최종 응답의 4xx/5xx는 기존 계약대로 `Response`로 반환한다.
-
----
-
-## 6. 새 서브커맨드 추가
-
-Phase 1~5 의 앱들은 모두 이 절차를 따른다.
-
-1. **패키지를 만든다** — `src/idk/<name>/`. 외부 프로세스 호출은 한 모듈에 격리한다
-   (예: zellij 호출은 `ws/backends/zellij.py` 에만 존재한다는 것이 규약이다).
-2. **`__main__.py` 에 등록한다.**
-
-   ```python
-   @app.command("ws")
-   def ws_cmd(...) -> None:
-       """워크스페이스 매니저."""
-   ```
-
-   서브커맨드가 여럿이면 `typer.Typer()` 를 만들어 `app.add_typer(ws_app, name="ws")`.
-   umbrella CLI 를 유지하는 것이 목적이므로 **별도 진입점을 만들지 않는다.**
-   `idk build`처럼 단일 명령은 CLI 배선 모듈의 함수를 `app.command("build")`로 등록하고,
-   순수 parser/model/render 모듈에는 Typer를 import하지 않는다.
-3. **설정이 필요하면** `config.load("<name>.toml")`. 파일이 없을 때 기본값으로 동작해야 한다.
-4. **테스트를 쓴다** — 순수 함수(파서·렌더러)는 단위 테스트로, CLI 는 `typer.testing.CliRunner`.
-5. **무거운 import 는 함수 안에서** 한다. `doctor.render()` 가 `rich` 를 함수 안에서 import 하는
-   이유다 — 파이프로 쓰는 명령의 기동 시간을 지키기 위해서다.
-
-`config check`처럼 표와 JSON을 함께 제공하는 명령은 JSON 출력 함수가 Rich를 import하지 않게
-하고, 표 렌더 함수 안에서만 Rich를 가져온다. 설정 검사는 `VALIDATORS` registry의 파일 순서를
-고정해 사람이 읽는 표와 자동화용 JSON의 행 순서를 일치시킨다.
-
-### 지켜야 할 경계
-
-- `src/idk/dt/` 는 **의존성 0(stdlib만)** — typer/rich/textual 도 import 하지 않는다.
-  파이프 친화적으로 쓰이고, 폐쇄망에서 소스를 풀어 긴급 수정할 때 그 파일만 보면 되게 한다.
-- HTTP 는 반드시 `httpc.py` 를 거친다. `requests`/`httpx`/`certifi` 는 ruff TID251 로 막혀 있다.
-- root 권한을 요구하는 동작을 넣지 않는다.
-
----
-
-## 7. 규약이 기계적으로 강제되는 지점
-
-문서에만 적힌 규약은 지켜지지 않는다. 각 규약에 강제 장치가 하나씩 붙어 있다.
-
-| 규약 | 강제 |
-|---|---|
-| Python 3.10 하한 | ruff `target-version = "py310"`, CI 가 3.10 에서 pytest |
-| `tomllib`·`requests`·`httpx`·`certifi` 금지 | ruff TID251 (banned-api) |
-| 네이티브 확장 금지 | `build-pyz.sh` 순수성 검사 |
-| 산출물 의존성 고정 | `uv.lock` frozen export + runtime `--require-hashes` + locked build group |
-| ZIP 권한·무결성 | `scripts/smoke.sh` 가 group/other writable entry와 손상된 zip을 거부 |
-| 산출물 재현성 | CI artifact job이 같은 job의 native staging 두 번 빌드 SHA-256을 비교 |
-| vendor 입력 고정 | `scripts/vendor-checksums.txt`와 `fetch-vendor.sh`가 zellij/xclip을 검증 |
-| Actions 공급망 고정 | CI/release workflow의 외부 action을 immutable commit SHA로 pin |
-| 런처 ↔ `env.py` 후보 목록 일치 | `tests/test_launcher.py` |
-| 폐쇄망에서 런처가 동작 | `scripts/smoke.sh` 가 가짜 PATH 로 재현 |
-| 산출물이 3.10 에서 동작 | `smoke.sh` 가 3.10 으로 직접 실행 |
-| `dt/` 는 stdlib 만 | `tests/test_dt_stdlib_only.py` 가 AST 로 import 강제 |
-| zellij 호출은 `ws/backends/zellij.py` 만 | `ws/` 외에서 호출되면 리뷰에서 걸린다 |
-| zellij 실제 동작 | `tests/test_ws_zellij_integration.py` (`-m zellij`, CI integration 잡) |
-
----
-
-## 8. 알려진 제약
-
-| 제약 | 영향 / 대응 |
-|---|---|
-| `TMPDIR`를 비-native 경로로 덮어쓴다 | ZIP entry 퍼미션이 달라질 수 있다. 기본 native `/tmp`를 유지하거나 Linux native 경로를 지정 |
-| 첫 실행에 `~/.shiv` 압축 해제 비용 | 1회성. NFS 홈이면 `SHIV_ROOT` 로 이동 |
-| 런처가 `$0` 에 의존 | `sh idk.pyz` 처럼 상대 경로로 부르는 특수한 경우 취약. PATH·절대경로 실행은 정상 |
-| zellij 는 별도 선택 반입 | musl 정적 바이너리라 rustc 없이도 동작하지만, `idk.pyz` 안에는 못 넣는다. 두 vendor를 모두 준비하면 핵심 1개 + vendor 3개다 |
-| 루트 커밋 `3642e9b` 가 lint 실패 | 한 줄이 100자를 넘는다. 후속 통합 커밋에서 해소됐고 현재 lint 검증을 통과한다 |
+| `main.rs`, `cli_project.rs`, `cli_session.rs`, `cli_run.rs`, `cli_package.rs` | 명령 파싱과 명시적 작업 진입 |
+| `ui/`, `client.rs`, `protocol.rs` | TUI, 제한된 요청/응답, peer와 binary identity, 입력 소유권/epoch |
+| `model.rs`, `project.rs`, `store.rs` | 저장 정의·검토 revision·SourceGate·private 상태와 원자적 파일 교체 |
+| `shell.rs`, `terminal.rs`, `host/` | 실제 csh startup/source, PTY, 비동기 준비, 출력 수집, 관찰한 exit/cleanup |
+| `git/`, `git_wire.rs`, `host/git_*` | 실제 저장소 binding, immutable review/plan, index와 Git 작업 수명 |
+| `task.rs`, `run.rs`, `run_wire.rs`, `host/run_jobs.rs` | 등록 실행 의도, 결과·취소, source lease, 로그·retention |
+| `problems.rs`, `editor.rs` | raw-log 기반 진단, provenance, 승인된 현재/기록 root와 편집기 인자 |
+| `package.rs`, `install.rs`, `doctor.rs` | archive 검증, generation 활성화/복구, 현지 진단 |
+| `probe*.rs` | 배포된 실행 파일 자체가 수행하는 합성 셸/host/Git/Run 증거 |
+
+worker는 느린 파일/Git/초기화 작업을 actor 밖에서 처리한다. host는 실제 소유한 프로세스와
+입력 권한을 추적한다. 같은 session의 자손 정리와 실제 leader exit를 확인한 뒤에만 완료와
+source lease 해제를 연결한다. 별도 session으로 이탈한 프로세스까지 소유했다고 주장하지 않는다.
+
+## 상태와 결과의 의미
+
+설정, host tombstone, Git operation, Run metadata/log는 서로 다른 기록이다. 실행 의도와
+취소 요청은 실제 동작과 구분해 저장한다. 복구 시 저장 PID를 채택하거나 명령을 재실행하지
+않으며 불확실한 실행은 Unknown으로 남긴다. 외부 확인에 따른 명시적 cleanup acknowledgement도
+실행 결과를 성공으로 바꾸지는 않는다.
+
+Git status/index review와 실제 실행 계획은 구분한다. stage 선택은 원래 파일 경로 bytes를
+사용하며 commit review는 선택 목록이 아닌 실제 전체 index를 보여 준다. source 변경과 등록
+Run은 같은 저장소 identity의 gate를 공유한다. 다른 client나 외부 Git 프로세스에 대해 확인하지
+못한 사실은 보장으로 확대하지 않는다.
+
+Run의 raw log는 terminal scrollback과 별개이고 크기·큐·보관 한도가 있다. 손실/만료/쓰기 실패는
+부분 기록으로 표시한다. Problems는 실제 log offset과 run/source generation을 유지한다.
+잘못된 인코딩이나 제어문자로 파일 identity가 모호해지면 다른 파일명으로 바꾸어 열지 않는다.
+편집기는 검토한 별도 argv로 실행하며 기존 작업 셸에 명령을 주입하지 않는다.
+
+현재 SHA·dirty 관찰·artifact 경로는 소스 snapshot 또는 테스트 바이너리 bytes 증명이 아니다.
+실제 exit, 진단 severity와 관찰 범위의 미확인을 각각 표시한다.
+
+## 저장과 배포
+
+v0.4는 XDG의 `idk/v0.4` namespace와 private host-local runtime을 사용한다. SQLite/WAL을
+사용하지 않으며 NFS home을 host socket이나 로컬 locking 환경으로 가정하지 않는다.
+경로·schema·설치 수명 상세는 [오프라인 운영 안내](offline-workspace.md)에 있다.
+
+정적 musl binary, manifest, checksum, 라이선스 inventory와 원문을 다섯 파일의 USTAR/gzip
+bundle로 만든다. 설치는 새 generation을 검증하고 journal로 managed link를 전환한다.
+기존 host와 generation, 실행 중 바뀐 사용자 데이터는 복구 시에도 보존한다. 설치 schema 2의
+committed version floor는 uninstall 뒤에도 유지하며 stage/건강 검사 실패로 올라가지 않는다.
+
+공개 빌드 도구의 Python과 제품 런타임을 구분한다. 릴리스는 성공한 exact-main native CI의
+artifact를 재빌드하지 않고 승격하며 [릴리스 프로토콜](native-release.md)로 검증한다.
+
+## 변경할 때
+
+새 동작은 어느 정의·runtime·소유권·저장 계약을 바꾸는지 먼저 정한다. UI/CLI 배선과
+실행/실패 검증, 사용 문서를 같은 PR에서 연결한다. 종료·취소·복구를 mock 결과만으로
+완료 처리하지 않는다. 기존 v0.3 Python 구조와 서브커맨드 추가법은 Git history의 해당 버전을
+참조하며 현재 제품 경로로 다시 가져오지 않는다.

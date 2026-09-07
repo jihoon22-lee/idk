@@ -4,17 +4,41 @@
 형식은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/)를,
 버전은 [유의적 버전](https://semver.org/lang/ko/)을 따른다.
 
-`idk.pyz` 는 사람이 손으로 반입하는 파일이라 **"지금 들고 들어간 게 어느 버전인지"** 가
-중요하다. `idk --version` 이 여기 적힌 버전과 일치한다.
+오프라인 반입물의 버전·source SHA·bytes는 manifest와 연결한다. `idk --version`은 제품 버전을
+표시한다. v0.3 이하 항목은 당시 Python 제품의 역사적 기록이며 현재 기능을 의미하지 않는다.
 
 ## [Unreleased]
 
+## [0.4.0]
+
+### Added
+- 프로젝트별 실제 csh/tcsh 터미널과 사용자별 host. alias·셸 변수·cwd 상태를 유지하며
+  화면 종료/재접속과 셸 종료를 구분하고 재접속 때 초기화를 반복하지 않는다.
+- 개발 터미널과 프로젝트 밖 테스트 cwd의 정의, 초기화 검토·부분 실패·명시적 재열기.
+- 프로젝트 저장소를 기준으로 한 Git diff/stage/unstage·전체 index commit review·history·branch와
+  명시적 fetch/pull/push. Git 작업의 별도 PTY와 source 변경/등록 Run의 공유 gate.
+- 등록 task와 Run의 실제 종료·취소·중복 intent·로그·Problems·설정된 외부 편집기 연결.
+  source 관찰과 artifact 경로/bytes 확인을 구분하며 Unknown을 성공·idle로 추정하지 않는다.
+- 검증된 정적 native archive의 rootless 설치·generation 보존·journal 복구·entrypoint 제거.
+  확정 설치 버전 하한은 uninstall 뒤에도 유지하며 기존 host와 사용자 데이터를 복원/삭제하지 않는다.
+- manifest, 구성요소 checksum, 전체 dependency/runtime license inventory와 원문.
+  성공한 exact-main native CI artifact를 같은 bytes로 게시하는 릴리스 경로.
+- 현지 `doctor --brief` 상태 요약과 실제 후보 자체의 합성 probe. 공개 전 검사와 공개 후
+  대상 RHEL·폐쇄망 정책 실기 미실행을 별도로 기록한다.
+
 ### Changed
-- **에이전트 개발 지침을 v0.4 준비 범위에 맞게 정리** — 기존 Python 규약과 신규 기술 검증을
-  구분하고, CI에 맞춘 검증 안내와 변경·수용 검토용 저장소 스킬을 추가했다.
-- **개발 워킹트리의 파일 권한 안내를 파일시스템별로 구분** — 특정 `/mnt/e` 경로와
-  `core.filemode=false`를 현재 환경으로 단정하지 않고, Windows 드라이브와 WSL ext4에서
-  실행 비트를 각각 올바르게 기록하는 방법을 안내한다.
+- 제품 구현을 Rust CLI/TUI와 정적 Linux x86_64 musl 실행 파일로 전환했다. 기본 실행에
+  Python/compiler·Zellij vendor·사외 서비스가 필요하지 않으며 기존 csh/tcsh와 Git을 사용한다.
+- 설정·이력·로그·runtime을 별도 v0.4 namespace로 분리했다. v0.3 설정과 사용자 `.csh`·소스는
+  자동 변환하지 않는다. 상세 전환 관계는 [사용 안내](docs/GUIDE.md)를 따른다.
+- 개발 gate를 actual native 통합/패키지 검사와 남은 Python 빌드·릴리스 도구의 lint/fixture로 전환했다.
+
+### Removed
+- 현재 트리의 Python 제품 `src/idk/`, pyz 빌드/런처, `uv.lock` runtime 의존성과 이전 제품 테스트.
+- 기존 `idk ws`, 스니펫 `run --pane`, `dt`, `mirror`, `env`, `config check`, 일반 파일 `log`와
+  `build --file` 인터페이스. 일부 흐름은 프로젝트/task/Run으로 대체하며 전체 기능 동등성을 제공하지 않는다.
+- Zellij/xclip vendor 다운로드와 legacy pyz 릴리스/CI 경로. Git history·이전 공개 릴리스와
+  사용자 파일·기존 설정·살아 있는 외부 프로세스는 삭제 대상이 아니다.
 
 ## [0.3.1] - 2026-08-22
 
@@ -230,20 +254,16 @@
 
 ## 릴리스 방법
 
-1. `src/idk/__init__.py` 의 `__version__` 을 올린다.
-2. 이 파일의 `[Unreleased]` 내용을 `## [x.y.z] - YYYY-MM-DD` 섹션으로 옮긴다.
-3. PR 병합과 CI green, 최종 공개 승인이 끝난 뒤 태그를 밀면 `.github/workflows/release.yml` 이 나머지를 한다.
-   폐쇄망 field acceptance와 `env-survey.md` 확인은 publish와 분리된 후속 절차다.
+제품 버전은 `Cargo.toml`의 `[workspace.package].version`을 따른다. 버전의 변경 내역과 필수
+검증을 완료한 main SHA의 성공한 native CI artifact를 선택한다. 승인된 공개 범위에서 같은 SHA에
+태그를 지정하면 release workflow가 원래 bytes를 재검증해 게시하며 다시 빌드하지 않는다.
 
-```bash
-# PR 병합·CI green·최종 공개 승인 뒤에만 실행한다.
-git tag v0.3.1 && git push origin v0.3.1
-```
+구체적인 후보 선택·실패 중단·태그·새 다운로드 비교는
+[Native release promotion](docs/native-release.md)을 따른다. 공개 전 검사 완료와 대상
+RHEL·폐쇄망 실기는 별도이며 실기는 공개 후 사용자 후속으로 남긴다.
 
-워크플로가 태그와 `__version__` 이 일치하는지 확인하고, 빌드·스모크를 돌린 뒤
-`idk.pyz` 와 `idk.pyz.sha256` 을 릴리스에 붙이고 이 파일의 해당 섹션을 릴리스 노트로 쓴다.
-
-[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jihoon22-lee/idk/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/jihoon22-lee/idk/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jihoon22-lee/idk/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/jihoon22-lee/idk/compare/v0.2.0...v0.2.1

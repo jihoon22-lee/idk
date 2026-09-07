@@ -1,125 +1,55 @@
-# 폐쇄망 반입 · 설치 체크리스트
+# 폐쇄망 반입과 첫 실행
 
-폐쇄망(RHEL 8.10, 원격 X11 접속, tcsh)에 `idk` 를 올리는 절차. **전 과정에서 root 권한이 필요 없다.**
+v0.4 반입물은 `idk-0.4.0-x86_64-unknown-linux-musl.tar.gz`이며 내부에 정적 실행 파일과
+manifest·구성요소 checksum·라이선스 inventory/원문이 들어 있다. 기존 csh/tcsh와 Git을
+사용한다. 제품 실행을 위해 Python/compiler, Zellij/xclip vendor, root나 시스템 서비스를
+추가 설치하지 않는다.
 
-> **환경 정보를 확인해 오는 것이 목적이라면** [env-survey.md](env-survey.md) 를 볼 것.
-> 이 문서는 설치 절차만 다룬다.
+## 1. 승인받은 bytes 확인
 
----
+공개 릴리스의 source SHA·버전·파일명과 archive SHA-256을 신뢰할 수 있는 별도 경로에서
+확인한다. checksum을 archive와 함께 내려받아 비교하는 것만으로 publisher 신뢰가 생기지는
+않는다. 반입 정책에 따라 승인받은 archive와 검증 정보를 준비한다.
 
-## 1. WSL 에서 반입 세트 준비
+현지에서 `sha256sum <archive>`를 승인된 값과 비교한다. 무결성을 확인한 archive에서
+`idk-linux-x86_64` 한 파일만 새 사용자 소유 private 디렉터리에 꺼낸다. 기존 소스·설정 경로에
+풀거나 전체 archive를 미검증 상태로 실행하지 않는다. 추출한 실행 파일은 이 archive를
+엄격하게 검증하고 설치하는 최초 진입점이다.
 
-```bash
-./scripts/build-pyz.sh     # dist/idk.pyz
-./scripts/smoke.sh         # 반입 전 게이트 — 반드시 통과시킬 것
-./scripts/fetch-vendor.sh  # 선택: ws/클립보드용 vendor/ 3개 파일 준비
+```text
+./idk-linux-x86_64 package verify /absolute/path/idk-0.4.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
+./idk-linux-x86_64 package install /absolute/path/idk-0.4.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256> --prefix /absolute/user/path/idk-workspace
 ```
 
-checkout이 `/mnt/*`에 있어도 `build-pyz.sh`는 project root의 `build/` 대신
-`BUILD="$(mktemp -d -p "${TMPDIR:-/tmp}" idk-build.XXXXXX)"`로 기본 Linux native 임시
-디렉터리(`/tmp`, WSL에서는 ext4 rootfs)에 의존성·wheel·중간 zip을 자동 staging한다. 따라서
-반입용 빌드를 위해 checkout을 수동으로 `~/` 아래로 옮길 필요가 없다. `TMPDIR`를 지정한다면
-Linux native 경로를 사용한다. 최종 파일은 `dist/idk.pyz.tmp`를 거쳐 `dist/idk.pyz`로 원자적으로
-게시된다.
+검토한 설치 명령에 `--yes`를 붙이면 새 generation을 쓰고 검증한 뒤 entrypoint를 활성화한다.
+PATH·shell startup 파일은 자동 변경하지 않는다. 실행이 허용된 현지 위치를 사용하며 noexec나
+권한 정책을 우회하기 위해 다른 실행 경로·마운트 옵션을 자동 적용하지 않는다.
 
-`smoke.sh`는 ZIP entry의 Unix mode에서 group/other write bit(`0o022`)를 거부하고 ZIP 내용
-무결성도 확인한다. CI는 새 native staging에서 두 번 빌드한 SHA-256을 같은 job 안에서 비교한다.
-동일한 committed source·`uv.lock`뿐 아니라 Python 대상, uv/shiv/hatchling 같은 빌드 toolchain,
-native staging 조건도 같을 때 바이트 재현성을 기대할 수 있으며, 반입한 파일은 `sha256sum`으로
-대조할 수 있다.
+## 2. 진단과 프로젝트 등록
 
-핵심만 쓰는 반입 세트는 `dist/idk.pyz` **1개**다. 두 선택 구성요소를 모두 준비하는
-`fetch-vendor.sh`는 zellij 아카이브, xclip 아카이브, 두 아카이브의 체크섬을 담은
-`vendor/SHA256SUMS`를 3개짜리 allowlist 반입 세트로 지정한다. 핵심 아티팩트까지
-더한 전체 준비 bundle은 **4개 파일**이다. zellij는 `idk ws`와 `idk run --pane`에,
-xclip은 `copy_on_select`에만 필요하며, `SHA256SUMS`는 vendor 아카이브와 반드시 함께 반입한다:
-
-| 파일 | 용도 |
-|---|---|
-| `dist/idk.pyz` (필수) | 도구 본체 (의존성 내장, 내부 패키지 미러 상태와 무관) |
-| `vendor/zellij-no-web-x86_64-unknown-linux-musl.tar.gz` (선택 1/3) | `ws`/`run --pane` 멀티플렉서. musl 정적 링크라 glibc 2.28 과 무관 |
-| `vendor/xclip-0.13.tar.gz` (선택 2/3) | `copy_on_select` 클립보드 브릿지 소스 (현지 빌드) |
-| `vendor/SHA256SUMS` (vendor를 반입하면 필수 3/3) | 위 두 아카이브와 함께 반입하는 무결성 파일 |
-
-전체 vendor 세트를 반입한 뒤 `(cd vendor && sha256sum -c SHA256SUMS)`로 무결성을 확인한다.
-재사용한 `vendor/`에 남은 다른 `.tar.gz`는 삭제하지 않으며, `fetch-vendor.sh`의 allowlist와
-`SHA256SUMS`에는 포함하지 않는다. 반입할 때는 위에 열거한 3개 파일만 선택한다.
-
-> zellij 는 committed checksum manifest가 승인한 **no-web** 빌드만 받는다. 내장 웹서버가 없어
-> 반입 심사에서 설명하기 쉽고 4MB 작다. `ZELLIJ_FLAVOR=full`을 포함한 다른 flavor는
-> 지원하지 않으며 다운로드 전에 거부된다. flavor를 추가하려면 검토된 manifest hash를 먼저
-> 추가해야 한다.
-
----
-
-## 2. 폐쇄망 설치
+지정 prefix의 `idk`를 사용한다.
 
 ```bash
-mkdir -p ~/.local/bin
-cp idk.pyz ~/.local/bin/idk && chmod +x ~/.local/bin/idk
-# vendor 세트를 함께 반입했다면 먼저 무결성을 확인한다:
-# (cd vendor && sha256sum -c SHA256SUMS)
-# ws/run --pane을 사용할 때만 선택 zellij vendor를 설치한다:
-# tar xzf vendor/zellij-no-web-x86_64-unknown-linux-musl.tar.gz -C ~/.local/bin
-# copy_on_select를 사용할 때만 xclip vendor를 현지 빌드한다 (아래 §4 참조).
-```
-
-tcsh 환경파일(기존에 python3.10 PATH 를 넣어둔 그 파일)에 다음 두 줄을 추가한다.
-`idk env --csh` 가 이 줄을 그대로 출력해 준다:
-
-```csh
-setenv PATH "$HOME/.local/bin:$PATH"
-setenv IDK_PYTHON /path/to/python3.10
-```
-
-`IDK_PYTHON` 은 필수가 아니라 **탈출구**다. 지정하면 런처가 인터프리터 탐색을 건너뛰므로
-기동이 빠르고, 기본 `python3` 가 구버전이어도 확실하다.
-
-```bash
-idk doctor
-```
-
----
-
-## 3. 확인 항목
-
-- `idk --version` 이 `idk 0.3.1` → 아티팩트와 문서 버전이 일치한다는 뜻
-- `idk doctor` 의 `python / running` 이 3.10 이상 → 런처가 올바른 인터프리터를 골랐다는 뜻
-- `terminal / locale` 이 UTF-8 → 아니면 TUI 박스 문자가 깨진다
-- `tools / zellij` 가 ok
-- `tools / xclip` 이 warn 이어도 정상 — Shift+드래그 복사 경로로 폴백한다
-
-환경 정보를 밖으로 가져가려면 `--brief` 를 쓴다:
-
-```bash
+idk --version
 idk doctor --brief
+idk
 ```
 
-**`--json` 을 떠서 diff 하는 방법은 쓸 수 없다** — 폐쇄망은 파일 반출이 불가능하다.
-`--brief` 는 그래서 만든 출력으로, 화면을 보고 손으로 옮겨 적기 좋게 9줄로 압축돼 있다.
-무엇을 적어 와야 하는지는 [env-survey.md](env-survey.md) 에 양식으로 정리돼 있다.
+[프로젝트 안내](workspace-guide.md)에 따라 소스와 기존 `.csh`, 개발/외부 테스트 터미널을
+등록한다. v0.3 설정은 별도 원본이며 자동 변환하거나 덮어쓰지 않는다. 일반 셸 상태와 등록
+Run의 로그·결과를 구분한다. `doctor`는 기본 exit 0이며 실패 gate에는 `--strict`를 지정한다.
 
----
+## 3. 업데이트·복구·후속 실기
 
-## 4. 문제 대응
+[오프라인 운영 안내](offline-workspace.md)는 저장 경로, 활성 host 보존, generation 검증,
+중단 복구와 entrypoint 제거의 상세 절차다. 업데이트 뒤 기존 host에 연결하려면 그 host를
+시작한 원래 generation binary를 사용한다. 버전 문자열이 같아도 binary identity가 다르면
+자동으로 같은 host로 연결하지 않는다.
 
-| 증상 | 원인 / 대응 |
-|---|---|
-| `idk: python 3.10+ 를 찾지 못했습니다` | `.csh` 를 source 하지 않은 컨텍스트. `setenv IDK_PYTHON <절대경로>` |
-| 첫 실행이 느리다 | shiv 가 `~/.shiv/` 로 압축을 푸는 1회성 비용. `setenv SHIV_ROOT` 로 위치 변경 가능 |
-| TUI 박스 문자가 깨진다 | LANG 이 UTF-8 이 아니다. `setenv LANG ko_KR.UTF-8` (또는 `en_US.UTF-8`) |
-| 홈 디렉터리가 NFS 라 느리다 | `setenv SHIV_ROOT /var/tmp/$USER/shiv` 처럼 로컬 디스크로 옮긴다 |
+공개 전 검증은 실제 폐쇄망 환경의 수용과 별개다. 대상 RHEL 8.10의 startup, CA·인증,
+NFS/noexec·로그아웃·장기 프로세스 정책은 사용자가 공개 결과물로 이후 검증하며 현재 미실행이다.
+[수용 원장](acceptance/v0.4.0.md)의 후속 항목을 따른다.
 
-### xclip 현지 빌드 (선택)
-
-Shift+드래그로 충분하면 건너뛴다. `copy_on_select`(드래그만으로 자동 복사)를 원할 때만:
-
-```bash
-tar xzf xclip-0.13.tar.gz && cd xclip-0.13
-autoreconf -i          # git 아카이브라 configure 가 없으면
-./configure --prefix=$HOME/.local && make && make install
-```
-
-`libX11-devel`, `libXmu-devel` (+ `autoconf`/`automake`/`libtool`) 이 내부 rpm 미러에 있어야 한다.
-없으면 그냥 Shift+드래그를 쓴다 — `idk doctor` 가 xclip 부재를 감지하면 zellij `copy_command`
-설정을 빼서 자동으로 그 경로로 폴백한다.
+폐쇄망 원본 증거는 현지에 보관한다. 파일·로그·소스·경로를 외부로 가져오는 절차가 없으며
+`doctor --brief`, 마스킹·요약·hash도 반출 허가를 대신하지 않는다. 정책상 허용된 판정만
+기록하고 확인하지 못한 결과는 미확인으로 남긴다.
