@@ -1,8 +1,12 @@
 use clap::{Parser, Subcommand};
+mod cli_project;
 
 #[derive(Parser)]
 #[command(name = "idk", version, about = "Project-centric terminal workspace")]
 struct Cli {
+    /// Isolated configuration/state/runtime root (default: XDG idk/v0.4).
+    #[arg(long, global = true)]
+    data_dir: Option<std::path::PathBuf>,
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -11,6 +15,24 @@ struct Cli {
 enum Commands {
     /// Inspect this binary's build and protocol identity.
     Version,
+    /// Connect and manage project definitions.
+    Project {
+        #[command(subcommand)]
+        command: cli_project::ProjectCommand,
+    },
+    /// Manage saved terminal definitions.
+    Terminal {
+        #[command(subcommand)]
+        command: cli_project::TerminalCommand,
+    },
+    /// Diagnose configuration and local tools without starting project commands.
+    Doctor {
+        #[arg(long)]
+        json: bool,
+        /// Return nonzero for warnings/errors (default diagnostic exit is zero).
+        #[arg(long)]
+        strict: bool,
+    },
     /// Run finite synthetic csh/PTY checks without accessing project data.
     Probe {
         #[arg(long)]
@@ -32,8 +54,39 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     match cli.command {
+        Some(Commands::Project { command }) => {
+            let result = idk_workspace::store::Store::open(cli.data_dir.as_deref())
+                .and_then(|store| cli_project::project(&store, command));
+            if let Err(error) = result {
+                eprintln!("idk: {error:#}");
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Terminal { command }) => {
+            let result = idk_workspace::store::Store::open(cli.data_dir.as_deref())
+                .and_then(|store| cli_project::terminal(&store, command));
+            if let Err(error) = result {
+                eprintln!("idk: {error:#}");
+                std::process::exit(1);
+            }
+        }
         Some(Commands::Version) => {
             println!("idk {} (workspace protocol 1)", env!("CARGO_PKG_VERSION"))
+        }
+        Some(Commands::Doctor { json, strict }) => {
+            let report = idk_workspace::doctor::inspect(cli.data_dir.as_deref());
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report).unwrap());
+            } else {
+                println!("idk {}", report.version);
+                for finding in &report.findings {
+                    println!("{} [{}]: {}", finding.area, finding.status, finding.detail);
+                }
+                println!("{}", report.field_acceptance);
+            }
+            if strict && report.has_failures() {
+                std::process::exit(1);
+            }
         }
         Some(Commands::Probe { shell }) => match idk_workspace::probe::run(&shell) {
             Ok(report) => println!("{}", serde_json::to_string_pretty(&report).unwrap()),
@@ -48,7 +101,9 @@ fn main() {
                 eprintln!("idk requires a terminal; use --help for commands");
                 std::process::exit(2);
             }
-            if let Err(error) = idk_workspace::ui::run() {
+            let result = idk_workspace::store::Store::open(cli.data_dir.as_deref())
+                .and_then(|store| idk_workspace::ui::run(&store));
+            if let Err(error) = result {
                 eprintln!("{error:#}");
                 std::process::exit(1);
             }

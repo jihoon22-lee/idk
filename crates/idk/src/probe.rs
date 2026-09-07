@@ -73,7 +73,7 @@ pub fn run(shell: &Path) -> Result<Value> {
         login: false,
         init_cwd: init.clone(),
         start_cwd: start.clone(),
-        sources: vec![source],
+        sources: vec![source.into()],
         env: environment,
         command: None,
     };

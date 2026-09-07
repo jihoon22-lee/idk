@@ -120,6 +120,64 @@ fn terminal_rejects_invalid_allocation_bounds_before_spawn() {
 }
 
 #[test]
+fn final_synchronized_output_is_flushed_at_pty_eof() {
+    let mut command = CommandBuilder::new("/bin/sh");
+    command.args(["-c", "printf '\\033[?2026hFINAL_OUTPUT'; exit 7"]);
+    let mut session = TerminalSession::spawn(command, 24, 80, 100).unwrap();
+    wait_for(&session, |screen| screen.reader_closed);
+    assert!(session.snapshot().unwrap().text().contains("FINAL_OUTPUT"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(exit) = session.try_wait().unwrap() {
+            assert_eq!(exit.code, 7);
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn drop_reaps_exited_child_without_requiring_explicit_poll() {
+    let mut command = CommandBuilder::new("/bin/sh");
+    command.args(["-c", "exit 0"]);
+    let session = TerminalSession::spawn(command, 24, 80, 100).unwrap();
+    let pid = session.child_pid().unwrap();
+    wait_for(&session, |screen| screen.reader_closed);
+    drop(session);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while std::path::Path::new(&format!("/proc/{pid}")).exists() {
+        assert!(Instant::now() < deadline, "dropped child was not reaped");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn drop_returns_promptly_and_reaper_does_not_retain_pty_descriptors() {
+    let mut command = CommandBuilder::new("/bin/sh");
+    // Ignore HUP so only actual terminal EOF releases this read. A reaper that
+    // retains the master or writer would deadlock instead of collecting exit.
+    command.args(["-c", "trap '' HUP; printf DROP_READY; read value"]);
+    let session = TerminalSession::spawn(command, 24, 80, 100).unwrap();
+    let pid = session.child_pid().unwrap();
+    wait_for(&session, |screen| screen.text().contains("DROP_READY"));
+    let start = Instant::now();
+    drop(session);
+    assert!(
+        start.elapsed() < Duration::from_millis(250),
+        "Drop blocked on the live child"
+    );
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while std::path::Path::new(&format!("/proc/{pid}")).exists() {
+        assert!(
+            Instant::now() < deadline,
+            "reaper retained a PTY descriptor or left a zombie"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
 #[ignore = "requires actual tcsh and coreutils; set IDK_TEST_SHELL and run --ignored"]
 fn actual_pty_query_reply_reaches_child() {
     let shell = std::env::var_os("IDK_TEST_SHELL").expect("IDK_TEST_SHELL must name tcsh");
@@ -174,4 +232,38 @@ fn terminating_owned_session_preserves_unrelated_process() {
     unrelated.kill().unwrap();
     unrelated.wait().unwrap();
     assert!(survived, "unrelated process was terminated");
+}
+
+#[test]
+#[ignore = "requires actual tcsh; set IDK_TEST_SHELL and run --ignored"]
+fn actual_oversized_control_output_keeps_user_interrupt_working() {
+    let shell = std::env::var_os("IDK_TEST_SHELL").expect("IDK_TEST_SHELL must name tcsh");
+    let directory = tempfile::tempdir().unwrap();
+    for name in ["osc", "queries"] {
+        let payload = directory.path().join(name);
+        let bytes = if name == "osc" {
+            let mut bytes = b"\x1b]2;".to_vec();
+            bytes.resize(1024 * 1024, b'x');
+            bytes
+        } else {
+            b"\x1b[c".repeat(5000)
+        };
+        std::fs::write(&payload, bytes).unwrap();
+        let mut command = CommandBuilder::new(&shell);
+        command.args(["-f", "-c"]);
+        command.arg(format!("/bin/cat '{}'; /bin/sleep 30", payload.display()));
+        let mut session = TerminalSession::spawn(command, 24, 80, 100).unwrap();
+        wait_for(&session, |screen| screen.output_limited);
+        session
+            .input(&[3])
+            .expect("output limits must never disable Ctrl-C");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while session.try_wait().unwrap().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "child did not receive Ctrl-C after {name} flood"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 }

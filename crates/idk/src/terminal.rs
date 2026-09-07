@@ -2,13 +2,14 @@
 //!
 //! Input is queued with a fixed byte limit. One thread drains both directions using
 //! nonblocking descriptors; it never holds a screen lock while waiting for I/O.
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
@@ -25,6 +26,8 @@ use serde::{Deserialize, Serialize};
 
 const MAX_PENDING_INPUT: usize = 1024 * 1024;
 const MAX_EVENTS: usize = 1024;
+const MAX_PENDING_REPLIES: usize = 64 * 1024;
+const MAX_OSC_BYTES: usize = 16 * 1024;
 const IO_CHUNK: usize = 8192;
 /// Keeps even worst-case RGB/combining-mark screen JSON below a 4 MiB IPC frame.
 pub const MAX_TERMINAL_CELLS: usize = 12_000;
@@ -98,7 +101,8 @@ pub struct TerminalSnapshot {
     pub title: String,
     pub reader_closed: bool,
     pub error: Option<String>,
-    /// Pathological combining sequences were clipped; ordinary text is intact.
+    /// An excessive control string, query flood, or combining sequence was
+    /// limited. This is nonfatal; terminal input and later output remain usable.
     pub output_limited: bool,
 }
 
@@ -200,9 +204,99 @@ impl EventListener for Events {
     }
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum IngressState {
+    #[default]
+    Ground,
+    Escape,
+    Osc,
+    DiscardOsc,
+}
+
+/// vte's std feature has an unbounded OSC Vec, despite its no_std 1 KiB
+/// default. Hold only a bounded OSC body before submitting it to the parser.
+/// DCS is streamed to vte's no-op hook/put handlers; APC/SOS/PM are discarded by
+/// its state machine without a payload allocation. Its sync buffer is 2 MiB.
+#[derive(Default)]
+struct Ingress {
+    state: IngressState,
+    osc: Vec<u8>,
+    limited: bool,
+}
+
+impl Ingress {
+    fn filter<'a>(&mut self, bytes: &'a [u8]) -> Cow<'a, [u8]> {
+        if self.state == IngressState::Ground && !bytes.contains(&0x1b) {
+            return Cow::Borrowed(bytes);
+        }
+        let mut filtered = Vec::with_capacity(bytes.len() + self.osc.len());
+        for &byte in bytes {
+            match self.state {
+                IngressState::Ground => {
+                    filtered.push(byte);
+                    if byte == 0x1b {
+                        self.state = IngressState::Escape;
+                    }
+                }
+                IngressState::Escape => {
+                    if byte == b']' {
+                        // The initial ESC is already in the parser. Withholding
+                        // ] keeps it out of OSC state until the body is complete.
+                        self.osc.push(byte);
+                        self.state = IngressState::Osc;
+                    } else {
+                        filtered.push(byte);
+                        // C0, DEL and non-ASCII bytes leave vte in Escape; CAN,
+                        // SUB or an intermediate/final ASCII byte do not.
+                        if matches!(byte, 0x18 | 0x1a | 0x20..=0x7e) {
+                            self.state = IngressState::Ground;
+                        }
+                    }
+                }
+                IngressState::Osc => {
+                    if matches!(byte, 0x07 | 0x18 | 0x1a | 0x1b) {
+                        self.osc.push(byte);
+                        filtered.extend_from_slice(&self.osc);
+                        self.osc.clear();
+                        self.state = if byte == 0x1b {
+                            IngressState::Escape
+                        } else {
+                            IngressState::Ground
+                        };
+                    } else if self.osc.len() < MAX_OSC_BYTES {
+                        self.osc.push(byte);
+                    } else {
+                        // Cancel the ESC waiting in the parser. No truncated
+                        // OSC prefix is dispatched (not even a clipboard/title
+                        // operation); discard through its real terminator.
+                        filtered.push(0x18);
+                        self.osc.clear();
+                        self.state = IngressState::DiscardOsc;
+                        self.limited = true;
+                    }
+                }
+                IngressState::DiscardOsc => match byte {
+                    0x07 => self.state = IngressState::Ground,
+                    0x18 | 0x1a => {
+                        filtered.push(byte);
+                        self.state = IngressState::Ground;
+                    }
+                    0x1b => {
+                        filtered.push(byte);
+                        self.state = IngressState::Escape;
+                    }
+                    _ => {}
+                },
+            }
+        }
+        Cow::Owned(filtered)
+    }
+}
+
 struct Engine {
     term: Term<Events>,
     parser: Processor,
+    ingress: Ingress,
     events: Events,
     writer: Box<dyn Write + Send>,
     pending: VecDeque<Vec<u8>>,
@@ -231,6 +325,7 @@ impl Engine {
                 events.clone(),
             ),
             parser: Processor::new(),
+            ingress: Ingress::default(),
             events,
             writer,
             pending: VecDeque::new(),
@@ -258,7 +353,9 @@ impl Engine {
     }
 
     fn process(&mut self, bytes: &[u8]) {
-        self.parser.advance(&mut self.term, bytes);
+        let filtered = self.ingress.filter(bytes);
+        self.parser.advance(&mut self.term, &filtered);
+        self.output_limited |= self.ingress.limited;
         self.limit_cell_storage();
         self.events();
     }
@@ -275,6 +372,20 @@ impl Engine {
         self.events();
         self.limit_cell_storage();
         self.flush();
+    }
+
+    fn finish_output(&mut self) {
+        // A crashing/exiting full-screen program may omit synchronized-update
+        // end. There will be no future reader tick to expire the timeout, so
+        // commit all already-received display bytes before publishing EOF.
+        self.parser.stop_sync(&mut self.term);
+        if !self.ingress.osc.is_empty() {
+            self.output_limited = true;
+            self.ingress.osc.clear();
+        }
+        self.events();
+        self.limit_cell_storage();
+        self.reader_closed = true;
     }
 
     fn limit_cell_storage(&mut self) {
@@ -327,7 +438,7 @@ impl Engine {
             }
         };
         if self.events.overflow.swap(false, Ordering::Relaxed) {
-            self.error = Some("terminal query event limit exceeded".into());
+            self.output_limited = true;
         }
         for event in events {
             let reply = match event {
@@ -356,8 +467,12 @@ impl Engine {
                 _ => None,
             };
             if let Some(reply) = reply {
-                if let Err(error) = self.queue(reply.as_bytes()) {
-                    self.error = Some(error.to_string());
+                // A child must not fill the entire user-input queue with its
+                // own replies and thereby prevent Ctrl-C or other user input.
+                if self.pending_bytes.saturating_add(reply.len()) > MAX_PENDING_REPLIES
+                    || self.queue(reply.as_bytes()).is_err()
+                {
+                    self.output_limited = true;
                 }
             }
         }
@@ -533,13 +648,19 @@ fn palette(index: usize) -> Rgb {
     Rgb { r, g, b }
 }
 
+type OwnedChild = Box<dyn Child + Send + Sync>;
+
+/// Dropping this object closes its owned terminal. UI detach must retain it.
+/// Drop reaps the owned child without treating hangup as confirmed cancellation
+/// and without waiting for a long-running child while holding a host lock.
 pub struct TerminalSession {
     master: Box<dyn MasterPty + Send>,
-    child: Box<dyn Child + Send + Sync>,
+    child: Option<OwnedChild>,
     pid: Option<u32>,
     engine: Arc<Mutex<Engine>>,
     stop: Arc<AtomicBool>,
     reader: Option<JoinHandle<()>>,
+    reaper: Option<mpsc::SyncSender<OwnedChild>>,
     exit: Option<TerminalExit>,
 }
 
@@ -582,10 +703,17 @@ impl TerminalSession {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_engine = engine.clone();
         let thread_stop = stop.clone();
+        let (reaper, reap_child) = mpsc::sync_channel::<OwnedChild>(1);
         let reader_thread = match thread::Builder::new()
             .name("idk-pty".into())
-            .spawn(move || reader_loop(reader, poll_file, thread_engine, thread_stop))
-        {
+            .spawn(move || {
+                reader_loop(reader, poll_file, thread_engine, thread_stop);
+                // reader_loop owns and drops every PTY descriptor/engine ref
+                // before this wait. No extra thread is needed on normal Drop.
+                if let Ok(mut child) = reap_child.recv() {
+                    let _ = child.wait();
+                }
+            }) {
             Ok(handle) => handle,
             Err(error) => {
                 let _ = child.kill();
@@ -595,11 +723,12 @@ impl TerminalSession {
         };
         Ok(Self {
             master: pair.master,
-            child,
+            child: Some(child),
             pid,
             engine,
             stop,
             reader: Some(reader_thread),
+            reaper: Some(reaper),
             exit: None,
         })
     }
@@ -651,7 +780,13 @@ impl TerminalSession {
 
     pub fn try_wait(&mut self) -> Result<Option<TerminalExit>> {
         if self.exit.is_none() {
-            if let Some(status) = self.child.try_wait().context("observe terminal child")? {
+            if let Some(status) = self
+                .child
+                .as_mut()
+                .context("terminal child handle unavailable")?
+                .try_wait()
+                .context("observe terminal child")?
+            {
                 self.exit = Some(TerminalExit {
                     code: status.exit_code(),
                     signal: status.signal().map(str::to_owned),
@@ -710,12 +845,28 @@ fn signal(pid: libc::pid_t, signal: libc::c_int) -> Result<()> {
 
 impl Drop for TerminalSession {
     fn drop(&mut self) {
-        // Dropping a live session is host cleanup, never UI detach. No process
-        // enumeration or unrelated process signalling occurs here.
         self.stop.store(true, Ordering::Release);
-        if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
+        if let Some(mut child) = self.child.take() {
+            if !matches!(child.try_wait(), Ok(Some(_))) {
+                let unqueued = match self.reaper.take() {
+                    Some(reaper) => reaper.send(child).err().map(|error| error.0),
+                    None => Some(child),
+                };
+                // A disconnected worker means it failed before cleanup. This
+                // fallback carries only the child handle, never PTY endpoints.
+                if let Some(mut child) = unqueued {
+                    let _ = thread::Builder::new()
+                        .name("idk-child-reaper".into())
+                        .spawn(move || {
+                            let _ = child.wait();
+                        });
+                }
+            }
         }
+        // Wake an idle worker when try_wait already reaped the child, and detach
+        // instead of joining a wait that may outlive PTY closure (e.g. nohup).
+        drop(self.reaper.take());
+        drop(self.reader.take());
     }
 }
 
@@ -748,7 +899,7 @@ fn reader_loop(
             }
             if let Ok(mut state) = engine.lock() {
                 state.error = Some(format!("PTY poll failed: {error}"));
-                state.reader_closed = true;
+                state.finish_output();
             }
             break;
         }
@@ -758,7 +909,7 @@ fn reader_loop(
         match reader.read(&mut bytes) {
             Ok(0) => {
                 if let Ok(mut state) = engine.lock() {
-                    state.reader_closed = true;
+                    state.finish_output();
                 }
                 break;
             }
@@ -780,7 +931,7 @@ fn reader_loop(
                     if error.raw_os_error() != Some(libc::EIO) {
                         state.error = Some(format!("PTY read failed: {error}"));
                     }
-                    state.reader_closed = true;
+                    state.finish_output();
                 }
                 break;
             }
@@ -840,6 +991,74 @@ mod tests {
         assert!(replies.contains("\x1b[8;24;80t"));
         assert!(replies.contains("rgb:"));
         assert!(!replies.contains("52;"));
+    }
+
+    #[test]
+    fn split_osc_is_preserved_and_oversize_osc_is_discarded_through_terminator() {
+        let mut engine = engine(4, 40);
+        // A C0 byte inside Escape still permits OSC, matching vte's state machine.
+        for byte in "\x1b\0]2;한글 title\x07".as_bytes() {
+            engine.process(&[*byte]);
+        }
+        assert_eq!(engine.snapshot().title, "한글 title");
+        engine.process(b"\x1b]2;");
+        for _ in 0..128 {
+            engine.process(&[b'x'; IO_CHUNK]);
+            assert!(engine.ingress.osc.len() <= MAX_OSC_BYTES);
+        }
+        assert!(engine.snapshot().output_limited);
+        assert!(engine.snapshot().error.is_none());
+        assert_eq!(engine.snapshot().title, "한글 title");
+        // Neither the clipped title nor its discarded tail becomes screen text.
+        engine.process(b"discarded tail\x1b");
+        engine.process(b"\\after\x1b]2;recovered");
+        engine.process(b"\x07\x1b[6n");
+        assert_eq!(engine.snapshot().title, "recovered");
+        assert!(engine.snapshot().text().starts_with("after"));
+        assert!(
+            !engine.pending.is_empty(),
+            "queries must still receive replies"
+        );
+    }
+
+    #[test]
+    fn osc_budget_preserves_synchronized_output_and_cancel_recovery() {
+        let mut engine = engine(4, 40);
+        engine.process(b"\x1b[?2026hbefore\x1b]2;");
+        for _ in 0..4 {
+            engine.process(&[b'x'; IO_CHUNK]);
+        }
+        engine.process(b"\x18after\x1b[?2026l");
+        assert!(engine.snapshot().text().starts_with("beforeafter"));
+        assert!(engine.snapshot().output_limited);
+    }
+
+    #[test]
+    fn unsupported_control_string_payloads_are_not_accumulated_or_replayed() {
+        for prefix in [b"\x1bPq".as_slice(), b"\x1b_", b"\x1bX", b"\x1b^"] {
+            let mut engine = engine(4, 40);
+            engine.process(prefix);
+            for _ in 0..32 {
+                engine.process(&[b'x'; IO_CHUNK]);
+            }
+            assert!(engine.ingress.osc.is_empty());
+            engine.process(b"\x1b\\after");
+            assert!(engine.snapshot().text().starts_with("after"));
+            assert!(engine.snapshot().error.is_none());
+        }
+    }
+
+    #[test]
+    fn query_limits_are_nonfatal_and_leave_space_for_user_interrupts() {
+        let mut engine = engine(4, 40);
+        for _ in 0..32 {
+            engine.process(&b"\x1b[c".repeat(2000));
+        }
+        assert!(engine.snapshot().output_limited);
+        assert!(engine.snapshot().error.is_none());
+        assert!(engine.pending_bytes <= MAX_PENDING_REPLIES);
+        engine.queue(&[3]).unwrap();
+        assert_eq!(engine.pending.back().unwrap(), &[3]);
     }
 
     #[test]

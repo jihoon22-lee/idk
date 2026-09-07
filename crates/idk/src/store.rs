@@ -26,6 +26,7 @@ impl Store {
             if !root.is_absolute() {
                 bail!("data directory must be absolute");
             }
+            ensure_owned_directory(&root, false)?;
             Self {
                 config_dir: root.join("config"),
                 state_dir: root.join("state"),
@@ -43,6 +44,10 @@ impl Store {
                 .unwrap_or_else(|| {
                     PathBuf::from(format!("/tmp/idk-{}", unsafe { libc::geteuid() }))
                 });
+            if !config.is_absolute() || !state.is_absolute() || !runtime.is_absolute() {
+                bail!("XDG paths must be absolute");
+            }
+            ensure_private_dir(&runtime)?;
             Self {
                 config_dir: config.join("idk/v0.4"),
                 state_dir: state.join("idk/v0.4"),
@@ -163,6 +168,11 @@ fn validate_filename(name: &str) -> Result<()> {
 }
 
 pub fn ensure_private_dir(path: &Path) -> Result<()> {
+    ensure_owned_directory(path, true)
+}
+
+fn ensure_owned_directory(path: &Path, private: bool) -> Result<()> {
+    validate_directory_ancestors(path)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("cannot create data parent {}", parent.display()))?;
@@ -178,20 +188,62 @@ pub fn ensure_private_dir(path: &Path) -> Result<()> {
     let meta = fs::symlink_metadata(path)?;
     if !meta.is_dir()
         || meta.uid() != unsafe { libc::geteuid() }
-        || meta.permissions().mode() & 0o077 != 0
+        || (private && meta.permissions().mode() & 0o077 != 0)
     {
         bail!(
             "{} must be a real directory owned by this user with mode 0700",
             path.display()
         );
     }
+    validate_directory_ancestors(path)?;
     Ok(())
+}
+
+/// A private leaf does not protect it from rename through an untrusted parent.
+/// Root-owned sticky temporary directories are safe only when each existing child
+/// on our path is also owned by this user/root and cannot be replaced by others.
+fn validate_directory_ancestors(path: &Path) -> Result<()> {
+    fn inspect(path: &Path, resolve_links: bool) -> Result<()> {
+        for ancestor in path.ancestors() {
+            let metadata = match fs::symlink_metadata(ancestor) {
+                Ok(value) => value,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error).context("inspect data directory ancestry"),
+            };
+            let uid = unsafe { libc::geteuid() };
+            if metadata.uid() != uid && metadata.uid() != 0 {
+                bail!(
+                    "data/runtime parent {} belongs to another user",
+                    ancestor.display()
+                );
+            }
+            if metadata.file_type().is_symlink() {
+                if resolve_links {
+                    inspect(&ancestor.canonicalize()?, false)?;
+                }
+                continue;
+            }
+            if !metadata.is_dir() {
+                bail!("data/runtime parent is not a directory");
+            }
+            let mode = metadata.permissions().mode();
+            let root_sticky = metadata.uid() == 0 && mode & 0o1000 != 0;
+            if mode & 0o022 != 0 && !root_sticky {
+                bail!(
+                    "data/runtime parent {} is writable by other users",
+                    ancestor.display()
+                );
+            }
+        }
+        Ok(())
+    }
+    inspect(path, true)
 }
 
 pub fn read_private(path: &Path, limit: usize) -> Result<Vec<u8>> {
     let file = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(path)?;
     let meta = file.metadata()?;
     if !meta.is_file()
@@ -257,10 +309,19 @@ impl FileLock {
         {
             bail!("invalid lock file ownership/permissions");
         }
-        let flags = libc::LOCK_EX | if nonblocking { libc::LOCK_NB } else { 0 };
-        if unsafe { libc::flock(file.as_raw_fd(), flags) } != 0 {
-            return Err(std::io::Error::last_os_error())
-                .context("resource is locked or filesystem locking is unavailable");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                break;
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::WouldBlock
+                || nonblocking
+                || std::time::Instant::now() >= deadline
+            {
+                return Err(error).context("resource is locked or filesystem locking is unavailable; retry after the other operation finishes");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
         Ok(Self(file))
     }
@@ -315,5 +376,29 @@ mod tests {
         assert_eq!(fs::read_to_string(&victim).unwrap(), "unchanged");
         fs::set_permissions(&store.runtime_dir, fs::Permissions::from_mode(0o777)).unwrap();
         assert!(Store::open(Some(root.path())).is_err());
+    }
+
+    #[test]
+    fn owned_fifo_is_rejected_without_waiting_for_a_writer() {
+        let root = tempfile::tempdir().unwrap();
+        let fifo = root.path().join("config.fifo");
+        let path = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+        let before = std::time::Instant::now();
+        assert!(read_private(&fifo, 1024).is_err());
+        assert!(before.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn private_leaf_below_shared_mutable_parent_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        let shared = root.path().join("shared");
+        fs::create_dir(&shared).unwrap();
+        fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(ensure_private_dir(&shared.join("private")).is_err());
+        assert!(!shared.join("private").exists());
+        let link = root.path().join("link");
+        symlink(&shared, &link).unwrap();
+        assert!(Store::open(Some(&link.join("data"))).is_err());
     }
 }
