@@ -146,9 +146,11 @@ pub fn run(shell: &Path) -> Result<Value> {
     if !task_screen.text().contains("IDK_TASK:kept:exported") {
         bail!("registered task lost initialized shell state");
     }
+    let host = crate::probe_host::run(&shell, &launcher)?;
     Ok(json!({
         "schema":1, "version":env!("CARGO_PKG_VERSION"), "shell":shell,
         "checks":{"same_shell_state":"PASS", "init_start_cwd":"PASS", "resize":"PASS", "detached_output":"PASS", "job_control":"PASS", "task_exit_code":"PASS"},
+        "host": host,
         "target_field_acceptance":"not performed; synthetic local/package probe only"
     }))
 }

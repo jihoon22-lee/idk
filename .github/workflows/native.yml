@@ -38,13 +38,14 @@ jobs:
           cargo build --locked -p idk-workspace --bin idk
           cargo test --locked --workspace -- --ignored --nocapture
 
-      - name: Actual traditional BSD csh initialization (required)
+      - name: Actual traditional BSD csh initialization and project launch (required)
         env:
           IDK_TEST_LAUNCHER: ${{ github.workspace }}/target/debug/idk
         run: |
           native_bsd_shell="$(command -v bsd-csh)"
           test -x "$native_bsd_shell"
           IDK_TEST_SHELL="$native_bsd_shell" cargo test --locked -p idk-workspace --test csh_init -- --nocapture
+          IDK_TEST_SHELL="$native_bsd_shell" cargo test --locked -p idk-workspace --test project_flow -- --nocapture
 
       - name: First static native candidate and packaged probe
         env:
@@ -94,6 +95,9 @@ jobs:
               ./idk-linux-x86_64 __shell-exec --shell /usr/local/bin/tcsh --command "echo IDK_UBI_HELPER_OK"
               ./idk-linux-x86_64 probe --shell /usr/local/bin/tcsh
             '
+
+      - name: Exact candidate peer identity across two actual UIDs
+        run: ./scripts/test-native-peer.sh
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
