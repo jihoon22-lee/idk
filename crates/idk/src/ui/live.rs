@@ -58,6 +58,15 @@ impl App<'_> {
             .map(Runtime::drain)
             .unwrap_or_default();
         for reply in replies {
+            let changed_host = reply.identity.as_ref().is_some_and(|(host, _)| {
+                self.runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.host.as_ref())
+                    .is_some_and(|old| old.host_instance != host.host_instance)
+            });
+            if changed_host {
+                self.git_host_changed();
+            }
             let runtime = self.runtime.as_mut().unwrap();
             if let Some((host, client_id)) = reply.identity {
                 if runtime
@@ -79,13 +88,10 @@ impl App<'_> {
             }
             match reply.result {
                 Err(error) => {
-                    if matches!(
-                        reply.tag,
-                        Tag::Connect | Tag::Input | Tag::Ack | Tag::Snapshot(_) | Tag::Attached
-                    ) {
-                        runtime.online = false;
-                        runtime.clear_input();
-                    }
+                    self.git_rpc_error(&reply.tag, &error.to_string());
+                    let runtime = self.runtime.as_mut().unwrap();
+                    runtime.online = false;
+                    runtime.clear_input();
                     // A missing host at initial load is normal; opening is explicit.
                     if reply.tag != Tag::Connect || runtime.host.is_some() {
                         self.error(format!("{error:#}"));
@@ -102,6 +108,7 @@ impl App<'_> {
                 }
             }
         }
+        self.tick_git();
         if let Some(runtime) = &mut self.runtime {
             if let Err(error) = runtime.poll() {
                 runtime.online = false;
@@ -111,11 +118,24 @@ impl App<'_> {
         }
     }
     fn accept_reply(&mut self, tag: Tag, value: serde_json::Value) -> Result<()> {
+        if matches!(
+            tag,
+            Tag::GitSubmit(_)
+                | Tag::GitJob(_)
+                | Tag::GitExecute(_)
+                | Tag::GitAttached
+                | Tag::GitSnapshot(_)
+                | Tag::GitOperations
+                | Tag::GitUpdated
+        ) {
+            return self.accept_git_reply(tag, value);
+        }
         let refresh_definition = matches!(tag, Tag::Definition(_));
         let runtime = self.runtime.as_mut().unwrap();
         match tag {
             Tag::Connect => {
                 runtime.submit(Some(Request::List { project: None }), Tag::List)?;
+                self.git_reconnected()?;
             }
             Tag::List => {
                 runtime.sessions = serde_json::from_value(value)?;
@@ -151,9 +171,10 @@ impl App<'_> {
                     "Shell {:?}; attaching. Initialization may still be in progress.",
                     session.state
                 ));
-                self.attach_session(&session.session_id, false)?;
+                self.review_attach(session)?;
             }
             Tag::Attached => {
+                self.git.focused = false;
                 let session: SessionInfo = serde_json::from_value(value)?;
                 let id = session.session_id.clone();
                 runtime.active = Some(session);
@@ -295,6 +316,7 @@ impl App<'_> {
                 ));
             }
             Tag::Ack | Tag::Input => {}
+            _ => unreachable!("Git replies are handled above"),
         }
         if refresh_definition {
             self.refresh_live_definition();
@@ -363,6 +385,9 @@ impl App<'_> {
         }
     }
     pub(super) fn live_menu_key(&mut self, key: KeyEvent) -> bool {
+        if self.tab == 1 && self.focus == super::Focus::Content {
+            return false;
+        }
         if self.runtime.is_none() {
             return false;
         }
@@ -573,6 +598,18 @@ impl App<'_> {
         if bytes.is_empty() {
             return Ok(());
         }
+        if self.git.focused {
+            ensure!(
+                self.git_writable(),
+                "Git terminal is read-only or disconnected. Input was not sent."
+            );
+            let operation = self.git.operation.as_ref().unwrap();
+            return self.runtime.as_mut().unwrap().buffer_git_input(
+                operation.id.clone(),
+                operation.input_epoch,
+                bytes,
+            );
+        }
         let (session, epoch) = self.active_owner()?;
         self.runtime
             .as_mut()
@@ -581,9 +618,7 @@ impl App<'_> {
     }
     pub fn forward_terminal(&mut self, outcome: UiOutcome) -> Result<()> {
         let modes = self
-            .runtime
-            .as_ref()
-            .and_then(|runtime| runtime.screen.as_ref())
+            .terminal_snapshot()
             .context("Waiting for a terminal screen; input was not sent.")?
             .modes
             .clone();
@@ -598,12 +633,7 @@ impl App<'_> {
         if !self.terminal_connected || self.menu_visible || self.dialog.is_some() {
             return Ok(());
         }
-        let Some(modes) = self
-            .runtime
-            .as_ref()
-            .and_then(|runtime| runtime.screen.as_ref())
-            .map(|screen| screen.modes.clone())
-        else {
+        let Some(modes) = self.terminal_snapshot().map(|screen| screen.modes.clone()) else {
             return Ok(());
         };
         let bytes = match event {
@@ -611,6 +641,9 @@ impl App<'_> {
             Event::FocusLost => super::input::encode_focus(false, &modes),
             Event::Mouse(mouse) => {
                 if !modes.mouse_click && !modes.mouse_motion && !modes.mouse_drag {
+                    if self.git.focused {
+                        return Ok(());
+                    }
                     match mouse.kind {
                         MouseEventKind::ScrollUp => self.scroll_live(3)?,
                         MouseEventKind::ScrollDown => self.scroll_live(-3)?,

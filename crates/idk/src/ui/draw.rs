@@ -349,6 +349,7 @@ fn content(app: &App<'_>, frame: &mut Frame<'_>, area: Rect) {
                 parts[2],
             );
         }
+        1 if app.runtime.is_some() => super::git_draw::render(app, frame, area),
         1 => {
             let parts = Layout::vertical([Constraint::Min(2), Constraint::Length(5)]).split(area);
             let roots = app.repositories();
@@ -554,6 +555,7 @@ fn dialog_view(app: &App<'_>, dialog: &mut Dialog, frame: &mut Frame<'_>, area: 
                 "F2 Approve temporary scripts · Esc Cancel · ↑↓ Scroll",
             );
         }
+        Dialog::Git(dialog) => super::git_draw::render_dialog(app, dialog, frame, area),
         Dialog::Live(dialog) => live_dialog(app, dialog, frame, area),
         Dialog::Help { scroll } => {
             let inner = popup(frame, area, "Project controls", 88);
@@ -570,9 +572,16 @@ fn dialog_view(app: &App<'_>, dialog: &mut Dialog, frame: &mut Frame<'_>, area: 
                 "  X Close project shells · H Close all shells and stop host",
                 "  / Search scrollback · Shift+PgUp/PgDn Scroll · y Copy preview",
                 "",
-                "Git: 2 shows the primary and explicitly related repositories.",
-                "  n / g Connect · Enter Review selected repository as primary",
-                "  An empty primary path disconnects only its reference.",
+                "Git: 2 opens the project's primary repository, independent of terminal cwd.",
+                "  v Explicitly select a related repository · n / g Connect repository",
+                "  Enter Diff · t Staged/unstaged diff · s Stage · u Unstage",
+                "  c Commit draft · F2 Review entire actual index · F2 Commit",
+                "  h History/files · b Branches · r Remotes · o Operations · F5 Refresh",
+                "  Branches: n Create · Enter Review switch",
+                "  Remotes: f Fetch · p Fast-forward pull · P Push (explicit branch)",
+                "  F6 All Git operations, including removed project connections",
+                "  Git operation terminal: Ctrl+g Controls, then z Back or k Cancel",
+                "  Message drafts survive failure, cancellation and changing screens.",
                 "",
                 "t reviews the current shell/startup/scripts before approval.",
                 "F5 refreshes definition and folder availability.",
@@ -787,7 +796,7 @@ fn form_fields(
     );
 }
 
-fn input_window(input: &TextInput, width: u16) -> (String, u16) {
+pub(super) fn input_window(input: &TextInput, width: u16) -> (String, u16) {
     if width == 0 {
         return (String::new(), 0);
     }
@@ -819,6 +828,10 @@ fn input_window(input: &TextInput, width: u16) -> (String, u16) {
 }
 
 fn live_screen(app: &mut App<'_>, frame: &mut Frame<'_>, area: Rect) {
+    if app.git.focused {
+        super::git_draw::render_operation(app, frame, area);
+        return;
+    }
     let runtime = app.runtime.as_ref().unwrap();
     let active = runtime.active.as_ref();
     let name = active
