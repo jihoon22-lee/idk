@@ -119,6 +119,11 @@ jobs:
       - name: Exact candidate peer identity across two actual UIDs
         run: ./scripts/test-native-peer.sh
 
+      - name: Native storage lock, atomic rename and filesystem inspection failures
+        run: |
+          python3 scripts/test-native-storage.py \
+            --candidate dist/idk-linux-x86_64 --shell /usr/bin/tcsh
+
       - name: Package-only installation and filesystem failure recovery
         run: ./scripts/test-native-install.sh
 
