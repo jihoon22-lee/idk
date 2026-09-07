@@ -13,6 +13,7 @@ mod probe_host;
 mod probe_run;
 pub mod project;
 pub mod protocol;
+mod saved_state;
 pub mod shell;
 pub mod store;
 pub mod terminal;

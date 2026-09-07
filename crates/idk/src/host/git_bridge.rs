@@ -5,10 +5,11 @@ use crate::git::{self, GitService, Repository};
 use crate::git_wire::*;
 use crate::model::{new_id, valid_id, SourceGate};
 use crate::protocol::{safe_error, Request, MAX_INPUT_PACKET};
+use crate::saved_state::{GitLedger as Ledger, GitRecord as Record};
 use crate::store::{ensure_private_dir, Store};
 use anyhow::{bail, ensure, Context, Result};
 use base64::Engine;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -18,7 +19,7 @@ const LEDGER: &str = "git-operations.json";
 const MAX_VALUE: usize = 3 * 1024 * 1024;
 const CACHE_BYTES: usize = 16 * 1024 * 1024;
 const TOKEN_TTL: Duration = Duration::from_secs(300);
-const MAX_OPERATIONS: usize = 128;
+const MAX_OPERATIONS: usize = crate::saved_state::GIT_RECORD_LIMIT;
 
 struct Repo {
     binding: Repository,
@@ -67,30 +68,6 @@ struct Plan {
     value: git::GitOperationPlan,
     created: Instant,
     bytes: usize,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Ledger {
-    schema: u32,
-    operations: Vec<Record>,
-}
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Record {
-    id: String,
-    context_id: String,
-    project_id: String,
-    repository: Repository,
-    kind: GitOperationKind,
-    state: GitOperationState,
-    #[serde(default)]
-    cleanup_acknowledged: bool,
-    outcome: Option<GitOutcome>,
-    exit_code: Option<u32>,
-    commit: Option<String>,
-    #[serde(default)]
-    error: Option<String>,
 }
 
 pub(super) struct Bridge {
@@ -147,10 +124,7 @@ impl Bridge {
             reading: 0,
         };
         if let Some(ledger) = bridge.store.read_state::<Ledger>(LEDGER)? {
-            ensure!(
-                ledger.schema == 1 && ledger.operations.len() <= MAX_OPERATIONS,
-                "unsupported or oversized Git operation ledger; preserved"
-            );
+            ledger.validate()?;
             for record in ledger.operations {
                 valid_id(&record.id)?;
                 valid_id(&record.context_id)?;

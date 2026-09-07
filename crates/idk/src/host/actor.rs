@@ -1,15 +1,16 @@
 use super::children;
 use super::launch::{self, Completed, Job, Runtime};
 use super::{git_bridge, run_jobs};
-use crate::model::{new_id, valid_id, SourceGate, TerminalDefinition, MAX_PROJECTS, MAX_TERMINALS};
+use crate::model::{new_id, valid_id, SourceGate, TerminalDefinition, MAX_TERMINALS};
 use crate::protocol::*;
 use crate::run_wire::{RunJob, RunRequest, RunResult};
+use crate::saved_state::{HostLedger as Ledger, HostRecord as Tombstone};
 use crate::shell::InitializationState;
 use crate::store::{ensure_private_dir, Store};
-use crate::terminal::{TerminalExit, TerminalSnapshot};
+use crate::terminal::TerminalSnapshot;
 use anyhow::{ensure, Context, Result};
 use base64::Engine;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,31 +20,8 @@ use std::time::{Duration, Instant};
 const LEDGER: &str = "host-sessions.json";
 const MAX_CACHE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_CACHED_REPLY: usize = 64 * 1024;
-const MAX_TRACKED: usize = MAX_PROJECTS * MAX_TERMINALS + MAX_TERMINALS;
+const MAX_TRACKED: usize = crate::saved_state::HOST_RECORD_LIMIT;
 
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Ledger {
-    schema: u32,
-    sessions: Vec<Tombstone>,
-}
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Tombstone {
-    session_id: String,
-    project_id: String,
-    terminal_id: String,
-    name: String,
-    persistent: bool,
-    state: SessionState,
-    definition_revision: u64,
-    launch_digest: Option<String>,
-    exit: Option<TerminalExit>,
-    #[serde(default)]
-    purpose: Option<String>,
-    #[serde(default)]
-    run_id: Option<String>,
-}
 impl Tombstone {
     fn from_slot(slot: &Slot) -> Self {
         let info = &slot.info;
@@ -189,10 +167,7 @@ impl Actor {
         let mut slots = BTreeMap::new();
         let mut keys = std::collections::HashSet::new();
         if let Some(ledger) = store.read_state::<Ledger>(LEDGER)? {
-            ensure!(
-                ledger.schema == 1 && ledger.sessions.len() <= MAX_TRACKED,
-                "unsupported or oversized host session ledger; preserved"
-            );
+            ledger.validate()?;
             for tombstone in ledger.sessions {
                 let purpose = match tombstone.purpose.as_deref() {
                     Some("run") => SlotPurpose::Run {
