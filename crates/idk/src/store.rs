@@ -60,6 +60,8 @@ impl Store {
             }
             ensure_private_dir(path)?;
         }
+        ensure_local_state_directory(&store.state_dir)?;
+        ensure_local_state_directory(&store.runtime_dir)?;
         // sockaddr_un.sun_path is 108 bytes including NUL on supported Linux.
         if store.socket_path().as_os_str().as_encoded_bytes().len() >= 104 {
             bail!("runtime path is too long for a Unix socket; choose a shorter local runtime directory");
@@ -167,8 +169,48 @@ fn validate_filename(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate an already existing private directory without creating any path.
+pub(crate) fn inspect_private_dir(path: &Path) -> Result<()> {
+    validate_directory_ancestors(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        bail!(
+            "{} must be a real private directory owned by this user",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 pub fn ensure_private_dir(path: &Path) -> Result<()> {
     ensure_owned_directory(path, true)
+}
+
+/// Host state and Unix sockets must not silently inherit an NFS home.
+/// This identifies NFS; other filesystems still need working locks/rename/fsync.
+pub fn ensure_local_state_directory(path: &Path) -> Result<()> {
+    let name = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())?;
+    let mut info = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    if unsafe { libc::statfs(name.as_ptr(), info.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error()).with_context(|| {
+            format!(
+                "cannot inspect state/runtime filesystem at {} (preserved)",
+                path.display()
+            )
+        });
+    }
+    require_local_state_filesystem(unsafe { info.assume_init() }.f_type as u64)
+        .with_context(|| format!("unsupported state/runtime directory {}", path.display()))
+}
+
+fn require_local_state_filesystem(kind: u64) -> Result<()> {
+    if kind == libc::NFS_SUPER_MAGIC as u64 {
+        bail!("NFS is unsupported for host state/runtime; explicitly choose permitted local XDG_STATE_HOME and XDG_RUNTIME_DIR or --data-dir; existing data was not moved or reset");
+    }
+    Ok(())
 }
 
 pub(crate) fn ensure_owned_directory(path: &Path, private: bool) -> Result<()> {
@@ -339,6 +381,17 @@ impl Drop for FileLock {
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn nfs_state_is_rejected_and_uninspectable_paths_do_not_become_local() {
+        let error = require_local_state_filesystem(libc::NFS_SUPER_MAGIC as u64).unwrap_err();
+        assert!(error.to_string().contains("XDG_STATE_HOME"));
+        let root = tempfile::tempdir().unwrap();
+        ensure_local_state_directory(root.path()).unwrap();
+        let missing = root.path().join("missing");
+        assert!(ensure_local_state_directory(&missing).is_err());
+        assert!(!missing.exists());
+    }
 
     #[test]
     fn future_schema_and_corruption_are_preserved() {

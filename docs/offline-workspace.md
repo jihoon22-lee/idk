@@ -91,3 +91,16 @@ support archive나 자동 전송 절차는 없다. 현지 원본 증거를 보�
 nonroot/network-none 설치와 파일시스템 실패 검사를 수행한다. 대상 RHEL 8.10의 startup·CA·인증·
 NFS/noexec·로그아웃 정책 실기는 사용자 지시에 따라 공개된 동일 결과물로 릴리스 후 수행하며,
 실행하기 전에는 PASS로 간주하지 않는다.
+
+## NFS home과 상태 저장소 오류
+
+host state와 runtime은 NFS에 두지 않는다. NFS home을 쓰면 허용된 로컬 위치의
+`XDG_STATE_HOME`·`XDG_RUNTIME_DIR` 또는 명시적인 `--data-dir`를 먼저 선택한다. idk는 statfs로
+NFS state/runtime을 발견하면 시작을 거부하고, 조회 오류도 로컬 정상 상태로 간주하지 않는다.
+프로젝트 소스나 별도 config가 NFS에 있다는 사실만으로 소스 자체를 이동하지 않는다. 기존 state를
+자동 이주·초기화하거나 정책을 우회할 실행 위치를 만들지 않는다. 다른 파일시스템도 실제 잠금·rename·fsync
+동작과 현지 지원 여부를 확인해야 하며 NFS가 아니라는 판정만으로 모든 네트워크 파일시스템을 보증하지 않는다.
+
+잠금 서비스 사용 불가(`ENOLCK`)와 atomic rename 실패는 저장 실패로 보고하며 기존 설정을 보존한다.
+개발용 `scripts/test-native-storage.py`는 실제 후보 프로세스에 제한적인 seccomp 오류를 주입해
+ENOLCK·rename I/O 오류·statfs 실패를 검사한다. 이 검사는 실제 NFS 마운트나 폐쇄망 실기 PASS가 아니다.
