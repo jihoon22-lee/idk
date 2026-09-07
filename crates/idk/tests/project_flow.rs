@@ -1,3 +1,6 @@
+#[path = "common/launcher.rs"]
+mod launcher;
+
 use idk_workspace::model::{
     new_id, Project, ShellConfig, SourceSpec, TaskDefinition, Workspace, SCHEMA,
 };
@@ -239,10 +242,7 @@ fn six_terminal_definitions_default_order_transients_and_real_shells() {
             .unwrap();
         let prepared = launch
             .shell
-            .prepare(
-                &fixture.tmp.path().join("resources"),
-                Path::new(env!("CARGO_BIN_EXE_idk")),
-            )
+            .prepare(&fixture.tmp.path().join("resources"), launcher::path())
             .unwrap();
         let mut session = TerminalSession::spawn(prepared.command.clone(), 24, 100, 1000).unwrap();
         session.input(&prepared.bootstrap_bytes).unwrap();
@@ -849,10 +849,7 @@ fn each_project_launch_uses_its_explicit_environment_without_cross_project_state
             .unwrap();
         let prepared = launch
             .shell
-            .prepare(
-                &fixture.tmp.path().join("resources"),
-                Path::new(env!("CARGO_BIN_EXE_idk")),
-            )
+            .prepare(&fixture.tmp.path().join("resources"), launcher::path())
             .unwrap();
         let mut session = TerminalSession::spawn(prepared.command.clone(), 24, 100, 1000).unwrap();
         session.input(&prepared.bootstrap_bytes).unwrap();
@@ -963,10 +960,7 @@ fn environment_bounds_and_debug_output_do_not_expose_values() {
     assert!(!format!("{:?}", launch.shell).contains("do-not-persist-this-secret"));
     let prepared = launch
         .shell
-        .prepare(
-            &fixture.tmp.path().join("resources"),
-            Path::new(env!("CARGO_BIN_EXE_idk")),
-        )
+        .prepare(&fixture.tmp.path().join("resources"), launcher::path())
         .unwrap();
     assert!(!format!("{prepared:?}").contains("do-not-persist-this-secret"));
 }

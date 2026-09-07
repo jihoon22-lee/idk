@@ -1,3 +1,6 @@
+#[path = "common/launcher.rs"]
+mod launcher;
+
 use base64::Engine;
 use idk_workspace::client::Client;
 use idk_workspace::model::*;
@@ -6,7 +9,7 @@ use idk_workspace::run_wire::*;
 use idk_workspace::store::Store;
 use idk_workspace::task::TaskService;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 struct Host(Child);
@@ -125,7 +128,7 @@ impl Fixture {
     }
     fn host(&self) -> (Host, Client) {
         let mut host = Host(
-            Command::new(env!("CARGO_BIN_EXE_idk"))
+            Command::new(launcher::path())
                 .args(["__host", "--config-dir"])
                 .arg(&self.store.config_dir)
                 .arg("--state-dir")
@@ -140,9 +143,7 @@ impl Fixture {
         );
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            if let Ok(client) =
-                Client::connect_with_launcher(&self.store, Path::new(env!("CARGO_BIN_EXE_idk")))
-            {
+            if let Ok(client) = Client::connect_with_launcher(&self.store, launcher::path()) {
                 return (host, client);
             }
             assert!(host.0.try_wait().unwrap().is_none());
@@ -583,8 +584,7 @@ fn interactive_task_keeps_input_private_across_client_reconnect() {
     let session = started.run.session_id.clone().unwrap();
     let first = client.attach(&session, false).unwrap();
     client.detach(&session, first.input_epoch).unwrap();
-    let mut other =
-        Client::connect_with_launcher(&f.store, Path::new(env!("CARGO_BIN_EXE_idk"))).unwrap();
+    let mut other = Client::connect_with_launcher(&f.store, launcher::path()).unwrap();
     let attached = other.attach(&session, false).unwrap();
     assert!(client
         .input(&session, first.input_epoch, b"WRONG\n")

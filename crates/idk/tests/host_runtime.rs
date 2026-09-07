@@ -1,3 +1,6 @@
+#[path = "common/launcher.rs"]
+mod launcher;
+
 use base64::Engine;
 use idk_workspace::client::Client;
 use idk_workspace::model::{new_id, Project, ShellConfig};
@@ -138,7 +141,7 @@ impl Fixture {
     }
 }
 fn binary() -> &'static Path {
-    Path::new(env!("CARGO_BIN_EXE_idk"))
+    launcher::path()
 }
 fn wait(
     client: &mut Client,
