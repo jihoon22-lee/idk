@@ -718,7 +718,12 @@ fn failed_cancel_persistence_cannot_signal_owned_descendants_before_retry_succee
 }
 #[test]
 fn failed_finalization_keeps_shutdown_pending_and_retries_after_storage_recovers() {
-    let f = Fixture::new("sleep 0.4\necho DONE", false);
+    // The task cannot finish until the storage fault is installed, even if the
+    // test thread is descheduled after observing the start result.
+    let f = Fixture::new(
+        "while (! -e allow-finish)\n sleep 0.02\nend\necho DONE",
+        false,
+    );
     let (mut host, mut client) = f.host();
     let job = f.start(&mut client, &new_id());
     let RunResult::Started(started) = result(&mut client, job) else {
@@ -728,14 +733,26 @@ fn failed_finalization_keeps_shutdown_pending_and_retries_after_storage_recovers
     let backup = f.store.state_dir.join("runs.saved");
     std::fs::rename(&ledger, &backup).unwrap();
     std::fs::create_dir(&ledger).unwrap();
+    let before: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&backup).unwrap()).unwrap();
+    assert_eq!(before["runs"][0]["state"], "Running");
+    assert_eq!(before["runs"][0]["cleanup_confirmed"], false);
+    std::fs::write(f.root.join("allow-finish"), "ready").unwrap();
     let session = started.run.session_id.unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let snapshot = client.snapshot(&session, None).unwrap();
-        if !snapshot.session.state.is_live() {
+        if !snapshot.session.state.is_live() && snapshot.session.error.is_some() {
+            assert_eq!(
+                snapshot.session.error.as_deref(),
+                Some("destination must be a regular owned file")
+            );
             break;
         }
-        assert!(Instant::now() < deadline);
+        assert!(
+            Instant::now() < deadline,
+            "finalization fault was not observed: {snapshot:?}"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
     let preview = client.preview_close(None).unwrap();
@@ -756,6 +773,8 @@ fn failed_finalization_keeps_shutdown_pending_and_retries_after_storage_recovers
     let ledger: serde_json::Value =
         serde_json::from_slice(&std::fs::read(ledger).unwrap()).unwrap();
     assert_eq!(ledger["runs"][0]["state"], "Succeeded");
+    assert_eq!(ledger["runs"][0]["cleanup_confirmed"], true);
+    assert_eq!(ledger["runs"][0]["exit_code"], 0);
 }
 
 #[test]
