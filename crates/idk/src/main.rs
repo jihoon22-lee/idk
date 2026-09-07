@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+mod cli_package;
 mod cli_project;
 
 #[derive(Parser)]
@@ -13,6 +14,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Verify, install and recover an explicitly supplied offline bundle.
+    Package {
+        #[command(subcommand)]
+        command: cli_package::PackageCommand,
+    },
+    #[command(name = "__package-health", hide = true)]
+    PackageHealth {
+        #[arg(long)]
+        config_dir: std::path::PathBuf,
+        #[arg(long)]
+        state_dir: std::path::PathBuf,
+        #[arg(long)]
+        runtime_dir: std::path::PathBuf,
+    },
     /// Inspect this binary's build and protocol identity.
     Version,
     /// Connect and manage project definitions.
@@ -54,6 +69,27 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     match cli.command {
+        Some(Commands::Package { command }) => {
+            if let Err(error) = cli_package::execute(cli.data_dir.as_deref(), command) {
+                eprintln!("idk: {error:#}");
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::PackageHealth {
+            config_dir,
+            state_dir,
+            runtime_dir,
+        }) => {
+            let store = idk_workspace::store::Store {
+                config_dir,
+                state_dir,
+                runtime_dir,
+            };
+            match idk_workspace::install::health(&store) {
+                Ok(report) => println!("{}", serde_json::to_string(&report).unwrap()),
+                Err(_) => std::process::exit(1),
+            }
+        }
         Some(Commands::Project { command }) => {
             let result = idk_workspace::store::Store::open(cli.data_dir.as_deref())
                 .and_then(|store| cli_project::project(&store, command));

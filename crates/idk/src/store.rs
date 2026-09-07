@@ -171,7 +171,7 @@ pub fn ensure_private_dir(path: &Path) -> Result<()> {
     ensure_owned_directory(path, true)
 }
 
-fn ensure_owned_directory(path: &Path, private: bool) -> Result<()> {
+pub(crate) fn ensure_owned_directory(path: &Path, private: bool) -> Result<()> {
     validate_directory_ancestors(path)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
