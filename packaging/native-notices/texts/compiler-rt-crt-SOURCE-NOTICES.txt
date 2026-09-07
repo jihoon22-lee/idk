@@ -23,4 +23,3 @@ Source SHA-256: 6d5a61b8f2f6fa541a12ec52aea40b5085e40fcf8626984d318523cb30335d06
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-

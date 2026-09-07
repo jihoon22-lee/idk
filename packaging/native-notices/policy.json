@@ -71,8 +71,8 @@
         {
           "location": "repository",
           "path": "packaging/native-notices/texts/compiler-builtins-SOURCE-NOTICES.txt",
-          "sha256": "42f42af9d9638250c9f0dca22c7edf8bd359c6311eb38c73466fdfeaf6a5620d",
-          "size": 45444,
+          "sha256": "222dd0c973e072fdb35635c5b94811ac87b0b384ffd0ddff23f106e2f2d46e38",
+          "size": 45443,
           "source_url": "https://github.com/rust-lang/rust/tree/8bab26f4f68e0e26f0bb7960be334d5b520ea452"
         }
       ],
@@ -94,8 +94,8 @@
         {
           "location": "repository",
           "path": "packaging/native-notices/texts/musl-SOURCE-NOTICES.txt",
-          "sha256": "1ec2019b6d73394e565b92089c3d2d7898bc1cd40581ff19a046fa6a92c2fa7c",
-          "size": 96645,
+          "sha256": "ded33d3a4efc7dd3246337d0cfaefeb3c1511a34e2e48c7efb56df291a35e033",
+          "size": 96644,
           "source_url": "https://www.musl-libc.org/releases/musl-1.2.5.tar.gz"
         }
       ],
@@ -121,8 +121,8 @@
         {
           "location": "repository",
           "path": "packaging/native-notices/texts/llvm-libunwind-SOURCE-NOTICES.txt",
-          "sha256": "8fd8cb7ec3bd77e0472c3399a5a176ab57d338f0082c6fce020f33cfb0ed76d2",
-          "size": 23409,
+          "sha256": "f07c860a8a01eae5b7beae588fa22ca6aa93234f7063291237c46365ec982584",
+          "size": 23408,
           "source_url": "https://github.com/rust-lang/llvm-project/tree/dcc3606807c989700e0ac1cac18c31741bcd40d9"
         }
       ],
@@ -151,8 +151,8 @@
         {
           "location": "repository",
           "path": "packaging/native-notices/texts/compiler-rt-crt-SOURCE-NOTICES.txt",
-          "sha256": "0755b710bae8cc897f285056bc9b0cdd7e761dddd06f55009a80ec272ea866a3",
-          "size": 1518,
+          "sha256": "61983e5f4110fb3f9fa068e87822542d41c3f3bddd6f635593b06b032fcf8027",
+          "size": 1517,
           "source_url": "https://github.com/rust-lang/llvm-project/tree/dcc3606807c989700e0ac1cac18c31741bcd40d9"
         }
       ],
