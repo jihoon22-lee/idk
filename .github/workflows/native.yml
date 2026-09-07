@@ -12,6 +12,9 @@ jobs:
   native:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      # Each lifecycle fixture creates a separate host and several real PTYs.
+      RUST_TEST_THREADS: 4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
