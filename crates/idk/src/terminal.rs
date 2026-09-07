@@ -1249,6 +1249,59 @@ mod tests {
     }
 
     #[test]
+    fn host_exit_anchor_survives_input_and_output_cleanup_until_explicit_reaping() {
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "exit 7"]);
+        let mut terminal = TerminalSession::spawn(command, 4, 20, 10).unwrap();
+        terminal.defer_reaping();
+        let pid = terminal.child_pid().unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if let Some(exit) = terminal.try_wait().unwrap() {
+                assert_eq!(exit.code, 7);
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(terminal.input(b"late input").is_err());
+        terminal.end_collection().unwrap();
+        let mut status: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid,
+                    &mut status,
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            },
+            0
+        );
+        assert_eq!(
+            unsafe { status.si_pid() },
+            pid as libc::pid_t,
+            "PTY cleanup released the owned SID anchor"
+        );
+        assert_eq!(terminal.reap_exit().unwrap().code, 7);
+        assert_eq!(
+            unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid,
+                    &mut status,
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            },
+            -1
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+    }
+
+    #[test]
     fn alternate_screen_resize_and_modes_restore() {
         let mut engine = engine(4, 20);
         engine.process(b"main\x1b[?1049h\x1b[?1h\x1b[?2004hfull");

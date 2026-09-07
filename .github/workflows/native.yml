@@ -96,6 +96,9 @@ jobs:
               ./idk-linux-x86_64 probe --shell /usr/local/bin/tcsh
             '
 
+      - name: Exact candidate peer identity across two actual UIDs
+        run: ./scripts/test-native-peer.sh
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: idk-native-candidate
