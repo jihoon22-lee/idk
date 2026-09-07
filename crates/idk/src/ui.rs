@@ -1,6 +1,10 @@
 //! Project definition workflows; the runtime adapter owns terminal key encoding.
 mod draw;
 mod forms;
+pub mod input;
+mod live;
+mod runtime;
+pub mod screen;
 
 use crate::model::{Project, ShellConfig, SourceSpec, TerminalDefinition};
 use crate::project::{
@@ -70,6 +74,7 @@ struct TransientReview {
 
 #[derive(Debug, Clone)]
 enum Dialog {
+    Live(live::LiveDialog),
     Form(Form),
     Sources(SourceList),
     Source(SourceEditor),
@@ -109,6 +114,9 @@ pub struct App<'a> {
     menu_visible: bool,
     terminal_connected: bool,
     menu_from_terminal: bool,
+    runtime: Option<runtime::Runtime>,
+    viewport: ratatui::layout::Rect,
+    clipboard_request: Option<String>,
 }
 
 impl<'a> App<'a> {
@@ -147,13 +155,22 @@ impl<'a> App<'a> {
             menu_visible: true,
             terminal_connected: false,
             menu_from_terminal: false,
+            runtime: None,
+            viewport: ratatui::layout::Rect::default(),
+            clipboard_request: None,
         };
         app.restore_terminal_selection();
         Ok(app)
     }
 
     pub fn render(&mut self, frame: &mut Frame<'_>) {
+        self.live_dimensions(frame.area());
         draw::render(self, frame);
+    }
+
+    /// A one-shot plain-text clipboard request exists only after Copy preview + F2.
+    pub fn take_clipboard_request(&mut self) -> Option<String> {
+        self.clipboard_request.take()
     }
 
     pub fn selected_project_id(&self) -> Option<String> {
@@ -173,6 +190,9 @@ impl<'a> App<'a> {
     }
 
     pub fn handle_event(&mut self, event: Event) -> Result<UiOutcome> {
+        if let Err(error) = self.live_event(&event) {
+            self.error(error.to_string());
+        }
         match event {
             Event::Key(key) if key.kind != KeyEventKind::Release => self.handle_key(key),
             Event::Paste(text) => {
@@ -180,6 +200,9 @@ impl<'a> App<'a> {
                     return Ok(UiOutcome::ForwardTerminalPaste(text));
                 }
                 let result = match self.dialog.as_mut() {
+                    Some(Dialog::Live(live::LiveDialog::Search { input, .. })) => {
+                        input.insert(&text)
+                    }
                     Some(Dialog::Form(form)) => form.paste(&text),
                     Some(Dialog::Source(source)) => match &mut source.fields[source.selected].value
                     {
@@ -226,6 +249,9 @@ impl<'a> App<'a> {
             return Ok(UiOutcome::ForwardTerminalKey(key));
         }
         self.menu_from_terminal = false;
+        if self.live_menu_key(key) {
+            return Ok(UiOutcome::Continue);
+        }
         if key.modifiers.contains(KeyModifiers::ALT) {
             if self.focus == Focus::Content && self.tab == 0 {
                 let result = match key.code {
@@ -449,6 +475,7 @@ impl<'a> App<'a> {
         self.repository_index = self
             .repository_index
             .min(self.repositories().len().saturating_sub(1));
+        self.refresh_live_definition();
         Ok(())
     }
     fn info(&mut self, message: impl Into<String>) {
@@ -535,6 +562,7 @@ impl<'a> App<'a> {
     fn handle_dialog(&mut self, key: KeyEvent) {
         let dialog = self.dialog.take().unwrap();
         match dialog {
+            Dialog::Live(dialog) => self.handle_live_dialog(dialog, key),
             Dialog::Form(mut form) => {
                 if key.code == KeyCode::Esc {
                     self.drafts.insert(form.key.clone(), form);
@@ -974,7 +1002,11 @@ impl<'a> App<'a> {
                 Err(error) => self.error(error.to_string()),
             }
         } else if self.tab == 0 {
-            if self.current_terminal().is_some() {
+            if self.current_terminal().is_some() && self.runtime.is_some() {
+                if let Err(error) = self.open_live_selected() {
+                    self.error(error.to_string());
+                }
+            } else if self.current_terminal().is_some() {
                 self.info("Terminal opening is not available in this build. The definition is ready; nothing was started.");
             } else {
                 self.open_form(FormKey::Terminal(id, None));
@@ -1221,29 +1253,97 @@ fn project_summary(project: &Project) -> Vec<String> {
 }
 
 pub fn run(store: &Store) -> Result<()> {
+    run_screen(store, None)
+}
+
+/// Attach a host session by identity, including shells whose definitions were removed.
+pub fn run_attached(store: &Store, session: &str, takeover: bool) -> Result<()> {
+    crate::model::valid_id(session)?;
+    run_screen(store, Some((session, takeover)))
+}
+
+fn run_screen(store: &Store, attached: Option<(&str, bool)>) -> Result<()> {
+    use base64::Engine;
+    use crossterm::{
+        cursor::SetCursorStyle,
+        event::{DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture},
+    };
+    use std::io::Write;
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         bail!("The project screen needs an interactive terminal.");
     }
     let mut app = App::load(store)?;
+    app.enable_terminal_runtime(std::env::current_exe()?)?;
+    if let Some((session, takeover)) = attached {
+        app.attach_session(session, takeover)?;
+    }
     let mut terminal = ratatui::init();
     let outcome = (|| {
-        crossterm::execute!(std::io::stdout(), EnableBracketedPaste)?;
+        crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
+        let mut mouse = false;
+        let mut cursor = SetCursorStyle::DefaultUserShape;
         loop {
+            app.tick();
+            let focused = app.terminal_connected && !app.menu_visible && app.dialog.is_none();
+            let wanted_mouse = focused
+                && app
+                    .runtime
+                    .as_ref()
+                    .is_some_and(|runtime| runtime.can_input());
+            if wanted_mouse != mouse {
+                if wanted_mouse {
+                    crossterm::execute!(std::io::stdout(), EnableMouseCapture)?;
+                } else {
+                    crossterm::execute!(std::io::stdout(), DisableMouseCapture)?;
+                }
+                mouse = wanted_mouse;
+            }
+            let wanted_cursor = if focused {
+                app.runtime
+                    .as_ref()
+                    .filter(|runtime| runtime.can_input())
+                    .and_then(|runtime| runtime.screen.as_ref())
+                    .and_then(screen::cursor_style)
+                    .unwrap_or(SetCursorStyle::DefaultUserShape)
+            } else {
+                SetCursorStyle::DefaultUserShape
+            };
+            if cursor != wanted_cursor {
+                crossterm::execute!(std::io::stdout(), wanted_cursor)?;
+                cursor = wanted_cursor;
+            }
             terminal.draw(|frame| app.render(frame))?;
-            if event::poll(Duration::from_millis(200))? {
+            if let Some(text) = app.take_clipboard_request() {
+                write!(
+                    std::io::stdout(),
+                    "\x1b]52;c;{}\x07",
+                    base64::engine::general_purpose::STANDARD.encode(text.as_bytes())
+                )?;
+                std::io::stdout().flush()?;
+                app.info("Clipboard request sent. Acceptance depends on your terminal; y opens the plain copy preview.");
+            }
+            if event::poll(Duration::from_millis(30))? {
                 match app.handle_event(event::read()?)? {
                     UiOutcome::Quit => break,
                     UiOutcome::Continue => {}
-                    UiOutcome::ForwardTerminalKey(_) | UiOutcome::ForwardTerminalPaste(_) => {
-                        app.error("No terminal runtime is connected to this screen.");
-                        app.set_terminal_connected(false);
+                    action => {
+                        if let Err(error) = app.forward_terminal(action) {
+                            app.error(error.to_string());
+                        }
                     }
                 }
             }
         }
         Ok(())
     })();
-    let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
+    let _ = crossterm::execute!(
+        std::io::stdout(),
+        DisableBracketedPaste,
+        DisableFocusChange,
+        DisableMouseCapture,
+        SetCursorStyle::DefaultUserShape
+    );
     ratatui::restore();
+    drop(app); // worker detaches only its owned epochs; it never closes the host
     outcome
 }
