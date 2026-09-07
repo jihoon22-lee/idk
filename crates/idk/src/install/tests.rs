@@ -143,6 +143,11 @@ fn interruption_at_every_activation_boundary_recovers_without_restoring_live_dat
             },
         );
         assert!(outcome.is_err());
+        let review = installer.review_recovery().unwrap();
+        assert_eq!(
+            review.finish_committed_activation,
+            stop == Checkpoint::Committed
+        );
         // The live host or another client may write data after the interruption.
         let later = b"later live run result; must survive recovery";
         atomic_write(&store.state_dir.join("live-result.txt"), later).unwrap();
@@ -155,6 +160,10 @@ fn interruption_at_every_activation_boundary_recovers_without_restoring_live_dat
         assert_eq!(
             recovered.active.as_deref(),
             Some(expected.review().generation.as_str())
+        );
+        assert_eq!(
+            recovered.committed_version_floor.as_deref(),
+            Some(expected.review().manifest.version.as_str())
         );
         assert_eq!(
             fs::read(store.state_dir.join("live-result.txt")).unwrap(),
@@ -206,6 +215,11 @@ fn health_failure_before_or_after_activation_preserves_original_generation() {
         );
         installer.verify(&original.review().generation).unwrap();
         assert!(!installer.root.join(JOURNAL).exists());
+        assert_eq!(state.committed_version_floor.as_deref(), Some("0.4.0"));
+        // Merely staging a higher version must not impose a compatibility floor.
+        installer
+            .install_with(&original, |_| Ok(()), |_| Ok(()))
+            .unwrap();
     }
 }
 
@@ -319,4 +333,50 @@ fn schema_health_rejects_corruption_without_changing_existing_data() {
         !store.config_path().exists(),
         "health must not synthesize configuration"
     );
+}
+
+#[test]
+fn uninstall_preserves_the_committed_floor_when_an_older_installer_is_used() {
+    let temporary = tempfile::tempdir().unwrap();
+    let installer = Installer::open(&temporary.path().join("install")).unwrap();
+    let newer = bundle("0.4.1", 8);
+    let older = bundle(env!("CARGO_PKG_VERSION"), 9);
+    installer
+        .install_with(&newer, |_| Ok(()), |_| Ok(()))
+        .unwrap();
+    let uninstalled = installer.uninstall_entrypoints().unwrap();
+    assert!(uninstalled.active.is_none());
+    assert_eq!(
+        uninstalled.committed_version_floor.as_deref(),
+        Some("0.4.1")
+    );
+    let state_bytes = fs::read(installer.root.join(STATE)).unwrap();
+    let result = installer.install_with(
+        &older,
+        |_| panic!("downgrade must be rejected before executing health"),
+        |_| Ok(()),
+    );
+    assert!(result.is_err());
+    assert_eq!(fs::read(installer.root.join(STATE)).unwrap(), state_bytes);
+    assert_eq!(installer.status().unwrap(), uninstalled);
+    installer.verify(&newer.review().generation).unwrap();
+    installer
+        .install_with(&newer, |_| Ok(()), |_| Ok(()))
+        .unwrap();
+}
+
+#[test]
+fn previous_installation_schema_is_preserved_without_an_inferred_floor_or_migration() {
+    let temporary = tempfile::tempdir().unwrap();
+    let installer = Installer::open(&temporary.path().join("install")).unwrap();
+    let original = br#"{"schema":1,"active":null,"generations":{}}"#;
+    atomic_write(&installer.root.join(STATE), original).unwrap();
+    let candidate = bundle("0.4.0", 10);
+    assert!(installer.status().is_err());
+    assert!(installer.review_recovery().is_err());
+    assert!(installer.recover().is_err());
+    assert!(installer
+        .install_with(&candidate, |_| Ok(()), |_| Ok(()))
+        .is_err());
+    assert_eq!(fs::read(installer.root.join(STATE)).unwrap(), original);
 }

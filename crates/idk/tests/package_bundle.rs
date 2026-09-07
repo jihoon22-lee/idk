@@ -153,6 +153,30 @@ fn staging_never_overwrites_existing_user_directories_or_files() {
 }
 
 #[test]
+fn installed_permissions_require_owner_execution_and_allow_private_read_only_notices() {
+    let root = tempfile::tempdir().unwrap();
+    let bundle = verify(&archive(&files(static_elf()), None)).unwrap();
+    let stage = root.path().join("stage");
+    bundle.stage(&stage).unwrap();
+    let binary = stage.join(BINARY);
+    for mode in [0o644, 0o4755, 0o2755, 0o1755] {
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(mode)).unwrap();
+        assert!(bundle.verify_staged(&stage).is_err(), "accepted {mode:o}");
+    }
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let notices = stage.join(NOTICES);
+    for mode in [0o600, 0o400] {
+        std::fs::set_permissions(&notices, std::fs::Permissions::from_mode(mode)).unwrap();
+        bundle.verify_staged(&stage).unwrap();
+    }
+    for mode in [0o4600, 0o2600, 0o1600] {
+        std::fs::set_permissions(&notices, std::fs::Permissions::from_mode(mode)).unwrap();
+        assert!(bundle.verify_staged(&stage).is_err(), "accepted {mode:o}");
+    }
+    assert_eq!(std::fs::read(binary).unwrap(), static_elf());
+}
+
+#[test]
 fn archive_paths_links_duplicates_and_hidden_members_are_rejected_even_with_a_matching_digest() {
     let base = files(static_elf());
     for name in [

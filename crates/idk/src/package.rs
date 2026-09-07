@@ -227,7 +227,8 @@ impl VerifiedBundle {
             ensure!(
                 meta.is_file()
                     && meta.uid() == unsafe { libc::geteuid() }
-                    && meta.permissions().mode() & 0o022 == 0
+                    && meta.permissions().mode() & 0o7022 == 0
+                    && (name != BINARY || meta.permissions().mode() & 0o100 != 0)
                     && meta.len() == expected.len() as u64,
                 "installed component ownership, permissions or size changed"
             );

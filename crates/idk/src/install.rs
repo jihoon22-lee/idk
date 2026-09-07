@@ -51,13 +51,15 @@ impl Generation {
 pub struct InstallationState {
     pub schema: u32,
     pub active: Option<String>,
+    pub committed_version_floor: Option<String>,
     pub generations: BTreeMap<String, Generation>,
 }
 impl Default for InstallationState {
     fn default() -> Self {
         Self {
-            schema: 1,
+            schema: 2,
             active: None,
+            committed_version_floor: None,
             generations: BTreeMap::new(),
         }
     }
@@ -65,7 +67,7 @@ impl Default for InstallationState {
 impl InstallationState {
     fn validate(&self) -> Result<()> {
         ensure!(
-            self.schema == 1 && self.generations.len() <= MAX_GENERATIONS,
+            self.schema == 2 && self.generations.len() <= MAX_GENERATIONS,
             "unsupported or oversized installation state; preserved"
         );
         for (key, generation) in &self.generations {
@@ -81,7 +83,42 @@ impl InstallationState {
                 .is_none_or(|name| self.generations.contains_key(name)),
             "active generation is missing from inventory"
         );
+        if let Some(floor) = &self.committed_version_floor {
+            valid_version(floor)?;
+            ensure!(
+                self.generations
+                    .values()
+                    .any(|entry| &entry.version == floor),
+                "committed version floor is missing from preserved inventory"
+            );
+        }
+        if let Some(active) = &self.active {
+            let floor = self
+                .committed_version_floor
+                .as_ref()
+                .context("active installation has no committed version floor")?;
+            ensure!(
+                version_tuple(&self.generations[active].version)? <= version_tuple(floor)?,
+                "active generation exceeds the committed version floor"
+            );
+        }
         Ok(())
+    }
+
+    fn committed(&self, target: Option<&Generation>) -> Result<Self> {
+        let mut state = self.clone();
+        state.active = target.map(|target| target.name.clone());
+        if let Some(target) = target {
+            let raises_floor = match &state.committed_version_floor {
+                Some(floor) => version_tuple(&target.version)? > version_tuple(floor)?,
+                None => true,
+            };
+            if raises_floor {
+                state.committed_version_floor = Some(target.version.clone());
+            }
+        }
+        state.validate()?;
+        Ok(state)
     }
 }
 
@@ -148,8 +185,7 @@ impl Installer {
         let journal = self.read_journal()?;
         let mut finish = false;
         let active = if let Some(journal) = &journal {
-            let mut committed = journal.before.clone();
-            committed.active = journal.target.as_ref().map(|target| target.name.clone());
+            let committed = journal.before.committed(journal.target.as_ref())?;
             finish = state == committed;
             ensure!(
                 finish || state == journal.before,
@@ -210,6 +246,12 @@ impl Installer {
             version_tuple(&target.version)? >= version_tuple(env!("CARGO_PKG_VERSION"))?,
             "downgrade is unsupported; preserve workspace data and use a compatible release"
         );
+        if let Some(floor) = &before.committed_version_floor {
+            ensure!(
+                version_tuple(&target.version)? >= version_tuple(floor)?,
+                "downgrade below a previously committed release is unsupported, including after uninstall; workspace data is preserved"
+            );
+        }
         if let Some(active) = &before.active {
             ensure!(
                 version_tuple(&target.version)?
@@ -277,8 +319,7 @@ impl Installer {
             return Err(error).context("activation health failed; previous installation restored, workspace data preserved");
         }
         checkpoint(Checkpoint::Healthy)?;
-        let mut after = before;
-        after.active = Some(target.name.clone());
+        let after = before.committed(Some(&target))?;
         self.write_state(&after)?;
         checkpoint(Checkpoint::Committed)?;
         self.remove_journal()?;
@@ -295,8 +336,7 @@ impl Installer {
             return Ok(state);
         };
         let observed = self.read_state()?;
-        let mut committed = journal.before.clone();
-        committed.active = journal.target.as_ref().map(|target| target.name.clone());
+        let committed = journal.before.committed(journal.target.as_ref())?;
         if observed == committed {
             if let Some(target) = &journal.target {
                 self.verify_generation(target)?;
@@ -318,7 +358,7 @@ impl Installer {
             !self.root.join(JOURNAL).try_exists()?,
             "recover interrupted activation before uninstalling entrypoints"
         );
-        let mut state = self.read_state()?;
+        let state = self.read_state()?;
         self.check_links(&state)?;
         let journal = Journal {
             schema: 1,
@@ -331,7 +371,7 @@ impl Installer {
         )?;
         self.remove_managed_link("idk", Some(Path::new("current").join(BINARY).as_path()))?;
         self.set_active(None)?;
-        state.active = None;
+        let state = state.committed(None)?;
         self.write_state(&state)?;
         self.remove_journal()?;
         Ok(state)
