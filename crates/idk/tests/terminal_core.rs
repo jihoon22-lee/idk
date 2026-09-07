@@ -216,7 +216,7 @@ fn terminating_owned_session_preserves_unrelated_process() {
     command.args(["-f", "-i"]);
     let mut session = TerminalSession::spawn(command, 24, 80, 100).unwrap();
     session
-        .input(b"set prompt = ''; printf 'OWNED_%s\\n' ready; sleep 30\r")
+        .input(b"set prompt = ''; printf '\\nOWNED_%s\\n' ready; sleep 30\r")
         .unwrap();
     wait_for(&session, |screen| has_line(screen, "OWNED_ready"));
     session.terminate().unwrap();

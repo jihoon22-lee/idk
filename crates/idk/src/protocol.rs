@@ -1,4 +1,8 @@
 //! Bounded same-user IPC. Environments and input never enter Debug/history.
+pub use crate::git_wire::{
+    GitJobInfo, GitJobState, GitOperationInfo, GitOperationSnapshot, GitOperationState, GitTask,
+    GitValue,
+};
 use crate::model::{new_id, valid_id, TerminalDefinition, MAX_MESSAGE, PROTOCOL};
 use crate::shell::InitializationState;
 use crate::terminal::{TerminalExit, TerminalMatch, TerminalSnapshot, MAX_TERMINAL_CELLS};
@@ -33,6 +37,55 @@ pub struct Envelope {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
+    Run {
+        request: crate::run_wire::RunRequest,
+    },
+    GitSubmit {
+        task: GitTask,
+    },
+    GitJob {
+        job: String,
+    },
+    GitExecute {
+        plan: String,
+        rows: u16,
+        cols: u16,
+    },
+    GitOperations {
+        project: Option<String>,
+    },
+    GitOperationAttach {
+        operation: String,
+        takeover: bool,
+    },
+    GitOperationDetach {
+        operation: String,
+        epoch: u64,
+    },
+    GitOperationSnapshot {
+        operation: String,
+        since: Option<u64>,
+    },
+    GitOperationInput {
+        operation: String,
+        epoch: u64,
+        data: String,
+    },
+    GitOperationResize {
+        operation: String,
+        epoch: u64,
+        rows: u16,
+        cols: u16,
+    },
+    GitOperationReconcile {
+        operation: String,
+        repository: crate::git::Repository,
+    },
+    GitOperationCancel {
+        operation: String,
+        epoch: u64,
+        force: bool,
+    },
     Hello,
     List {
         project: Option<String>,
@@ -128,16 +181,64 @@ impl Request {
     pub fn is_mutating(&self) -> bool {
         !matches!(
             self,
-            Self::Hello
+            Self::Run {
+                request: crate::run_wire::RunRequest::Job { .. }
+            } | Self::Hello
                 | Self::List { .. }
                 | Self::Definition { .. }
                 | Self::Snapshot { .. }
                 | Self::Batch { .. }
                 | Self::PreviewClose { .. }
+                | Self::GitJob { .. }
+                | Self::GitOperations { .. }
+                | Self::GitOperationSnapshot { .. }
         )
     }
     fn validate(&self) -> Result<()> {
         match self {
+            Self::Run { request } => request.validate()?,
+            Self::GitSubmit { task } => task.validate()?,
+            Self::GitJob { job } => valid_id(job)?,
+            Self::GitOperationReconcile {
+                operation,
+                repository,
+            } => {
+                valid_id(operation)?;
+                crate::model::absolute_path(&repository.root)?;
+                crate::model::absolute_path(&repository.git_dir)?;
+                crate::model::absolute_path(&repository.common_dir)?;
+            }
+            Self::GitExecute { plan, rows, cols } => {
+                valid_id(plan)?;
+                validate_dimensions(*rows, *cols)?;
+            }
+            Self::GitOperations { project } => {
+                if let Some(project) = project {
+                    valid_id(project)?;
+                }
+            }
+            Self::GitOperationAttach { operation, .. }
+            | Self::GitOperationDetach { operation, .. }
+            | Self::GitOperationSnapshot { operation, .. }
+            | Self::GitOperationCancel { operation, .. } => valid_id(operation)?,
+            Self::GitOperationInput {
+                operation, data, ..
+            } => {
+                valid_id(operation)?;
+                ensure!(
+                    data.len() <= MAX_INPUT_PACKET.div_ceil(3) * 4,
+                    "Git operation input packet exceeds 64 KiB"
+                );
+            }
+            Self::GitOperationResize {
+                operation,
+                rows,
+                cols,
+                ..
+            } => {
+                valid_id(operation)?;
+                validate_dimensions(*rows, *cols)?;
+            }
             Self::Hello => {}
             Self::List { project } | Self::PreviewClose { project } => {
                 if let Some(project) = project {
@@ -230,7 +331,7 @@ impl Request {
     }
 }
 
-fn validate_environment(env: &BTreeMap<String, String>) -> Result<()> {
+pub(crate) fn validate_environment(env: &BTreeMap<String, String>) -> Result<()> {
     ensure!(env.len() <= 1024, "launch environment exceeds 1024 entries");
     let mut total = 0usize;
     for (key, value) in env {
@@ -375,6 +476,13 @@ pub struct SearchReply {
 pub struct ClosePreview {
     pub project: Option<String>,
     pub targets: Vec<SessionInfo>,
+    #[serde(default)]
+    pub run_relations: Vec<RunCloseRelation>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunCloseRelation {
+    pub session_id: String,
+    pub run_id: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloseReply {

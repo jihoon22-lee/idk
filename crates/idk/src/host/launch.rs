@@ -25,6 +25,7 @@ pub(super) struct Runtime {
     pub bootstrap: Vec<u8>,
     pub revision: u64,
     pub digest: String,
+    pub output: Option<crate::run::RunOutputSink>,
 }
 impl Runtime {
     pub fn initialization(&self) -> Result<InitializationState> {
@@ -104,5 +105,6 @@ fn prepare(
         bootstrap: prepared.bootstrap_bytes,
         revision: plan.definition_revision,
         digest: plan.launch_digest,
+        output: None,
     })
 }

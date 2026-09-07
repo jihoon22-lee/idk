@@ -1,8 +1,16 @@
 //! Project definition workflows; the runtime adapter owns terminal key encoding.
 mod draw;
 mod forms;
+mod git;
+mod git_draft;
+mod git_draw;
+mod git_view;
 pub mod input;
 mod live;
+mod run_draw;
+mod run_form;
+mod run_log;
+mod runs;
 mod runtime;
 pub mod screen;
 
@@ -74,6 +82,8 @@ struct TransientReview {
 
 #[derive(Debug, Clone)]
 enum Dialog {
+    Run(Box<runs::RunDialog>),
+    Git(Box<git::GitDialog>),
     Live(live::LiveDialog),
     Form(Form),
     Sources(SourceList),
@@ -115,6 +125,8 @@ pub struct App<'a> {
     terminal_connected: bool,
     menu_from_terminal: bool,
     runtime: Option<runtime::Runtime>,
+    git: git::GitUi,
+    runs: runs::RunUi,
     viewport: ratatui::layout::Rect,
     clipboard_request: Option<String>,
 }
@@ -156,6 +168,8 @@ impl<'a> App<'a> {
             terminal_connected: false,
             menu_from_terminal: false,
             runtime: None,
+            git: git::GitUi::default(),
+            runs: runs::RunUi::default(),
             viewport: ratatui::layout::Rect::default(),
             clipboard_request: None,
         };
@@ -185,7 +199,7 @@ impl<'a> App<'a> {
     /// with true and never claim that a saved definition is a running terminal.
     pub fn set_terminal_connected(&mut self, connected: bool) {
         self.terminal_connected = connected;
-        self.menu_visible = !connected;
+        self.menu_visible = !connected || self.dialog.is_some();
         self.menu_from_terminal = false;
     }
 
@@ -197,7 +211,25 @@ impl<'a> App<'a> {
             Event::Key(key) if key.kind != KeyEventKind::Release => self.handle_key(key),
             Event::Paste(text) => {
                 if self.terminal_connected && !self.menu_visible && self.dialog.is_none() {
+                    if self.captured_run_input() {
+                        self.info(
+                            "Captured Run is read-only. Ctrl+g opens controls; k cancels the Run.",
+                        );
+                        return Ok(UiOutcome::Continue);
+                    }
                     return Ok(UiOutcome::ForwardTerminalPaste(text));
+                }
+                if matches!(self.dialog, Some(Dialog::Run(_))) {
+                    if let Err(error) = self.run_paste(&text) {
+                        self.error(error.to_string());
+                    }
+                    return Ok(UiOutcome::Continue);
+                }
+                if matches!(self.dialog, Some(Dialog::Git(_))) {
+                    if let Err(error) = self.git_paste(&text) {
+                        self.error(error.to_string());
+                    }
+                    return Ok(UiOutcome::Continue);
                 }
                 let result = match self.dialog.as_mut() {
                     Some(Dialog::Live(live::LiveDialog::Search { input, .. })) => {
@@ -236,6 +268,9 @@ impl<'a> App<'a> {
                 } else if self.menu_from_terminal {
                     self.menu_visible = false;
                     self.menu_from_terminal = false;
+                    if self.captured_run_input() {
+                        return Ok(UiOutcome::Continue);
+                    }
                     return Ok(UiOutcome::ForwardTerminalKey(key));
                 } else {
                     self.menu_visible = false;
@@ -246,9 +281,29 @@ impl<'a> App<'a> {
             return Ok(UiOutcome::Continue);
         }
         if self.terminal_connected && !self.menu_visible {
+            if self.captured_run_input() {
+                self.info("Captured Run is read-only. Ctrl+g opens controls; k cancels the Run.");
+                return Ok(UiOutcome::Continue);
+            }
             return Ok(UiOutcome::ForwardTerminalKey(key));
         }
         self.menu_from_terminal = false;
+        if matches!(
+            key.code,
+            KeyCode::Char('1' | '2')
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Tab
+                | KeyCode::BackTab
+        ) {
+            self.invalidate_run_navigation();
+        }
+        if self.run_menu_key(key) {
+            return Ok(UiOutcome::Continue);
+        }
+        if self.git_operation_key(key) || self.git_menu_key(key) {
+            return Ok(UiOutcome::Continue);
+        }
         if self.live_menu_key(key) {
             return Ok(UiOutcome::Continue);
         }
@@ -562,6 +617,12 @@ impl<'a> App<'a> {
     fn handle_dialog(&mut self, key: KeyEvent) {
         let dialog = self.dialog.take().unwrap();
         match dialog {
+            Dialog::Run(dialog) => {
+                if let Err(error) = self.handle_run_dialog(*dialog, key) {
+                    self.error(error.to_string());
+                }
+            }
+            Dialog::Git(dialog) => self.handle_git_dialog(*dialog, key),
             Dialog::Live(dialog) => self.handle_live_dialog(dialog, key),
             Dialog::Form(mut form) => {
                 if key.code == KeyCode::Esc {
@@ -1253,16 +1314,26 @@ fn project_summary(project: &Project) -> Vec<String> {
 }
 
 pub fn run(store: &Store) -> Result<()> {
-    run_screen(store, None)
+    run_screen(store, None, None)
 }
 
 /// Attach a host session by identity, including shells whose definitions were removed.
 pub fn run_attached(store: &Store, session: &str, takeover: bool) -> Result<()> {
     crate::model::valid_id(session)?;
-    run_screen(store, Some((session, takeover)))
+    run_screen(store, Some((session, takeover)), None)
 }
 
-fn run_screen(store: &Store, attached: Option<(&str, bool)>) -> Result<()> {
+/// Attach a recorded Run by identity, including Runs with removed task definitions.
+pub fn run_attached_run(store: &Store, run_id: &str, takeover: bool) -> Result<()> {
+    crate::model::valid_id(run_id)?;
+    run_screen(store, None, Some((run_id, takeover)))
+}
+
+fn run_screen(
+    store: &Store,
+    attached: Option<(&str, bool)>,
+    attached_run: Option<(&str, bool)>,
+) -> Result<()> {
     use base64::Engine;
     use crossterm::{
         cursor::SetCursorStyle,
@@ -1277,6 +1348,9 @@ fn run_screen(store: &Store, attached: Option<(&str, bool)>) -> Result<()> {
     if let Some((session, takeover)) = attached {
         app.attach_session(session, takeover)?;
     }
+    if let Some((run_id, takeover)) = attached_run {
+        app.attach_run(run_id, takeover)?;
+    }
     let mut terminal = ratatui::init();
     let outcome = (|| {
         crossterm::execute!(std::io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
@@ -1285,11 +1359,7 @@ fn run_screen(store: &Store, attached: Option<(&str, bool)>) -> Result<()> {
         loop {
             app.tick();
             let focused = app.terminal_connected && !app.menu_visible && app.dialog.is_none();
-            let wanted_mouse = focused
-                && app
-                    .runtime
-                    .as_ref()
-                    .is_some_and(|runtime| runtime.can_input());
+            let wanted_mouse = focused && app.terminal_writable();
             if wanted_mouse != mouse {
                 if wanted_mouse {
                     crossterm::execute!(std::io::stdout(), EnableMouseCapture)?;
@@ -1298,11 +1368,8 @@ fn run_screen(store: &Store, attached: Option<(&str, bool)>) -> Result<()> {
                 }
                 mouse = wanted_mouse;
             }
-            let wanted_cursor = if focused {
-                app.runtime
-                    .as_ref()
-                    .filter(|runtime| runtime.can_input())
-                    .and_then(|runtime| runtime.screen.as_ref())
+            let wanted_cursor = if focused && app.terminal_writable() {
+                app.terminal_snapshot()
                     .and_then(screen::cursor_style)
                     .unwrap_or(SetCursorStyle::DefaultUserShape)
             } else {

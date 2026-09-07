@@ -12,6 +12,9 @@ jobs:
   native:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      # Each lifecycle fixture creates a separate host and several real PTYs.
+      RUST_TEST_THREADS: 4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -30,6 +33,11 @@ jobs:
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo test --locked --workspace
           python3 tests/test_native_packaging.py
+
+      - name: Host startup and Git UI with software SHA-256
+        env:
+          IDK_TEST_SHELL: /usr/bin/tcsh
+        run: cargo test --locked -p idk-workspace --features sha2/force-soft --test ui_git -- --nocapture
 
       - name: Actual tcsh and PTY integration (required)
         env:

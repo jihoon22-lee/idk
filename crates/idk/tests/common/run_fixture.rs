@@ -1,0 +1,57 @@
+use idk_workspace::run_wire::{
+    ArtifactRelation, LogDescriptor, LogState, RunInfo, RunState, SourceObservation,
+};
+use std::path::Path;
+pub fn run(cwd: &Path) -> RunInfo {
+    RunInfo {
+        run_id: "11111111-1111-4111-8111-111111111111".into(),
+        operation_id: "22222222-2222-4222-8222-222222222222".into(),
+        project_id: "33333333-3333-4333-8333-333333333333".into(),
+        task_id: "44444444-4444-4444-8444-444444444444".into(),
+        name: "Compile fixture".into(),
+        session_id: None,
+        state: RunState::Failed,
+        definition_revision: 4,
+        launch_digest: "a".repeat(64),
+        initialization_digest: "b".repeat(64),
+        cwd: cwd.to_owned(),
+        source_roots: vec![cwd.to_owned()],
+        build_outputs: Vec::new(),
+        started_at_ms: 10,
+        finished_at_ms: Some(20),
+        timeout_seconds: None,
+        timeout_requested: false,
+        cancel_requested: false,
+        cleanup_confirmed: true,
+        exit_code: Some(2),
+        signal: None,
+        steps: Vec::new(),
+        source_start: SourceObservation {
+            identity: None,
+            generation: Some(7),
+            git_head: None,
+            dirty: Some(true),
+            status_digest: None,
+            error: None,
+        },
+        source_end: None,
+        source_changed: Some(false),
+        artifact: ArtifactRelation {
+            path: None,
+            from_task: None,
+            from_run: None,
+            verified_bytes: false,
+        },
+        log: LogDescriptor {
+            run_id: "11111111-1111-4111-8111-111111111111".into(),
+            generation: 1,
+            state: LogState::Complete,
+            bytes: 0,
+            observed_bytes: 0,
+            limit_bytes: 4 * 1024 * 1024,
+            merged_pty: true,
+            file_identity: None,
+        },
+        error: None,
+    }
+}
