@@ -1,0 +1,463 @@
+llvm-libunwind: additional upstream source copyright and license comments.
+Whole matching C block / contiguous line comments are preserved; no source code is executed.
+The complete primary project license texts accompany this supplement.
+
+===== libunwind/include/__libunwind_config.h =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/include/__libunwind_config.h
+Source SHA-256: 9c4d2213e9b6dd77da80d066e7a320ddbf3b62a8e511026e4c7a2e10ec9059f8
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/include/libunwind.h =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/include/libunwind.h
+Source SHA-256: 34d08a481ab71fc699971638cb58693cc9fcc6dafe4680963cb937359cfa6edb
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+// Compatible with libunwind API documented at:
+//   http://www.nongnu.org/libunwind/man/libunwind(3).html
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/include/mach-o/compact_unwind_encoding.h =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/include/mach-o/compact_unwind_encoding.h
+Source SHA-256: 06f58e9d0058583b6da91ca2328fa663f80d089496a4979754ee7608fe9bd877
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+// Darwin's alternative to DWARF based unwind encodings.
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/include/unwind.h =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/include/unwind.h
+Source SHA-256: e4a58637fc8ca1d29cd600c3c4416aafed50085edf276fa076214c8d81c263f0
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+// C++ ABI Level 1 ABI documented at:
+//   https://itanium-cxx-abi.github.io/cxx-abi/abi-eh.html
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/include/unwind_arm_ehabi.h =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/include/unwind_arm_ehabi.h
+Source SHA-256: 04cf22a069866ae35bf075c36f8d9112700bb9772653d80d9c6c4c856f4e7dbb
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+// C++ ABI Level 1 ABI documented at:
+//   https://github.com/ARM-software/abi-aa/blob/main/ehabi32/ehabi32.rst
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/include/unwind_itanium.h =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/include/unwind_itanium.h
+Source SHA-256: c8cc61d806e13a2e75e93f1c15afd432f93a99283d27d15f5a28a3ebee989cba
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+// C++ ABI Level 1 ABI documented at:
+//   https://itanium-cxx-abi.github.io/cxx-abi/abi-eh.html
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/AddressSpace.hpp =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/AddressSpace.hpp
+Source SHA-256: 6c7011631faabc56c3245b1c6eaf161ecdef541bd751a2ac96f87e39cbbcf997
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+// Abstracts accessing local vs remote address spaces.
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/CompactUnwinder.hpp =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/CompactUnwinder.hpp
+Source SHA-256: 9a4d4db5484c6805b75e04c6beb41ef0eed5c2f51b5f6969fa717f8410950a9f
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//  Does runtime stack unwinding using compact unwind encodings.
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/DwarfInstructions.hpp =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/DwarfInstructions.hpp
+Source SHA-256: 1dc010b5854544a4c7635d230078f39a85afa5035ea1a7a42269edd43a521984
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//  Processor specific interpretation of DWARF unwind info.
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/DwarfParser.hpp =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/DwarfParser.hpp
+Source SHA-256: 97daf4400e58df77a01faa6a037b9def3b5f852829d70a41d0e383386da5cc30
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//  Parses DWARF CFIs (FDEs and CIEs).
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/EHHeaderParser.hpp =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/EHHeaderParser.hpp
+Source SHA-256: 09a9460a2d7c6eba4f5f47e6e353cff3d283d3f6ff242a085cf9d7d591a1a7f1
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//  Parses ELF .eh_frame_hdr sections.
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/FrameHeaderCache.hpp =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/FrameHeaderCache.hpp
+Source SHA-256: ba9d7a8ae3c936fce48639f3f0964f67657cc8ffcccdb75416d3fa7c304845e9
+//===-FrameHeaderCache.hpp ------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+// Cache the elf program headers necessary to unwind the stack more efficiently
+// in the presence of many dsos.
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/RWMutex.hpp =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/RWMutex.hpp
+Source SHA-256: 7faac54d14bce80d620c3fd2929eccfcadc914a11ea9b5a226a3a7b902b0175d
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+// Abstract interface to shared reader/writer log, hiding platform and
+// configuration differences.
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/Registers.hpp =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/Registers.hpp
+Source SHA-256: 138d88e237a4584f431159af9afcba15e3d585f196065bb48b4b7231d239db4b
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//  Models register sets for supported processors.
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/Unwind-EHABI.cpp =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/Unwind-EHABI.cpp
+Source SHA-256: 352ab8ec8eaa93a790c261c418ffea18fc78d55ba805601df369a310dc086417
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//  Implements ARM zero-cost C++ exceptions
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/Unwind-EHABI.h =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/Unwind-EHABI.h
+Source SHA-256: c04fdebcd31e26de7615b82751373cc64ef83d02b24dbaaf0e112d0a559acc6b
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/Unwind-seh.cpp =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/Unwind-seh.cpp
+Source SHA-256: 058ae089c7d42ade35b730f87443b34018b21bea75a4ea2226e9fffdf7500160
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+//  Implements SEH-based Itanium C++ exceptions.
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/Unwind-sjlj.c =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/Unwind-sjlj.c
+Source SHA-256: 25be6bc007751639556d0e896a0479affd8b23138e6cc3f4b2d8d7f257e1b678
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//  Implements setjump-longjump based C++ exceptions
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/Unwind-wasm.c =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/Unwind-wasm.c
+Source SHA-256: ab81b5759fc30425ec59fa395c90dd04d48eef8b7b1541924d32074d5917130e
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//  Implements Wasm exception handling proposal
+//  (https://github.com/WebAssembly/exception-handling) based C++ exceptions
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/UnwindCursor.hpp =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/UnwindCursor.hpp
+Source SHA-256: d3495f491599c203fa187c57ae1faf1655b49ae6114e4c7af8bd7c34097db535
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+// C++ interface to lower levels of libunwind
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/UnwindLevel1-gcc-ext.c =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/UnwindLevel1-gcc-ext.c
+Source SHA-256: 3bed106de18fec9d1c52cb7bc3d5db89d3225252f3c0312597d159edbbd6e802
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//  Implements gcc extensions to the C++ ABI Exception Handling Level 1.
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/UnwindLevel1.c =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/UnwindLevel1.c
+Source SHA-256: 376b863ccf09f1502e675dec7cc1154a4450e588bacd7768fb768fd1be7b4c04
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+// Implements C++ ABI Exception Handling Level 1 as documented at:
+//      https://itanium-cxx-abi.github.io/cxx-abi/abi-eh.html
+// using libunwind
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/UnwindRegistersRestore.S =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/UnwindRegistersRestore.S
+Source SHA-256: 340577c57e5879b6974517fa599a23a4fde8687f078ddd49d78076d37e41d32a
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/UnwindRegistersSave.S =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/UnwindRegistersSave.S
+Source SHA-256: 786a1dcb895230704a27e661ebd5c363b50f3ddcf0387ed4507e8de3b1d1d75d
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/UnwindRustSgx.c =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/UnwindRustSgx.c
+Source SHA-256: 747b05bb583241b11d7e4ad2e7b7f2c883161cb1b01252eaf798ad9108c11130
+//===--------------------- UnwindRustSgx.c ----------------------------------===//
+//
+////                     The LLVM Compiler Infrastructure
+////
+//// This file is dual licensed under the MIT and the University of Illinois Open
+//// Source Licenses. See LICENSE.TXT for details.
+////
+////
+////===----------------------------------------------------------------------===//
+
+===== libunwind/src/UnwindRustSgx.h =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/UnwindRustSgx.h
+Source SHA-256: 46d9e27cea2428721ec043a51f310483095421e418ec8e9f4f0b94673080c646
+//===--------------------- UnwindRustSgx.h ----------------------------------===//
+//
+////                     The LLVM Compiler Infrastructure
+////
+//// This file is dual licensed under the MIT and the University of Illinois Open
+//// Source Licenses. See LICENSE.TXT for details.
+////
+////
+////===----------------------------------------------------------------------===//
+
+===== libunwind/src/Unwind_AIXExtras.cpp =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/Unwind_AIXExtras.cpp
+Source SHA-256: e1b8b544fd6f9aeca43856a93d001f82b9ce6c586d4c3c048dc964874e5a31f2
+//===--------------------- Unwind_AIXExtras.cpp -------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/assembly.h =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/assembly.h
+Source SHA-256: 1b802ab55f7b949a9e8b1a1c7c82b6a84d068610aeb823993bdeee1964c98eb3
+/* ===-- assembly.h - libUnwind assembler support macros -------------------===
+ *
+ * Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+ * See https://llvm.org/LICENSE.txt for license information.
+ * SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+ *
+ * ===----------------------------------------------------------------------===
+ *
+ * This file defines macros for use in libUnwind assembler source.
+ * This file is not part of the interface of this library.
+ *
+ * ===----------------------------------------------------------------------===
+ */
+
+===== libunwind/src/config.h =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/config.h
+Source SHA-256: 8826f390d1e9e600040c40c45bccffe6f11a9ea70f3d73238be86b57843ffc58
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//  Defines macros used within libunwind project.
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/dwarf2.h =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/dwarf2.h
+Source SHA-256: e10d240e2f19de7121a8afaf3d4841a65936723e69d636f7e3241e14802d0bfc
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+/*
+   These constants were taken from version 3 of the DWARF standard,
+   which is Copyright (c) 2005 Free Standards Group, and
+   Copyright (c) 1992, 1993 UNIX International, Inc.
+*/
+
+===== libunwind/src/libunwind.cpp =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/libunwind.cpp
+Source SHA-256: 413a02f5f0355e07fe3ac97588c3a63ea04836b5b6b1587643bf6a32f4550492
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//  Implements unw_* functions from <libunwind.h>
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/libunwind_ext.h =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/libunwind_ext.h
+Source SHA-256: 18f02a65758991c3cd371121861c2a213d6699f929e70104ed791ce32979d945
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//  Extensions to libunwind API.
+//
+//===----------------------------------------------------------------------===//
+
+===== libunwind/src/shadow_stack_unwind.h =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/src/shadow_stack_unwind.h
+Source SHA-256: c18056e575fcf2deed7ccfe469c1c7e6c1f390f64b28cac5aa304de3bb7a50fa
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//
+//===----------------------------------------------------------------------===//
+

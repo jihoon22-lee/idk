@@ -1,0 +1,26 @@
+compiler-rt-crt: additional upstream source copyright and license comments.
+Whole matching C block / contiguous line comments are preserved; no source code is executed.
+The complete primary project license texts accompany this supplement.
+
+===== compiler-rt/lib/builtins/crtbegin.c =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/compiler-rt/lib/builtins/crtbegin.c
+Source SHA-256: ad21b03ddb3f66530ef34394cc1819f5156d536c30efba7486a7834120fba93f
+//===-- crtbegin.c - Start of constructors and destructors ----------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+===== compiler-rt/lib/builtins/crtend.c =====
+Source: https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/compiler-rt/lib/builtins/crtend.c
+Source SHA-256: 6d5a61b8f2f6fa541a12ec52aea40b5085e40fcf8626984d318523cb30335d06
+//===-- crtend.c - End of constructors and destructors --------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
