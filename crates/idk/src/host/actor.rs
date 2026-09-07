@@ -574,6 +574,15 @@ impl Actor {
                     slot.info.state == SessionState::Running,
                     "terminal is not accepting input"
                 );
+                // The sink comes from the durable, reviewed Run intent. A
+                // captured task may unexpectedly prompt or echo typed input;
+                // only explicitly disabled logging permits keyboard input.
+                ensure!(
+                    !matches!(slot.purpose, SlotPurpose::Run { .. })
+                        || slot.runtime.as_ref().and_then(|runtime| runtime.output.as_ref())
+                            .is_some_and(|output| output.descriptor().state == crate::run_wire::LogState::Disabled),
+                    "captured Run is read-only; use Run Cancel or register an interactive task with logging disabled"
+                );
                 slot.terminal()?.input(&bytes)?;
                 value(())
             }

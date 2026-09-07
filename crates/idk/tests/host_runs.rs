@@ -808,3 +808,77 @@ fn repository_registered_after_host_start_becomes_ready_without_starting_a_task(
     assert!(runs.is_empty());
     shutdown(&mut client, &mut host);
 }
+
+#[test]
+fn captured_raw_run_rejects_typed_secret_without_changing_input_or_log() {
+    let f = Fixture::new(
+        "echo WAITING_RAW_INPUT\nset response = $<\necho \"$response\" > received",
+        false,
+    );
+    let (mut host, mut client) = f.host();
+    let job = f.start(&mut client, &new_id());
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let session = started.run.session_id.clone().unwrap();
+    let attached = client.attach(&session, false).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let before = loop {
+        let RunResult::Log(log) = request(
+            &mut client,
+            RunRequest::Log {
+                run_id: started.run.run_id.clone(),
+                generation: 1,
+                offset: 0,
+                limit: 65536,
+            },
+        ) else {
+            panic!()
+        };
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(log.data_base64)
+            .unwrap();
+        if String::from_utf8_lossy(&raw).contains("WAITING_RAW_INPUT") {
+            break raw;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let error = client
+        .input(&session, attached.input_epoch, b"RAW_SECRET_SENTINEL\n")
+        .expect_err("captured Run accepted keyboard input");
+    assert!(error.to_string().contains("read-only"));
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(!f.root.join("received").exists());
+    let screen = client.snapshot(&session, None).unwrap().screen.unwrap();
+    assert!(!screen.text().contains("RAW_SECRET_SENTINEL"));
+    let RunResult::Log(after) = request(
+        &mut client,
+        RunRequest::Log {
+            run_id: started.run.run_id.clone(),
+            generation: 1,
+            offset: 0,
+            limit: 65536,
+        },
+    ) else {
+        panic!()
+    };
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(after.data_base64)
+            .unwrap(),
+        before
+    );
+    request(
+        &mut client,
+        RunRequest::Cancel {
+            run_id: started.run.run_id.clone(),
+            force: true,
+        },
+    );
+    assert_eq!(
+        finished(&mut client, &started.run.run_id).state,
+        RunState::Cancelled
+    );
+    shutdown(&mut client, &mut host);
+}
