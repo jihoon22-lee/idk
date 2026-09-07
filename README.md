@@ -30,13 +30,13 @@ idle로 추정하지 않는다. 사용자 소스·`.csh`·기존 설정과 무�
 ## 설치와 시작
 
 [릴리스](https://github.com/jihoon22-lee/idk/releases)의
-`idk-0.4.0-x86_64-unknown-linux-musl.tar.gz`와 **별도의 신뢰할 수 있는 경로로 확인한 SHA-256**을
+`idk-0.4.1-x86_64-unknown-linux-musl.tar.gz`와 **별도의 신뢰할 수 있는 경로로 확인한 SHA-256**을
 사용한다. archive와 checksum이 서로 맞는 것만으로 publisher 신뢰가 생기는 것은 아니다.
 [반입·첫 실행 안내](docs/closed-network-setup.md)에 따라 실행 파일을 준비한 뒤 설치를 검토한다.
 
 ```text
-./idk-linux-x86_64 package verify /absolute/path/idk-0.4.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
-./idk-linux-x86_64 package install /absolute/path/idk-0.4.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256> --prefix /absolute/user/path/idk-workspace
+./idk-linux-x86_64 package verify /absolute/path/idk-0.4.1-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
+./idk-linux-x86_64 package install /absolute/path/idk-0.4.1-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256> --prefix /absolute/user/path/idk-workspace
 ```
 
 검토한 설치 명령에 `--yes`를 붙여 활성화한다. 이후 지정 prefix의 `idk`로 실행한다.

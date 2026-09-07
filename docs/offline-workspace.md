@@ -1,6 +1,6 @@
 # v0.4 오프라인 설치·업데이트·복구
 
-v0.4 기본 반입물은 `idk-0.4.0-x86_64-unknown-linux-musl.tar.gz` 하나다. 내부에는 정적 실행 파일,
+v0.4 기본 반입물은 `idk-0.4.1-x86_64-unknown-linux-musl.tar.gz` 하나다. 내부에는 정적 실행 파일,
 manifest, 구성요소 checksum, 의존성 inventory, 라이선스 원문이 있다. 제품 실행에 Python·Rust·C
 compiler나 사외 네트워크가 필요하지 않다. 기존 csh/tcsh와 Git은 해당 환경의 승인된 실행 파일을
 사용한다. 별도 도구 팩·전체 구 기능 호환·자동 도구 설치는 포함하지 않는다.
@@ -15,8 +15,8 @@ compiler나 사외 네트워크가 필요하지 않다. 기존 csh/tcsh와 Git�
    실제 승인 값으로 바꾼다. 프로그램은 `--yes` 전까지 활성화하지 않는다.
 
 ```text
-./idk-linux-x86_64 package verify /absolute/path/idk-0.4.0-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256>
-./idk-linux-x86_64 package install /absolute/path/idk-0.4.0-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256> --prefix /absolute/user/path/idk-workspace
+./idk-linux-x86_64 package verify /absolute/path/idk-0.4.1-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256>
+./idk-linux-x86_64 package install /absolute/path/idk-0.4.1-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256> --prefix /absolute/user/path/idk-workspace
 ```
 
 검토한 같은 명령에 `--yes`를 붙여 설치한다. 이후 `/absolute/user/path/idk-workspace/idk`로

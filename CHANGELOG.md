@@ -9,6 +9,28 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-07
+
+### Fixed
+- Run 타임아웃 취소 기록의 저장이 실패하면 이전 실행 상태를 복원한다. 저장소가 복구되면
+  자동 취소를 재시도하고, 취소 의도가 저장된 뒤에만 소유 프로세스를 정리한다.
+- 정상 타임아웃과 저장 실패 후 복구를 실제 host/셸 회귀 검사에 추가했다. 오류 발생을 확인한
+  뒤 저장 경로를 복구하며, 명시적 취소 없이 종료 상태와 정리 결과가 저장되는지 확인한다.
+
+### Changed
+- v0.4.0 명세·WP08·수용 원장의 공개 전 대기 표시를 실제 공개 결과와 연결하고,
+  공개 후 발견한 타임아웃 결함과 당시 검증 범위를 구분했다.
+- 현재 설치 안내의 번들 버전을 0.4.1로 갱신했다. 설정·상태 schema는 변경하지 않는다.
+- 설치 회귀 검사의 버전을 현재 제품과 다음 패치 버전에서 구성해, 버전 갱신 후에도
+  업데이트·실패 복구·downgrade 차단 조건을 유지한다.
+
+### 후속 수용
+- 대상 RHEL·폐쇄망 정책 실기는 미실행이며 [후속 #53](https://github.com/jihoon22-lee/idk/issues/53)에서
+  공개된 0.4.1 결과물로 사용자가 수행한다. NFS host state/runtime은 계속 지원하지 않으며
+  승인된 로컬 XDG 경로나 명시적 `--data-dir`를 사용한다.
+- 업데이트는 실행 중인 구 host를 재시작하지 않는다. 이번 수정은 0.4.1 host에 적용되므로,
+  기존 셸·Run을 마친 뒤 원래 generation으로 host를 정상 종료하고 새 entrypoint로 시작한다.
+
 ## [0.4.0] - 2026-09-07
 
 ### Added
@@ -271,7 +293,8 @@
 [Native release promotion](docs/native-release.md)을 따른다. 공개 전 검사 완료와 대상
 RHEL·폐쇄망 실기는 별도이며 실기는 공개 후 사용자 후속으로 남긴다.
 
-[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/jihoon22-lee/idk/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jihoon22-lee/idk/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/jihoon22-lee/idk/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jihoon22-lee/idk/compare/v0.2.1...v0.3.0
