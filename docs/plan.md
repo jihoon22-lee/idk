@@ -1,7 +1,9 @@
 # idk — Integrated Developer Kit
 
-> **이 저장소의 작업 계획서(정본)다.** Phase 0부터 순서대로 진행한다.
-> 규약은 `AGENTS.md` 에 요약되어 있고, 상세 근거는 이 문서에 있다.
+> **기존 Python 구현의 설계·Phase 0~5 계획이다.** 아래 결정과 작업 순서는 해당 구현에 적용한다.
+> v0.4 재설계의 범위·진행은 [메인 #38](https://github.com/jihoon22-lee/idk/issues/38),
+> 수용 기준은 [명세 #39](https://github.com/jihoon22-lee/idk/issues/39)를 따른다.
+> 개발 규약과 기존/신규 적용 범위는 [AGENTS.md](../AGENTS.md)가 정본이다.
 
 > Phase 0~3과 v0.2.0 보안·안정성·build MVP 작업은 v0.2.0 범위에 반영되어 있다.
 > 핵심 실행 아티팩트는 `dist/idk.pyz` 한 개이며, ws/run pane/clipboard용 vendor는 선택 입력이다.

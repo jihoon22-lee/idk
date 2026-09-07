@@ -1,0 +1,107 @@
+name: native
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Native build and test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tcsh csh binutils
+          native_toolchain="$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)"
+          [[ "$native_toolchain" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          rustup toolchain install "$native_toolchain" --profile minimal --component clippy --component rustfmt
+          rustup target add --toolchain "$native_toolchain" x86_64-unknown-linux-musl
+
+      - name: Format, lint and unit tests
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace
+
+      - name: Actual tcsh and PTY integration (required)
+        env:
+          IDK_TEST_SHELL: /usr/bin/tcsh
+          IDK_TEST_LAUNCHER: ${{ github.workspace }}/target/debug/idk
+        run: |
+          cargo build --locked -p idk-workspace --bin idk
+          cargo test --locked --workspace -- --ignored --nocapture
+
+      - name: Actual traditional BSD csh initialization (required)
+        env:
+          IDK_TEST_LAUNCHER: ${{ github.workspace }}/target/debug/idk
+        run: |
+          native_bsd_shell="$(command -v bsd-csh)"
+          test -x "$native_bsd_shell"
+          IDK_TEST_SHELL="$native_bsd_shell" cargo test --locked -p idk-workspace --test csh_init -- --nocapture
+
+      - name: First static native candidate and packaged probe
+        env:
+          IDK_TEST_SHELL: /usr/bin/tcsh
+        run: |
+          ./scripts/build-native.sh
+          ./scripts/smoke-native.sh
+          mkdir -p "$RUNNER_TEMP/idk-native-first"
+          cp dist/idk-linux-x86_64 "$RUNNER_TEMP/idk-native-first/idk-linux-x86_64"
+
+      - name: Independent build directory reproducibility
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/idk-native-second-target
+          IDK_NATIVE_DIST: ${{ runner.temp }}/idk-native-second-dist
+          IDK_TEST_SHELL: /usr/bin/tcsh
+        run: |
+          ./scripts/build-native.sh
+          ./scripts/smoke-native.sh
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          first = json.loads(Path("dist/idk-linux-x86_64.manifest.json").read_text())
+          second = json.loads((Path(os.environ["IDK_NATIVE_DIST"]) / "idk-linux-x86_64.manifest.json").read_text())
+          assert first["input_tree_sha256"] == second["input_tree_sha256"], "reproducibility requires unchanged build inputs"
+          assert first["source"]["sha"] == second["source"]["sha"]
+          PY
+          cmp "$RUNNER_TEMP/idk-native-first/idk-linux-x86_64" "$IDK_NATIVE_DIST/idk-linux-x86_64"
+
+      - name: Prepare test-only UBI 8.10 and tcsh image
+        run: docker build --file tests/containers/ubi8.Dockerfile --tag idk-ubi8-test .
+
+      - name: Exact candidate on UBI 8.10 without network or build tools
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/dist,dst=/candidate,readonly" \
+            idk-ubi8-test bash -euc '
+              test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
+              test "$(id -u)" != 0
+              ! command -v cargo
+              ! command -v rustc
+              ! command -v gcc
+              cd /candidate
+              sha256sum --check --strict idk-native-SHA256SUMS
+              ./idk-linux-x86_64 --version
+              ./idk-linux-x86_64 __shell-exec --shell /usr/local/bin/tcsh --command "echo IDK_UBI_HELPER_OK"
+              ./idk-linux-x86_64 probe --shell /usr/local/bin/tcsh
+            '
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: idk-native-candidate
+          if-no-files-found: error
+          path: |
+            dist/idk-linux-x86_64
+            dist/idk-linux-x86_64.manifest.json
+            dist/idk-native-SHA256SUMS
+            dist/idk-third-party-licenses.json
+            dist/idk-THIRD-PARTY-NOTICES.txt
