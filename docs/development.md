@@ -7,6 +7,26 @@
 
 ## 검증
 
+### v0.4 네이티브 기반
+
+실제 csh/tcsh를 테스트 환경에 준비하고 `IDK_TEST_SHELL`에 절대 경로를 지정한다.
+고정 Rust toolchain은 `rust-toolchain.toml`, 의존성은 `Cargo.lock`을 따른다.
+
+```bash
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+cargo test --locked --test terminal_core -- --ignored
+./scripts/build-native.sh
+./scripts/smoke-native.sh
+```
+
+실제 셸 테스트의 환경 미준비는 실패이며 ignored native 검사는 두 번째 test 명령으로 명시 실행한다.
+정적 바이너리는 Ubuntu 및 UBI 8.10의 격리된 rootless/network-none 환경에서도 검사한다.
+이 결과가 실제 폐쇄망 정책이나 사용자 startup 파일을 검증한 것은 아니다.
+
+### 기존 Python 구현
+
 아래는 기존 Python 구현의 검사다. CI의 실행 정본은
 [ci.yml](../.github/workflows/ci.yml), 커버리지 기준은 [pyproject.toml](../pyproject.toml)이다.
 
@@ -58,9 +78,11 @@ vendor 바이너리를 PATH에 준비하고 `uv run --python 3.10 --group dev py
 3. WSL/Linux에서 실제 후보 패키지 실행.
 4. 대상 RHEL 및 폐쇄망 정책 수용.
 
-결과는 PASS/실패/미실행/확인 불가와 제한을 구분한다. 필수 실기 증거가 없으면 최종 수용을
-완료하지 않는다. 독립적인 구현은 계속할 수 있다. 폐쇄망 증거는 현지에 두고 허용된 판정만
-외부에 기록하며, 반출 가능한 로그·경로·hash가 있다고 가정하지 않는다.
+결과는 PASS/실패/미실행/확인 불가와 제한을 구분한다. 2026-09-07 사용자 결정에 따라 개발·CI·
+패키지 검증을 마쳐 릴리스한 뒤 사용자가 공개 결과물로 폐쇄망 실기를 수행한다. 마일스톤의 개발·
+릴리스 완료와 실기 수용은 별개이며, 실기는 후속 항목에 미실행으로 추적한다. 로컬·CI·패키지의
+필수 실패는 공개 blocker다. 폐쇄망 증거는 현지에 두고 허용된 판정만 외부에 기록하며,
+반출 가능한 로그·경로·hash가 있다고 가정하지 않는다.
 
 ## 스킬과 작업 기록
 
