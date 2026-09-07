@@ -1,9 +1,11 @@
 # 구조
 
-`idk` 가 **실제로 어떻게 만들어져 있는지**를 설명한다.
+현재 `idk`의 **기존 Python 구현이 실제로 어떻게 만들어져 있는지**를 설명한다.
 왜 이런 선택을 했는지(설계 근거)는 [plan.md](plan.md), 쓰는 법은 [GUIDE.md](GUIDE.md).
 
-기여하기 전에 [§6 새 서브커맨드 추가](#6-새-서브커맨드-추가)와 [AGENTS.md](../AGENTS.md)를 읽으면 된다.
+기존 CLI 변경은 [§6 새 서브커맨드 추가](#6-새-서브커맨드-추가)와 [AGENTS.md](../AGENTS.md)를 따른다.
+v0.4 구조는 [WP01 #40](https://github.com/jihoon22-lee/idk/issues/40)의 검증·ADR로 정한다.
+이 문서의 Python/pyz/Zellij 선택을 신규 구현의 필수 조건으로 적용하지 않는다.
 
 > Phase 0~3과 v0.2.0 보안·안정성·build MVP 작업이 통합되어 있다. `dist/idk.pyz`는
 > 빌드 스크립트가 만드는 하나의 필수 핵심 실행 아티팩트다.
