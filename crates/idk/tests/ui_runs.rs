@@ -558,3 +558,11 @@ fn captured_run_consumes_keys_and_paste_without_recording_them_and_can_be_cancel
     assert!(!text.contains("SECRET-NOT-SENT"));
     assert!(!text.contains("BYPASS-NOT-SENT"));
 }
+
+#[path = "common/complete_ui.rs"]
+mod complete_ui;
+
+#[test]
+fn complete_menu_flow_connects_external_terminal_git_task_problem_editor_and_closes_only_ui() {
+    complete_ui::run();
+}

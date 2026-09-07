@@ -1,9 +1,12 @@
 # Phase 1 명세 — `idk ws` · `idk run`
 
+> **v0.3 이하 Python 제품의 역사적 명세다.** 현재 명령은 [사용 안내](GUIDE.md)를 따른다.
+> 당시 구현 규약은 [v0.3.1 구조 문서](https://github.com/jihoon22-lee/idk/blob/v0.3.1/docs/ARCHITECTURE.md)에 보존되어 있다.
+
 워크스페이스/터미널 매니저와 명령 런처. 둘은 `--pane` 으로 맞물려 있어 함께 만든다.
 
 - 배경과 우선순위: [plan.md](plan.md)
-- 구현 규약과 서브커맨드 추가 절차: [ARCHITECTURE.md](ARCHITECTURE.md)
+- 구현 규약과 서브커맨드 추가 절차: [v0.3.1 ARCHITECTURE.md](https://github.com/jihoon22-lee/idk/blob/v0.3.1/docs/ARCHITECTURE.md)
 
 > `idk ws`와 `idk run`의 Phase 1 구현은 완료되어 v0.2.0 동작 계약에 포함되어 있다.
 > `/` 검색처럼 명시된 후속 UX는 여전히 미구현이다.

@@ -1,9 +1,12 @@
+#[path = "common/launcher.rs"]
+mod launcher;
+
 use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
 
 fn invoke(root: &Path, home: &Path, args: &[&str]) -> Value {
-    let output = Command::new(env!("CARGO_BIN_EXE_idk"))
+    let output = Command::new(launcher::path())
         .args(["--data-dir", root.to_str().unwrap()])
         .args(args)
         .env("HOME", home)

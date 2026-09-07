@@ -1,3 +1,6 @@
+#[path = "common/launcher.rs"]
+mod launcher;
+
 use base64::Engine;
 use idk_workspace::{client::Client, model::new_id, store::Store};
 use serde_json::Value;
@@ -16,7 +19,7 @@ impl Drop for OwnedHost {
     }
 }
 fn invoke(data: &Path, home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_idk"))
+    Command::new(launcher::path())
         .arg("--data-dir")
         .arg(data)
         .args(args)
@@ -99,7 +102,7 @@ fn cli_definitions_do_not_execute_and_actual_failed_run_links_log_problem_editor
     );
     let store = Store::open(Some(&data)).unwrap();
     let mut host = OwnedHost(
-        Command::new(env!("CARGO_BIN_EXE_idk"))
+        Command::new(launcher::path())
             .arg("__host")
             .arg("--config-dir")
             .arg(&store.config_dir)
@@ -115,7 +118,7 @@ fn cli_definitions_do_not_execute_and_actual_failed_run_links_log_problem_editor
             .unwrap(),
     );
     let deadline = Instant::now() + Duration::from_secs(10);
-    while Client::connect_with_launcher(&store, Path::new(env!("CARGO_BIN_EXE_idk"))).is_err() {
+    while Client::connect_with_launcher(&store, launcher::path()).is_err() {
         assert!(host.0.try_wait().unwrap().is_none());
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(20));

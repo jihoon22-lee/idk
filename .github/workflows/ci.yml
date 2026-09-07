@@ -5,78 +5,28 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   lint-test:
-    runs-on: ubuntu-latest
+    name: Native packaging and release tooling
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          enable-cache: true
-
-      # Ubuntu 24.04 apt 에는 3.10 이 없다. 산출물이 돌아야 하는 버전이므로 직접 확보한다.
-      - run: uv python install 3.10 3.9 3.14
-
-      - name: ruff
+          enable-cache: false
+      - name: Tooling interpreters
+        run: uv python install 3.10 3.14
+      - name: Python tooling lint
         run: |
-          uvx ruff check .
-          uvx ruff format --check .
-
-      - name: mypy
-        run: uv run --python 3.10 --group dev mypy
-
-      - name: pytest (3.10 — 폐쇄망과 같은 버전, 커버리지 게이트)
-        run: uv run --python 3.10 --group dev pytest --cov --cov-report=term-missing
-
-      - name: pytest (3.12 — WSL 개발 버전)
-        run: uv run --python 3.12 --group dev pytest
-
-      - name: pytest (3.14 — 최신 안정 버전)
-        run: uv run --python 3.14 --group dev pytest
-
-  artifact:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          enable-cache: true
-      - run: uv python install 3.10 3.9
-
-      - name: build-pyz reproducibility
+          uvx ruff==0.16.6 check .
+          uvx ruff==0.16.6 format --check .
+      - name: Native packaging and release fixtures (Python 3.10 and 3.14)
         run: |
-          ./scripts/build-pyz.sh
-          first="$(sha256sum dist/idk.pyz | awk '{print $1}')"
-          ./scripts/build-pyz.sh
-          second="$(sha256sum dist/idk.pyz | awk '{print $1}')"
-          test "$first" = "$second"
-
-      # 런처 폴백까지 포함한 아티팩트 스모크. 반입 전 게이트와 동일한 스크립트다.
-      - name: smoke
-        run: ./scripts/smoke.sh
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: idk-pyz
-          path: dist/idk.pyz
-
-  integration:
-    # zellij 실제 바이너리 대상 통합 테스트 (@pytest.mark.zellij).
-    # vendor/ 는 gitignored 라 매 실행 시 fetch-vendor.sh 로 받는다 (업스트림 체크섬 대조).
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          enable-cache: true
-      - run: uv python install 3.10
-
-      - name: zellij 확보
-        run: |
-          ./scripts/fetch-vendor.sh
-          mkdir -p /tmp/zellij
-          tar xzf vendor/zellij-no-web-x86_64-unknown-linux-musl.tar.gz -C /tmp/zellij
-          echo "/tmp/zellij" >> "$GITHUB_PATH"
-
-      - name: 통합 테스트
-        run: uv run --python 3.10 --group dev pytest -m zellij
+          for tooling_python in 3.10 3.14; do
+            uv run --no-project --python "$tooling_python" python tests/test_native_packaging.py
+            uv run --no-project --python "$tooling_python" python tests/test_native_release.py
+          done

@@ -1,129 +1,83 @@
 # idk — Integrated Developer Kit
 
-개발 환경(WSL)과 **폐쇄망**(RHEL 8.10, tcsh) 양쪽에서 **똑같이 동작하는** CLI/TUI 개발 도구 모음.
-핵심 실행 아티팩트 한 개(`idk.pyz`)로 배포된다. `idk ws`와 `idk run --pane`에는 선택
-zellij vendor가, `copy_on_select`에는 선택 xclip vendor가 추가로 필요하다.
+idk는 프로젝트의 개발 터미널, 외부 테스트 터미널, Git 작업과 빌드 결과를 한 CLI/TUI에서
+다루는 도구다. 실제 csh/tcsh를 초기화한 뒤 유지하므로 alias·셸 변수·작업 상태를 계속 사용할
+수 있다. 화면을 닫아도 호스트와 셸은 남고, 다시 접속할 때 초기화 명령을 반복하지 않는다.
 
-```bash
-$ idk doctor --brief
-idk 0.3.1 brief
-os      rhel-8.10  glibc=2.28  kernel=4.18.0-553.el8_10.x86_64  arch=x86_64  wsl=no
-shell   /bin/tcsh  TERM=xterm-256color  COLORTERM=-  LANG=en_US.UTF-8  utf8=yes
-python  running=3.10.4  IDK_PYTHON=/opt/python3.10/bin/python3.10
-py.1    $IDK_PYTHON=3.10.4  /opt/python3.10/bin/python3.10
-py.2    python3=3.6.8  /usr/bin/python3
-tools   zellij=0.44.3  xclip=-  git=2.31.1
-build   gcc=8.5.0  g++=8.5.0  make=4.2.1  cmake=3.20.2
-mirror  skip  미설정  ~/.config/idk/mirror.toml
+WSL/Linux에서 개발하며 RHEL 8.10 폐쇄망 사용을 목표로 한다. 정적 Linux x86_64 실행 파일과
+검증 정보·라이선스가 든 오프라인 번들로 배포한다. 제품 실행에 Python·Rust compiler·사외
+서비스·root 권한이 필요하지 않다. 기존 csh/tcsh와 Git은 해당 환경에 준비되어 있어야 한다.
+대상 RHEL·폐쇄망 정책 실기는 공개 후 사용자가 수행하며
+[후속 #53](https://github.com/jihoon22-lee/idk/issues/53)에 미실행으로 추적한다.
+
+**host state/runtime은 NFS를 지원하지 않는다.** NFS home을 사용하는 경우 정책상 허용된 로컬
+`XDG_STATE_HOME`·`XDG_RUNTIME_DIR` 또는 명시적 `--data-dir`를 선택한다. 소스·설정·기존 상태를
+자동으로 옮기지 않으며, 다른 파일시스템도 현지 잠금·rename·fsync 조건을 확인해야 한다.
+
+## 사용하는 흐름
+
+1. 프로젝트 소스 경로와 기존 `.csh` 초기화를 등록하고 실행할 내용을 검토한다.
+2. 개발용 터미널과 프로젝트 밖의 테스트 터미널을 열어 각각의 셸 상태를 유지한다.
+3. Git 화면에서 프로젝트의 저장소를 확인하고 diff·stage·commit과 명시적 원격 작업을 수행한다.
+4. 빌드·테스트를 등록 작업으로 실행해 실제 종료 결과, 원문 로그와 Problems를 확인한다.
+5. 진단 위치를 설정한 외부 편집기로 열고 다시 실행한다. 화면 종료와 작업 취소는 별개다.
+
+터미널 cwd와 Git 대상 저장소를 구분하며, 전체 index를 검토한 뒤 commit한다. 소스를 사용하는
+등록 작업과 Git의 source 변경은 같은 호스트에서 조정한다. 호스트 장애 뒤의 결과를 성공이나
+idle로 추정하지 않는다. 사용자 소스·`.csh`·기존 설정과 무관한 프로세스는 자동 변환·삭제·종료
+대상이 아니다.
+
+## 설치와 시작
+
+[릴리스](https://github.com/jihoon22-lee/idk/releases)의
+`idk-0.4.0-x86_64-unknown-linux-musl.tar.gz`와 **별도의 신뢰할 수 있는 경로로 확인한 SHA-256**을
+사용한다. archive와 checksum이 서로 맞는 것만으로 publisher 신뢰가 생기는 것은 아니다.
+[반입·첫 실행 안내](docs/closed-network-setup.md)에 따라 실행 파일을 준비한 뒤 설치를 검토한다.
+
+```text
+./idk-linux-x86_64 package verify /absolute/path/idk-0.4.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
+./idk-linux-x86_64 package install /absolute/path/idk-0.4.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256> --prefix /absolute/user/path/idk-workspace
 ```
 
-## 왜 이렇게 만들었나
-
-폐쇄망 쪽 제약이 설계를 거의 전부 결정했다.
-
-| 제약 | 결과 |
-|---|---|
-| 파일 반입이 번거롭고 심사 대상 | **핵심 zipapp 아티팩트 1개** — 의존성까지 한 파일에 넣고, ws/clipboard용 vendor는 선택 반입한다 |
-| 기본 `python3`가 구버전, 3.10은 `.csh`를 source해야 잡힘 | zipapp 앞에 **`/bin/sh` 런처**를 붙여 3.10+를 스스로 찾는다 |
-| rustc·docker 없음, glibc 2.28 | **순수 파이썬 의존성만** (`py3-none-any`). 네이티브 확장 금지 |
-| 내부 TLS 인터셉션 | HTTP는 **stdlib `urllib`** — `requests`/`httpx`는 `certifi` 번들 CA를 써서 깨진다 |
-| 원격 X11에서 WebView가 느리고, RHEL 8에 webkit2gtk 부재 | **GUI 안 만든다.** CLI/TUI만 |
-| 파일 반출 불가 | 환경 정보는 `doctor --brief`를 **손으로 옮겨 적어** 가져온다 |
-
-자세한 근거는 [docs/plan.md](docs/plan.md), 실제 구조는 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-## 설치
-
-[릴리스 페이지](https://github.com/jihoon22-lee/idk/releases)에서 핵심 실행 아티팩트
-`idk.pyz`를 받거나 아래 절차로 소스에서 같은 아티팩트를 빌드할 수 있다. 실행에는 root 권한이
-필요 없다.
+검토한 설치 명령에 `--yes`를 붙여 활성화한다. 이후 지정 prefix의 `idk`로 실행한다.
+기존 호스트가 있다면 업데이트 뒤에도 원래 generation과 같은 data 경로로 다시 접속한다.
+살아 있는 셸과 등록 Run, 해당 호스트의 로그 수집은 설치·제거 때문에 자동으로 중단되지 않는다.
 
 ```bash
-mkdir -p ~/.local/bin
-cp idk.pyz ~/.local/bin/idk && chmod +x ~/.local/bin/idk
-export PATH="$HOME/.local/bin:$PATH"     # tcsh: setenv PATH "$HOME/.local/bin:$PATH"
-idk doctor
+idk doctor --brief
+idk --help
+idk
 ```
 
-`idk env --csh` 가 셸 환경파일에 붙여넣을 줄을 만들어 준다.
-폐쇄망 반입 절차는 [docs/closed-network-setup.md](docs/closed-network-setup.md) 참조.
+`idk`는 실제 터미널에서 TUI를 연다. `doctor`는 경고가 있어도 기본 exit 0이며 검사에서 실패로
+다루려면 `--strict`를 사용한다. 요약 결과도 폐쇄망의 반출 정책을 따라야 한다.
 
-핵심 CLI와 `idk build`만 사용하면 `dist/idk.pyz` 한 개가 필요한 전부다. `idk ws`/`idk run
---pane`에는 zellij vendor가, `copy_on_select`에는 xclip vendor가 필요하다. 두 선택 구성요소를
-모두 준비하는 `fetch-vendor.sh` 실행은 두 아카이브와 `vendor/SHA256SUMS`를 3개짜리 allowlist
-반입 세트로 지정하며, `idk.pyz`를 더한 전체 준비 bundle은 4개 파일이다. 무결성 파일은 vendor
-아카이브와 함께 반입해야 한다.
+## 문서와 v0.3 전환
 
-### 소스에서 빌드
+- [사용 안내](docs/GUIDE.md): 명령 범주와 v0.3 명령의 폐기·대체 관계.
+- [프로젝트·터미널·Git·Run 상세](docs/workspace-guide.md): 일상 작업과 수명 구분.
+- [설치·업데이트·복구](docs/offline-workspace.md): generation, 진단, 원본 보존.
+- [구조](docs/ARCHITECTURE.md), [개발·검증](docs/development.md), [릴리스 절차](docs/native-release.md).
+- [변경 이력](CHANGELOG.md), [개발 규약](AGENTS.md), [수용·후속 검증 원장](docs/acceptance/v0.4.0.md).
+
+v0.4는 프로젝트 중심 제품으로 전환했다. Python `idk.pyz`, Zellij/xclip vendor 준비 경로와
+기존 `dt`·`mirror` 등의 전체 기능 동등성을 제공하지 않는다. 이전 공개 릴리스와 Git history는
+보존하며, 설치된 v0.3 설정을 자동으로 가져오거나 덮어쓰지 않는다.
+
+## 소스에서 검증·빌드
+
+고정 toolchain과 의존성은 `rust-toolchain.toml`과 `Cargo.lock`을 따른다. 빌드 환경에는 Rust,
+Python 3.10+, binutils와 검증용 csh/tcsh·Git 등이 필요하며 제품 반입물과 구분한다.
 
 ```bash
-./scripts/build-pyz.sh     # dist/idk.pyz (핵심 필수 아티팩트 1개)
-./scripts/smoke.sh         # 반입 전 게이트
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+RUST_TEST_THREADS=4 cargo test --locked --workspace
+./scripts/build-native.sh
+./scripts/smoke-native.sh
+./scripts/build-native-bundle.sh
 ```
 
-`uv` 만 있으면 된다. 빌드는 committed source와 `uv.lock`을 사용해 native 임시 staging에서
-진행한다. 같은 Python target과 uv/shiv/hatchling build toolchain을 유지하면 바이트 단위로
-재현할 수 있고, CI는 같은 실행에서 두 빌드의 SHA-256을 비교한다. 반입한 파일이 내가 만든 그
-파일인지 `sha256sum` 으로 대조할 수 있다.
-
-## 명령어
-
-| 명령 | 상태 | 설명 |
-|---|---|---|
-| `idk doctor` | ✅ | 환경 진단. `--brief`(전사용) / `--json`(diff용) / `--net`(미러 접속) |
-| `idk config check` | ✅ | 알려진 TOML을 고정 순서로 검사 (`skip`/`ok`/`warn`/`fail`, `--json` / `--strict`) |
-| `idk env` | ✅ | 셸 환경파일에 넣을 `PATH`·`IDK_PYTHON` 줄 생성 (`--csh` / `--sh`) |
-| `idk ws` | ✅ | 워크스페이스·터미널 매니저 (확인 modal, EXITED 재생성, zellij 백엔드) |
-| `idk run` | ✅ | 명령 런처(스니펫) |
-| `idk dt` | ✅ | 개발 도구 모음 (JSON·Base64·hash·JWT·diff…) |
-| `idk build` | ✅ MVP (v0.2.0) | 파일/stdin 빌드 로그에서 진단 추출 (plain/JSON) |
-| `idk log` | ✅ MVP | 멀티 로그 tail — 여러 파일/glob, 회전·truncate 감지, include/exclude 필터 |
-| `idk mirror` | ✅ MVP | 내부 패키지 미러 조회 — pypi simple index, 저장소별 버전 나열 |
-
-### `idk build` — 빌드 진단 MVP
-
-gcc/clang/CMake/make/Qt 빌드 로그를 파일이나 파이프에서 한 줄씩 읽어 진단만 출력한다. 입력은
-`--file` 또는 stdin 중 정확히 하나여야 한다. 터미널에서 입력 없이 실행하거나, `--file`과
-리디렉션된 stdin을 함께 주면 exit 2다.
-
-```bash
-idk build --file build.log
-cat build.log | idk build --format json
-idk build --file build.log --severity warning
-idk build --file build.log --severity error --exit-code
-```
-
-기본 `plain` 출력은 `path:line[:column]: severity: message` 형식이고, `json`은 `total_lines`,
-`diagnostic_count`, `diagnostics`(path/line/column/severity/message/context/tool) 필드를 갖는다.
-`--severity error`는 fatal/error, `warning`은 warning만, `all`은 note까지 포함한다. `--exit-code`는
-필터 전 전체 결과에 fatal/error가 있으면 exit 1로 끝내며, 출력 필터와 독립적이다.
-
-MVP에는 `idk build -- <command>` 실행 감싸기, TUI, 소스 미리보기, editor 실행, 클립보드 복사가
-포함되지 않는다. 실제 빌드 실행과 대화형 탐색은 후속 범위다.
-
-사용법은 [docs/GUIDE.md](docs/GUIDE.md).
-
-## 문서
-
-| 문서 | 내용 |
-|---|---|
-| [docs/GUIDE.md](docs/GUIDE.md) | 사용법 — 명령어와 설정 파일 |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 구조 — 핵심 단일 아티팩트와 선택 vendor, 서브커맨드 추가법 |
-| [docs/plan.md](docs/plan.md) | 작업 계획서(정본) — 설계 근거와 Phase 0~5 |
-| [docs/closed-network-setup.md](docs/closed-network-setup.md) | 폐쇄망 반입·설치 절차 |
-| [docs/env-survey.md](docs/env-survey.md) | 폐쇄망에서 확인해 올 항목 (답변 양식 포함) |
-| [docs/spec-ws-run.md](docs/spec-ws-run.md) | Phase 1 상세 명세 — `idk ws` · `idk run` |
-| [docs/spec-dt.md](docs/spec-dt.md) | Phase 2 상세 명세 — `idk dt` |
-| [AGENTS.md](AGENTS.md) | 프로젝트 규약 (LLM 협업 포함) |
-| [CHANGELOG.md](CHANGELOG.md) | 변경 이력 |
-
-## 개발
-
-```bash
-uv run --python 3.10 --group dev pytest   # 3.10 = 폐쇄망 설치 버전
-uvx ruff check . && uvx ruff format --check .
-./scripts/build-pyz.sh && ./scripts/smoke.sh
-```
-
-**Python 3.10이 하한이다.** 개발은 더 최신 버전에서 하더라도 산출물은 3.10에서 돌아야 하므로,
-ruff `target-version = "py310"` 과 3.10 대상 테스트로 강제한다. 규약은 [AGENTS.md](AGENTS.md)에 있다.
+실제 셸·Git·compiler/Qt fixture와 UBI 검사 준비 및 필수 추가 검사는
+[개발 안내](docs/development.md)를 따른다. 공개 태그는 성공한 exact-main CI 후보를 재빌드하지
+않고 같은 bytes로 게시한다.
