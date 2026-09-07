@@ -2,6 +2,7 @@
 pub mod client;
 pub mod doctor;
 pub mod git;
+pub mod git_wire;
 pub mod host;
 mod local_socket;
 pub mod model;

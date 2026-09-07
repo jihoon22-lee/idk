@@ -20,6 +20,91 @@ pub struct Client {
 }
 
 impl Client {
+    pub fn git_submit(&mut self, task: GitTask) -> Result<GitJobInfo> {
+        self.call(Request::GitSubmit { task })
+    }
+    pub fn git_job(&mut self, job: &str) -> Result<GitJobInfo> {
+        self.call(Request::GitJob { job: job.into() })
+    }
+    pub fn git_execute(&mut self, plan: &str, rows: u16, cols: u16) -> Result<GitOperationInfo> {
+        self.call(Request::GitExecute {
+            plan: plan.into(),
+            rows,
+            cols,
+        })
+    }
+    pub fn git_operations(&mut self, project: Option<&str>) -> Result<Vec<GitOperationInfo>> {
+        self.call(Request::GitOperations {
+            project: project.map(str::to_owned),
+        })
+    }
+    pub fn git_operation_attach(
+        &mut self,
+        operation: &str,
+        takeover: bool,
+    ) -> Result<GitOperationInfo> {
+        self.call(Request::GitOperationAttach {
+            operation: operation.into(),
+            takeover,
+        })
+    }
+    pub fn git_operation_detach(
+        &mut self,
+        operation: &str,
+        epoch: u64,
+    ) -> Result<GitOperationInfo> {
+        self.call(Request::GitOperationDetach {
+            operation: operation.into(),
+            epoch,
+        })
+    }
+    pub fn git_operation_snapshot(
+        &mut self,
+        operation: &str,
+        since: Option<u64>,
+    ) -> Result<GitOperationSnapshot> {
+        self.call(Request::GitOperationSnapshot {
+            operation: operation.into(),
+            since,
+        })
+    }
+    pub fn git_operation_input(&mut self, operation: &str, epoch: u64, data: &[u8]) -> Result<()> {
+        ensure!(
+            data.len() <= MAX_INPUT_PACKET,
+            "Git operation input packet exceeds 64 KiB"
+        );
+        self.call(Request::GitOperationInput {
+            operation: operation.into(),
+            epoch,
+            data: base64::engine::general_purpose::STANDARD.encode(data),
+        })
+    }
+    pub fn git_operation_resize(
+        &mut self,
+        operation: &str,
+        epoch: u64,
+        rows: u16,
+        cols: u16,
+    ) -> Result<()> {
+        self.call(Request::GitOperationResize {
+            operation: operation.into(),
+            epoch,
+            rows,
+            cols,
+        })
+    }
+    pub fn git_operation_cancel(
+        &mut self,
+        operation: &str,
+        epoch: u64,
+        force: bool,
+    ) -> Result<GitOperationInfo> {
+        self.call(Request::GitOperationCancel {
+            operation: operation.into(),
+            epoch,
+            force,
+        })
+    }
     pub fn connect(store: &Store) -> Result<Self> {
         Self::connect_with_launcher(store, Path::new("/proc/self/exe"))
     }

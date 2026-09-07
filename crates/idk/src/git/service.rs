@@ -145,20 +145,15 @@ impl GitService {
         let mut sanitized = Command::new(git.path());
         sanitized.env_clear().envs(&environment);
         sanitize_environment(&mut sanitized);
-        for (name, value) in sanitized.get_envs() {
-            if let Some(name) = name.to_str() {
-                match value {
-                    Some(value) => {
-                        if let Some(value) = value.to_str() {
-                            environment.insert(name.into(), value.into());
-                        }
-                    }
-                    None => {
-                        environment.remove(name);
-                    }
-                }
-            }
-        }
+        // With env_clear(), env_remove() deletes the explicit entry instead
+        // of retaining a None tombstone. Rebuild from the final command map;
+        // patching the original map would reintroduce removed routing values.
+        environment = sanitized
+            .get_envs()
+            .filter_map(|(name, value)| {
+                Some((name.to_str()?.to_owned(), value?.to_str()?.to_owned()))
+            })
+            .collect();
         for name in [
             "GIT_GLOB_PATHSPECS",
             "GIT_NOGLOB_PATHSPECS",
