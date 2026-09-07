@@ -54,8 +54,11 @@ enum Commands {
     },
     /// Diagnose configuration and local tools without starting project commands.
     Doctor {
-        #[arg(long)]
+        #[arg(long, conflicts_with = "brief")]
         json: bool,
+        /// Print status counts without local paths, project names or error details.
+        #[arg(long)]
+        brief: bool,
         /// Return nonzero for warnings/errors (default diagnostic exit is zero).
         #[arg(long)]
         strict: bool,
@@ -179,9 +182,15 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Some(Commands::Doctor { json, strict }) => {
+        Some(Commands::Doctor {
+            json,
+            brief,
+            strict,
+        }) => {
             let report = idk_workspace::doctor::inspect(cli.data_dir.as_deref());
-            if json {
+            if brief {
+                println!("{}", report.brief());
+            } else if json {
                 println!("{}", serde_json::to_string_pretty(&report).unwrap());
             } else {
                 println!("idk {}", report.version);
