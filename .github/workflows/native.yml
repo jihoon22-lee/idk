@@ -21,7 +21,7 @@ jobs:
       - name: Native build and test tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y tcsh csh binutils
+          sudo apt-get install -y tcsh csh binutils g++ make cmake python3 qt5-qmake qtbase5-dev-tools
           native_toolchain="$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)"
           [[ "$native_toolchain" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           rustup toolchain install "$native_toolchain" --profile minimal --component clippy --component rustfmt
@@ -55,6 +55,7 @@ jobs:
           test -x "$native_bsd_shell"
           IDK_TEST_SHELL="$native_bsd_shell" cargo test --locked -p idk-workspace --test csh_init -- --nocapture
           IDK_TEST_SHELL="$native_bsd_shell" cargo test --locked -p idk-workspace --test project_flow -- --nocapture
+          IDK_TEST_SHELL="$native_bsd_shell" cargo test --locked -p idk-workspace --test run_core --test host_runs -- --nocapture
 
       - name: First static native candidate and packaged probe
         env:
