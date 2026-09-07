@@ -10,7 +10,8 @@ use anyhow::{ensure, Context, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
@@ -195,6 +196,7 @@ pub struct RunRegistry {
     runs: Vec<RunInfo>,
     active: BTreeMap<String, Active>,
     logs: PathBuf,
+    published: RefCell<HashSet<PathBuf>>,
 }
 impl RunRegistry {
     pub fn open(store: Store, gate: SourceGate) -> Result<Self> {
@@ -253,6 +255,7 @@ impl RunRegistry {
             runs,
             active: BTreeMap::new(),
             logs,
+            published: RefCell::new(HashSet::new()),
         };
         result.persist()?;
         Ok(result)
@@ -265,7 +268,22 @@ impl RunRegistry {
                 && run.source_start.identity.as_deref() == Some(identity)),
             "source-use unknown from previous run; inspect old processes before recovery"
         );
-        self.gate.ready(identity)
+        self.gate.ready(identity)?;
+        self.published.borrow_mut().insert(identity.to_path_buf());
+        Ok(())
+    }
+    /// Registration can change while the host is alive. Recovered unknown
+    /// executions and independent Git blocks still prevent ready source use.
+    pub fn publish_registered_sources(&self) -> Result<()> {
+        for project in self.store.load()?.projects {
+            if let Some(repository) = project.repository_binding {
+                let _ = self.publish_source(repository.identity());
+            }
+            for repository in project.related_repositories {
+                let _ = self.publish_source(repository.identity());
+            }
+        }
+        Ok(())
     }
     pub fn begin(
         &mut self,
@@ -780,6 +798,9 @@ impl RunRegistry {
 }
 impl Drop for RunRegistry {
     fn drop(&mut self) {
+        for identity in self.published.borrow().iter() {
+            let _ = self.gate.unavailable(identity);
+        }
         for active in self.active.values() {
             active.sink.finish();
             if let Some(repository) = &active.plan.repository {

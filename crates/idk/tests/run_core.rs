@@ -842,3 +842,41 @@ fn unchanged_untracked_names_do_not_prove_unchanged_source_contents() {
     assert_eq!(run.source_changed, None);
     assert!(run.source_start.error.unwrap().contains("untracked"));
 }
+
+#[test]
+fn newly_registered_repositories_become_known_and_provider_drop_invalidates_idle_state() {
+    let f = Fixture::new(&["echo task"], FailurePolicy::Stop);
+    let gate = SourceGate::default();
+    let registry = RunRegistry::open(f.store.clone(), gate.clone()).unwrap();
+    let root = f
+        .store
+        .load()
+        .unwrap()
+        .project(&f.project)
+        .unwrap()
+        .root
+        .clone();
+    assert!(std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&root)
+        .status()
+        .unwrap()
+        .success());
+    let repository = idk_workspace::git::Repository::discover(&root).unwrap();
+    f.store
+        .update(|workspace| {
+            let project = workspace.project_mut(&f.project)?;
+            project.repository = Some(root.clone());
+            project.repository_binding = Some(repository.clone());
+            Ok(())
+        })
+        .unwrap();
+    assert!(!gate.state(repository.identity()).unwrap().provider_ready);
+    registry.publish_registered_sources().unwrap();
+    assert!(gate.state(repository.identity()).unwrap().provider_ready);
+    drop(registry);
+    assert!(!gate.state(repository.identity()).unwrap().provider_ready);
+    assert!(gate
+        .reserve_mutation(repository.identity(), &new_id())
+        .is_err());
+}

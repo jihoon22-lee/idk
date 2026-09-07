@@ -145,7 +145,7 @@ fn synthetic_project(
     let project_root = root.join("project");
     ensure_private_dir(&project_root)?;
     let common = project_root.join("common.csh");
-    std::fs::write(&common, "set idk_probe_state = initial\nalias idk_probe_alias 'echo IDK_HOST_ALIAS_OK'\necho once >> host-initializations\n")?;
+    std::fs::write(&common, "set prompt = ''\nset idk_probe_state = initial\nalias idk_probe_alias 'echo IDK_HOST_ALIAS_OK'\necho once >> host-initializations\n")?;
     let mut terminals = Vec::new();
     for index in 0..5 {
         let cwd = if index < 2 {
@@ -438,6 +438,7 @@ pub(crate) fn run(shell: &Path, launcher: &Path) -> Result<Value> {
         "synthetic idle five-shell host RSS was {idle_host_rss_kib} KiB; ADR budget is {IDLE_RSS_BUDGET_KIB} KiB"
     );
     let git = crate::probe_git::run(&mut client, &store, &root, shell, &variables)?;
+    let runs = crate::probe_run::run(&mut client, &store, &root, shell, launcher, &variables)?;
     let sleep = ["/usr/bin/sleep", "/bin/sleep"]
         .into_iter()
         .map(Path::new)
@@ -510,6 +511,7 @@ pub(crate) fn run(shell: &Path, launcher: &Path) -> Result<Value> {
         "environment": { "os": std::env::consts::OS, "architecture": std::env::consts::ARCH },
         "candidate_build_id": candidate_build_id,
         "git": git,
+        "runs": runs,
         "saved_terminals": { "development": 2, "external_test": 3 },
         "checks": { "defaults_five_ready": "PASS", "independent_shell_state": "PASS", "detach_reattach_same_pids": "PASS", "reattach_source_count_unchanged": "PASS", "explicit_close_reopen": "PASS", "unrelated_process_preserved": "PASS", "host_shutdown_observed": "PASS" },
         "measurements": { "prepare5_ms": prepare5_ms, "reattachfirstscreen_ms": reattachfirstscreen_ms, "idlehostRSS_KiB": idle_host_rss_kib },

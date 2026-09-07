@@ -9,6 +9,7 @@ pub mod model;
 pub mod probe;
 mod probe_git;
 mod probe_host;
+mod probe_run;
 pub mod project;
 pub mod protocol;
 pub mod shell;

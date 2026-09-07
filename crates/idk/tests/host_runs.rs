@@ -757,3 +757,54 @@ fn failed_finalization_keeps_shutdown_pending_and_retries_after_storage_recovers
         serde_json::from_slice(&std::fs::read(ledger).unwrap()).unwrap();
     assert_eq!(ledger["runs"][0]["state"], "Succeeded");
 }
+
+#[test]
+fn repository_registered_after_host_start_becomes_ready_without_starting_a_task() {
+    use idk_workspace::git_wire::*;
+    let f = Fixture::new("echo task", false);
+    let (mut host, mut client) = f.host();
+    git_binding(&f);
+    let opened = git_job(
+        &mut client,
+        GitTask::Open {
+            project: f.project.clone(),
+            repository: None,
+            env: f.env.clone(),
+        },
+    );
+    let Some(GitValue::Open(context)) = opened.result else {
+        panic!("{opened:?}")
+    };
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        let status = git_job(
+            &mut client,
+            GitTask::Status {
+                context: context.id.clone(),
+                refresh: true,
+            },
+        );
+        let Some(GitValue::Status(status)) = status.result else {
+            panic!("{status:?}")
+        };
+        if status.source_use.provider_ready {
+            assert!(status.source_use.runs.is_empty());
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "newly registered repository remained unknown despite a healthy run provider"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let RunResult::Runs(runs) = request(
+        &mut client,
+        RunRequest::List {
+            project_id: Some(f.project.clone()),
+        },
+    ) else {
+        panic!()
+    };
+    assert!(runs.is_empty());
+    shutdown(&mut client, &mut host);
+}

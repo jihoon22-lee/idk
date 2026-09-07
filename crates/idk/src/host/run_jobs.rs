@@ -68,18 +68,19 @@ impl Bridge {
         gate: SourceGate,
     ) -> Result<Self> {
         let mut registry = RunRegistry::open(store.clone(), gate)?;
-        for project in store.load()?.projects {
-            if let Some(repo) = project.repository_binding {
-                let _ = registry.publish_source(repo.identity());
-            }
-        }
+        registry.publish_registered_sources()?;
         let (sender, incoming) = mpsc::sync_channel(32);
         let (outgoing, receiver) = mpsc::sync_channel(32);
         std::thread::Builder::new()
             .name("idk-runs".into())
             .spawn(move || {
                 let mut reviews: HashMap<String, (String, EditorPlan, Instant)> = HashMap::new();
+                let mut registration_refresh = Instant::now();
                 loop {
+                    if registration_refresh.elapsed() >= Duration::from_secs(1) {
+                        let _ = registry.publish_registered_sources();
+                        registration_refresh = Instant::now();
+                    }
                     reviews.retain(|_, (_, _, created)| created.elapsed() < TTL);
                     let work = match incoming.recv_timeout(Duration::from_millis(50)) {
                         Ok(work) => Some(work),
