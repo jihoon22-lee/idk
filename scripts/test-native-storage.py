@@ -77,7 +77,9 @@ def main():
         original_before = original.read_bytes()
         cases = [
             ("lock-unavailable", (73,), errno.ENOLCK, "filesystem locking is unavailable"),
-            ("atomic-rename-failed", (82, 264, 316), errno.EIO, "Input/output error"),
+            # glibc says "Input/output error", musl says "I/O error".
+            # Check the actual errno instead of libc's translated wording.
+            ("atomic-rename-failed", (82, 264, 316), errno.EIO, "os error 5"),
             (
                 "filesystem-uninspectable",
                 (137, 138),
@@ -105,6 +107,7 @@ def main():
             )
             assert result.returncode != 0, (name, result.stdout, result.stderr)
             assert message in result.stderr, (name, result.stderr)
+            assert f"os error {error}" in result.stderr, (name, result.stderr)
             assert config.read_bytes() == before, name
             assert original.read_bytes() == original_before, name
             assert not list((data / "config").glob(".pending-*")), name
