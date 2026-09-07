@@ -2,6 +2,9 @@
 //! initialization; the actor accepts each prepared shell before its first input.
 mod actor;
 mod children;
+mod git_bridge;
+mod git_jobs;
+mod git_operation;
 mod launch;
 
 use crate::model::{new_id, MAX_TERMINALS, PROTOCOL};

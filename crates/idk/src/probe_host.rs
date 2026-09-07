@@ -39,7 +39,7 @@ struct OwnedHost {
     launcher: PathBuf,
 }
 
-fn probe_child_command(program: &Path) -> Command {
+pub(crate) fn probe_child_command(program: &Path) -> Command {
     let mut command = Command::new(program);
     let probe_pid = unsafe { libc::getpid() };
     // SAFETY: the post-fork closure uses only Linux prctl/getppid and creates
@@ -437,6 +437,7 @@ pub(crate) fn run(shell: &Path, launcher: &Path) -> Result<Value> {
         idle_host_rss_kib <= IDLE_RSS_BUDGET_KIB,
         "synthetic idle five-shell host RSS was {idle_host_rss_kib} KiB; ADR budget is {IDLE_RSS_BUDGET_KIB} KiB"
     );
+    let git = crate::probe_git::run(&mut client, &store, &root, shell, &variables)?;
     let sleep = ["/usr/bin/sleep", "/bin/sleep"]
         .into_iter()
         .map(Path::new)
@@ -508,6 +509,7 @@ pub(crate) fn run(shell: &Path, launcher: &Path) -> Result<Value> {
         "scope": "actual same-candidate host with synthetic local/package inputs; not field acceptance",
         "environment": { "os": std::env::consts::OS, "architecture": std::env::consts::ARCH },
         "candidate_build_id": candidate_build_id,
+        "git": git,
         "saved_terminals": { "development": 2, "external_test": 3 },
         "checks": { "defaults_five_ready": "PASS", "independent_shell_state": "PASS", "detach_reattach_same_pids": "PASS", "reattach_source_count_unchanged": "PASS", "explicit_close_reopen": "PASS", "unrelated_process_preserved": "PASS", "host_shutdown_observed": "PASS" },
         "measurements": { "prepare5_ms": prepare5_ms, "reattachfirstscreen_ms": reattachfirstscreen_ms, "idlehostRSS_KiB": idle_host_rss_kib },

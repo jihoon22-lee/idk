@@ -2,10 +2,12 @@
 pub mod client;
 pub mod doctor;
 pub mod git;
+pub mod git_wire;
 pub mod host;
 mod local_socket;
 pub mod model;
 pub mod probe;
+mod probe_git;
 mod probe_host;
 pub mod project;
 pub mod protocol;

@@ -26,10 +26,22 @@ pub(super) enum Tag {
     Ack,
     Input,
     Search,
+    GitSubmit(u64),
+    GitJob(String),
+    GitExecute(String),
+    GitAttached,
+    GitSnapshot(String),
+    GitOperations,
+    GitUpdated,
+}
+#[derive(Clone, PartialEq, Eq)]
+enum InputTarget {
+    Shell(String),
+    Git(String),
 }
 struct BufferedInput {
     host: String,
-    session: String,
+    target: InputTarget,
     epoch: u64,
     data: Vec<u8>,
 }
@@ -79,16 +91,17 @@ impl Runtime {
             let mut client: Option<Client> = None;
             let mut failed = false;
             let mut owned = HashMap::<String,u64>::new();
+            let mut git_owned = HashMap::<String,u64>::new();
             while !stopping.load(Ordering::Acquire) {
                 let job = match jobs.recv_timeout(Duration::from_millis(50)) { Ok(job)=>job, Err(mpsc::RecvTimeoutError::Timeout)=>continue, Err(_)=>break };
                 let result = (|| -> Result<serde_json::Value> {
                     if job.tag == Tag::Connect {
                         if let Some(existing) = &mut client {
-                            if existing.list(None).is_err() { client = Some(Client::connect_with_launcher(&store,&launcher)?); owned.clear(); }
+                            if existing.list(None).is_err() { client = Some(Client::connect_with_launcher(&store,&launcher)?); owned.clear(); git_owned.clear(); }
                         } else { client = Some(Client::connect_with_launcher(&store,&launcher)?); }
                         failed = false;
                     }
-                    let starts = matches!(job.request,Some(Request::Start{..}|Request::StartTransient{..}|Request::StartDefaults{..}));
+                    let starts = matches!(job.request,Some(Request::Start{..}|Request::StartTransient{..}|Request::StartDefaults{..}|Request::GitSubmit{task:crate::git_wire::GitTask::Open{..}}));
                     if client.is_none() && starts { client = Some(Client::ensure_host(&store,&launcher)?); failed = false; }
                     let client = client.as_mut().context("Host is unavailable. Open a terminal to start a host, or refresh to reconnect.")?;
                     client.set_timeout(Duration::from_secs(2))?;
@@ -98,6 +111,10 @@ impl Runtime {
                     let result: Result<serde_json::Value> = client.request(request).and_then(|response|response.decode());
                     if result.as_ref().is_err_and(|error| error.downcast_ref::<std::io::Error>().is_some() || matches!(job.tag,Tag::Input|Tag::Ack)) { failed = true; }
                     if let Ok(value) = &result {
+                        if job.tag == Tag::GitAttached {
+                            let operation:crate::git_wire::GitOperationInfo=serde_json::from_value(value.clone())?;
+                            git_owned.insert(operation.id,operation.input_epoch);
+                        }
                         if job.tag == Tag::Attached {
                             let session: SessionInfo = serde_json::from_value(value.clone())?;
                             owned.insert(session.session_id,session.input_epoch);
@@ -115,7 +132,8 @@ impl Runtime {
                     }
                 }
             }
-            if let Some(mut client) = client { let _ = client.set_timeout(Duration::from_millis(100)); for (id,epoch) in owned { let _ = client.detach(&id,epoch); } }
+            if let Some(mut client) = client { let _ = client.set_timeout(Duration::from_millis(100)); for (id,epoch) in owned { let _ = client.detach(&id,epoch); }
+                for (operation,epoch) in git_owned {let _=client.request(Request::GitOperationDetach{operation,epoch});} }
             let _ = done.send(());
         })?;
         let mut runtime = Self {
@@ -207,6 +225,12 @@ impl Runtime {
         self.input_bytes = 0;
     }
     pub fn buffer_input(&mut self, session: String, epoch: u64, data: Vec<u8>) -> Result<()> {
+        self.buffer_target(InputTarget::Shell(session), epoch, data)
+    }
+    pub fn buffer_git_input(&mut self, operation: String, epoch: u64, data: Vec<u8>) -> Result<()> {
+        self.buffer_target(InputTarget::Git(operation), epoch, data)
+    }
+    fn buffer_target(&mut self, target: InputTarget, epoch: u64, data: Vec<u8>) -> Result<()> {
         ensure!(
             data.len() <= MAX_INPUT_PACKET
                 && self.input_bytes + self.inflight_input.iter().sum::<usize>() + data.len()
@@ -222,7 +246,7 @@ impl Runtime {
         self.input_bytes += data.len();
         if let Some(last) = self.input.back_mut().filter(|last| {
             last.host == host
-                && last.session == session
+                && last.target == target
                 && last.epoch == epoch
                 && last.data.len() + data.len() <= MAX_INPUT_PACKET
         }) {
@@ -230,7 +254,7 @@ impl Runtime {
         } else {
             self.input.push_back(BufferedInput {
                 host,
-                session,
+                target,
                 epoch,
                 data,
             });
@@ -253,10 +277,18 @@ impl Runtime {
                 .is_some_and(|host| host.host_instance == input.host),
             "Host changed; buffered input was discarded."
         );
-        let request = Request::Input {
-            session: input.session,
-            epoch: input.epoch,
-            data: base64::engine::general_purpose::STANDARD.encode(input.data),
+        let data = base64::engine::general_purpose::STANDARD.encode(input.data);
+        let request = match input.target {
+            InputTarget::Shell(session) => Request::Input {
+                session,
+                epoch: input.epoch,
+                data,
+            },
+            InputTarget::Git(operation) => Request::GitOperationInput {
+                operation,
+                epoch: input.epoch,
+                data,
+            },
         };
         self.submit(Some(request), Tag::Input)?;
         self.inflight_input.push_back(count);

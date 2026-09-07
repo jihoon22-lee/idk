@@ -1,6 +1,10 @@
 //! Project definition workflows; the runtime adapter owns terminal key encoding.
 mod draw;
 mod forms;
+mod git;
+mod git_draft;
+mod git_draw;
+mod git_view;
 pub mod input;
 mod live;
 mod runtime;
@@ -74,6 +78,7 @@ struct TransientReview {
 
 #[derive(Debug, Clone)]
 enum Dialog {
+    Git(Box<git::GitDialog>),
     Live(live::LiveDialog),
     Form(Form),
     Sources(SourceList),
@@ -115,6 +120,7 @@ pub struct App<'a> {
     terminal_connected: bool,
     menu_from_terminal: bool,
     runtime: Option<runtime::Runtime>,
+    git: git::GitUi,
     viewport: ratatui::layout::Rect,
     clipboard_request: Option<String>,
 }
@@ -156,6 +162,7 @@ impl<'a> App<'a> {
             terminal_connected: false,
             menu_from_terminal: false,
             runtime: None,
+            git: git::GitUi::default(),
             viewport: ratatui::layout::Rect::default(),
             clipboard_request: None,
         };
@@ -185,7 +192,7 @@ impl<'a> App<'a> {
     /// with true and never claim that a saved definition is a running terminal.
     pub fn set_terminal_connected(&mut self, connected: bool) {
         self.terminal_connected = connected;
-        self.menu_visible = !connected;
+        self.menu_visible = !connected || self.dialog.is_some();
         self.menu_from_terminal = false;
     }
 
@@ -198,6 +205,12 @@ impl<'a> App<'a> {
             Event::Paste(text) => {
                 if self.terminal_connected && !self.menu_visible && self.dialog.is_none() {
                     return Ok(UiOutcome::ForwardTerminalPaste(text));
+                }
+                if matches!(self.dialog, Some(Dialog::Git(_))) {
+                    if let Err(error) = self.git_paste(&text) {
+                        self.error(error.to_string());
+                    }
+                    return Ok(UiOutcome::Continue);
                 }
                 let result = match self.dialog.as_mut() {
                     Some(Dialog::Live(live::LiveDialog::Search { input, .. })) => {
@@ -249,6 +262,9 @@ impl<'a> App<'a> {
             return Ok(UiOutcome::ForwardTerminalKey(key));
         }
         self.menu_from_terminal = false;
+        if self.git_operation_key(key) || self.git_menu_key(key) {
+            return Ok(UiOutcome::Continue);
+        }
         if self.live_menu_key(key) {
             return Ok(UiOutcome::Continue);
         }
@@ -562,6 +578,7 @@ impl<'a> App<'a> {
     fn handle_dialog(&mut self, key: KeyEvent) {
         let dialog = self.dialog.take().unwrap();
         match dialog {
+            Dialog::Git(dialog) => self.handle_git_dialog(*dialog, key),
             Dialog::Live(dialog) => self.handle_live_dialog(dialog, key),
             Dialog::Form(mut form) => {
                 if key.code == KeyCode::Esc {
@@ -1285,11 +1302,7 @@ fn run_screen(store: &Store, attached: Option<(&str, bool)>) -> Result<()> {
         loop {
             app.tick();
             let focused = app.terminal_connected && !app.menu_visible && app.dialog.is_none();
-            let wanted_mouse = focused
-                && app
-                    .runtime
-                    .as_ref()
-                    .is_some_and(|runtime| runtime.can_input());
+            let wanted_mouse = focused && app.terminal_writable();
             if wanted_mouse != mouse {
                 if wanted_mouse {
                     crossterm::execute!(std::io::stdout(), EnableMouseCapture)?;
@@ -1298,11 +1311,8 @@ fn run_screen(store: &Store, attached: Option<(&str, bool)>) -> Result<()> {
                 }
                 mouse = wanted_mouse;
             }
-            let wanted_cursor = if focused {
-                app.runtime
-                    .as_ref()
-                    .filter(|runtime| runtime.can_input())
-                    .and_then(|runtime| runtime.screen.as_ref())
+            let wanted_cursor = if focused && app.terminal_writable() {
+                app.terminal_snapshot()
                     .and_then(screen::cursor_style)
                     .unwrap_or(SetCursorStyle::DefaultUserShape)
             } else {
