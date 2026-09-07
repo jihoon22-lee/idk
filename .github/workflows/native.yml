@@ -33,6 +33,11 @@ jobs:
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo test --locked --workspace
 
+      - name: Host startup and Git UI with software SHA-256
+        env:
+          IDK_TEST_SHELL: /usr/bin/tcsh
+        run: cargo test --locked -p idk-workspace --features sha2/force-soft --test ui_git -- --nocapture
+
       - name: Actual tcsh and PTY integration (required)
         env:
           IDK_TEST_SHELL: /usr/bin/tcsh
