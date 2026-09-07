@@ -452,6 +452,8 @@ pub struct GitOperationInfo {
     pub host_instance: String,
     pub kind: GitOperationKind,
     pub state: GitOperationState,
+    #[serde(default)]
+    pub cleanup_acknowledged: bool,
     pub owner: Option<InputOwner>,
     pub input_epoch: u64,
     pub generation: u64,

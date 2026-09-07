@@ -322,7 +322,10 @@ impl RunRegistry {
             let index = self
                 .runs
                 .iter()
-                .position(|run| !run.state.is_live() && run.state != RunState::Unknown)
+                .position(|run| {
+                    !run.state.is_live()
+                        && (run.state != RunState::Unknown || run.cleanup_confirmed)
+                })
                 .context("run history full of active/unknown executions")?;
             let old = self.runs.remove(index);
             self.active.remove(&old.run_id);
@@ -512,10 +515,14 @@ impl RunRegistry {
             run.state == RunState::Unknown,
             "only a recovered unknown run needs reconciliation"
         );
+        let previous = run.clone();
         run.cleanup_confirmed = true;
         run.error =
             Some("user confirmed old process cleanup; execution outcome remains unknown".into());
-        self.persist()?;
+        if let Err(error) = self.persist() {
+            *self.run_mut(run_id)? = previous;
+            return Err(error);
+        }
         self.info(run_id)
     }
     pub fn timed_out(&self) -> Vec<String> {
@@ -900,6 +907,13 @@ fn observe_source(
         result.git_head = Some(String::from_utf8(head)?.trim().into());
         let status = invoke(&["status", "--porcelain=v1", "-z", "--untracked-files=normal"])?;
         result.dirty = Some(!status.is_empty());
+        if status
+            .split(|byte| *byte == 0)
+            .any(|entry| entry.starts_with(b"?? "))
+        {
+            result.error =
+                Some("untracked source contents are not covered by this Git observation".into());
+        }
         let diff = invoke(&[
             "diff",
             "--no-ext-diff",

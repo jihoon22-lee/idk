@@ -727,3 +727,118 @@ fn explicit_unknown_cleanup_reconciliation_preserves_unknown_exit_outcome() {
     assert_eq!(unknown.exit_code, None);
     assert!(!f.begin(&mut registry, &new_id(), false).existing);
 }
+
+#[test]
+fn failed_unknown_reconciliation_does_not_release_source_or_start_another_run() {
+    let f = Fixture::new(&["echo task"], FailurePolicy::Stop);
+    let root = f
+        .store
+        .load()
+        .unwrap()
+        .project(&f.project)
+        .unwrap()
+        .root
+        .clone();
+    assert!(std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&root)
+        .status()
+        .unwrap()
+        .success());
+    let repository = idk_workspace::git::Repository::discover(&root).unwrap();
+    f.store
+        .update(|workspace| {
+            let project = workspace.project_mut(&f.project)?;
+            project.repository = Some(root.clone());
+            project.repository_binding = Some(repository.clone());
+            Ok(())
+        })
+        .unwrap();
+    f.approve();
+    let gate = SourceGate::default();
+    let mut registry = RunRegistry::open(f.store.clone(), gate).unwrap();
+    let run = f.begin(&mut registry, &new_id(), false).run;
+    drop(registry);
+    let gate = SourceGate::default();
+    let mut registry = RunRegistry::open(f.store.clone(), gate.clone()).unwrap();
+    let ledger = f.store.state_dir.join("runs.json");
+    let backup = f.store.state_dir.join("runs.saved");
+    std::fs::rename(&ledger, &backup).unwrap();
+    std::fs::create_dir(&ledger).unwrap();
+    assert!(registry.acknowledge_unknown_cleanup(&run.run_id).is_err());
+    assert!(!registry.info(&run.run_id).unwrap().cleanup_confirmed);
+    assert!(registry.publish_source(repository.identity()).is_err());
+    assert!(gate
+        .reserve_mutation(repository.identity(), &new_id())
+        .is_err());
+    let plan = (TaskService { store: &f.store })
+        .launch_plan(&f.project, &f.task, f.env.clone())
+        .unwrap();
+    assert!(registry.begin(plan, &new_id(), false).is_err());
+    std::fs::remove_dir(&ledger).unwrap();
+    std::fs::rename(&backup, &ledger).unwrap();
+    assert!(
+        registry
+            .acknowledge_unknown_cleanup(&run.run_id)
+            .unwrap()
+            .cleanup_confirmed
+    );
+    registry.publish_source(repository.identity()).unwrap();
+    assert!(gate
+        .reserve_mutation(repository.identity(), &new_id())
+        .is_ok());
+}
+#[test]
+fn unchanged_untracked_names_do_not_prove_unchanged_source_contents() {
+    let f = Fixture::new(&["echo task"], FailurePolicy::Stop);
+    let root = f
+        .store
+        .load()
+        .unwrap()
+        .project(&f.project)
+        .unwrap()
+        .root
+        .clone();
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.name", "fixture"],
+        vec!["config", "user.email", "fixture@example.invalid"],
+        vec!["add", "."],
+        vec!["commit", "-qm", "fixture"],
+    ] {
+        assert!(std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let repository = idk_workspace::git::Repository::discover(&root).unwrap();
+    f.store
+        .update(|workspace| {
+            let project = workspace.project_mut(&f.project)?;
+            project.repository = Some(root.clone());
+            project.repository_binding = Some(repository);
+            Ok(())
+        })
+        .unwrap();
+    f.approve();
+    std::fs::write(root.join("untracked.cpp"), "before\n").unwrap();
+    let mut registry = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
+    let run = f.begin(&mut registry, &new_id(), false).run;
+    std::fs::write(root.join("untracked.cpp"), "after\n").unwrap();
+    let run = registry
+        .finish(
+            &run.run_id,
+            Some(TerminalExit {
+                code: 0,
+                signal: None,
+            }),
+            true,
+            None,
+        )
+        .unwrap();
+    assert_eq!(run.state, RunState::Succeeded);
+    assert_eq!(run.source_changed, None);
+    assert!(run.source_start.error.unwrap().contains("untracked"));
+}

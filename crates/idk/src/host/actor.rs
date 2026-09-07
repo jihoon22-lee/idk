@@ -1,8 +1,9 @@
 use super::children;
-use super::git_bridge;
 use super::launch::{self, Completed, Job, Runtime};
+use super::{git_bridge, run_jobs};
 use crate::model::{new_id, valid_id, SourceGate, TerminalDefinition, MAX_PROJECTS, MAX_TERMINALS};
 use crate::protocol::*;
+use crate::run_wire::{RunJob, RunRequest, RunResult};
 use crate::shell::InitializationState;
 use crate::store::{ensure_private_dir, Store};
 use crate::terminal::{TerminalExit, TerminalSnapshot};
@@ -38,9 +39,14 @@ struct Tombstone {
     definition_revision: u64,
     launch_digest: Option<String>,
     exit: Option<TerminalExit>,
+    #[serde(default)]
+    purpose: Option<String>,
+    #[serde(default)]
+    run_id: Option<String>,
 }
 impl Tombstone {
-    fn from_info(info: &SessionInfo) -> Self {
+    fn from_slot(slot: &Slot) -> Self {
+        let info = &slot.info;
         Self {
             session_id: info.session_id.clone(),
             project_id: info.project_id.clone(),
@@ -51,6 +57,15 @@ impl Tombstone {
             definition_revision: info.definition_revision,
             launch_digest: info.launch_digest.clone(),
             exit: info.exit.clone(),
+            purpose: match slot.purpose {
+                SlotPurpose::Terminal(_) => None,
+                SlotPurpose::Run { .. } => Some("run".into()),
+                SlotPurpose::Editor => Some("editor".into()),
+            },
+            run_id: match &slot.purpose {
+                SlotPurpose::Run { run_id } => run_id.clone(),
+                _ => None,
+            },
         }
     }
     fn restore(self, host: &str) -> Result<SessionInfo> {
@@ -77,6 +92,8 @@ impl Tombstone {
 // commands. Operations and runs will add distinct variants and policies.
 enum SlotPurpose {
     Terminal(Option<TerminalDefinition>),
+    Run { run_id: Option<String> },
+    Editor,
 }
 struct Slot {
     info: SessionInfo,
@@ -88,6 +105,10 @@ struct Slot {
     closing_at: Option<Instant>,
     exited_at: Option<Instant>,
     cleanup: Cleanup,
+    run_cancel_durable: bool,
+    run_finalized: bool,
+    run_cancel_pending: bool,
+    run_retry_after: Option<Instant>,
 }
 #[derive(Default)]
 struct Cleanup {
@@ -146,6 +167,7 @@ pub(super) struct Actor {
     // an unavailable run provider idle merely because no run UI is attached.
     source_gate: SourceGate,
     git: git_bridge::Bridge,
+    runs: run_jobs::Bridge,
     store: Store,
     info: HostInfo,
     slots: BTreeMap<String, Slot>,
@@ -172,6 +194,14 @@ impl Actor {
                 "unsupported or oversized host session ledger; preserved"
             );
             for tombstone in ledger.sessions {
+                let purpose = match tombstone.purpose.as_deref() {
+                    Some("run") => SlotPurpose::Run {
+                        run_id: tombstone.run_id.clone(),
+                    },
+                    Some("editor") => SlotPurpose::Editor,
+                    None => SlotPurpose::Terminal(None),
+                    _ => anyhow::bail!("unsupported session purpose; ledger preserved"),
+                };
                 let session = tombstone.restore(&info.host_instance)?;
                 ensure!(
                     keys.insert((session.project_id.clone(), session.terminal_id.clone()))
@@ -182,7 +212,7 @@ impl Actor {
                     session.session_id.clone(),
                     Slot {
                         info: session,
-                        purpose: SlotPurpose::Terminal(None),
+                        purpose,
                         runtime: None,
                         frozen: None,
                         cancel: Arc::new(AtomicBool::new(false)),
@@ -190,6 +220,10 @@ impl Actor {
                         closing_at: None,
                         exited_at: None,
                         cleanup: Cleanup::default(),
+                        run_cancel_durable: false,
+                        run_finalized: true,
+                        run_cancel_pending: false,
+                        run_retry_after: None,
                     },
                 );
             }
@@ -198,11 +232,17 @@ impl Actor {
             .runtime_dir
             .join(format!("host-{}", info.host_instance));
         ensure_private_dir(&resources)?;
-        let (jobs, results) = launch::worker(store.clone(), launcher, resources)?;
+        let (jobs, results) = launch::worker(store.clone(), launcher.clone(), resources.clone())?;
         let (child_scans, child_reports) = children::worker()?;
         let git = git_bridge::Bridge::new(store.clone(), &info.host_instance)?;
+        let source_gate = SourceGate::default();
+        for (identity, id) in git.unresolved_sources() {
+            source_gate.block(&identity, &id, "previous Git operation cleanup is unknown")?;
+        }
+        let runs = run_jobs::Bridge::new(store.clone(), launcher, resources, source_gate.clone())?;
         let actor = Self {
-            source_gate: SourceGate::default(),
+            source_gate,
+            runs,
             git,
             store,
             info,
@@ -227,21 +267,21 @@ impl Actor {
             LEDGER,
             &Ledger {
                 schema: 1,
-                sessions: self
-                    .slots
-                    .values()
-                    .map(|slot| Tombstone::from_info(&slot.info))
-                    .collect(),
+                sessions: self.slots.values().map(Tombstone::from_slot).collect(),
             },
         )
     }
     pub fn finished(&self) -> bool {
         self.quiescing
             && self.git.idle()
-            && self
-                .slots
-                .values()
-                .all(|slot| !slot.info.state.is_live() && !slot.preparing && slot.runtime.is_none())
+            && self.runs.idle()
+            && self.slots.values().all(|slot| {
+                !slot.info.state.is_live()
+                    && !slot.preparing
+                    && slot.runtime.is_none()
+                    && (slot.run_finalized
+                        || !matches!(slot.purpose, SlotPurpose::Run { run_id: Some(_) }))
+            })
     }
     pub fn respond(&mut self, envelope: Envelope, peer: PeerCredentials) -> Response {
         let request_id = envelope.request_id.clone();
@@ -359,7 +399,8 @@ impl Actor {
             | Request::GitOperationSnapshot { .. }
             | Request::GitOperationInput { .. }
             | Request::GitOperationResize { .. }
-            | Request::GitOperationCancel { .. } => {
+            | Request::GitOperationCancel { .. }
+            | Request::GitOperationReconcile { .. } => {
                 let shells = self
                     .slots
                     .values()
@@ -369,10 +410,12 @@ impl Actor {
                     .request(client, request, shells, self.quiescing, &self.source_gate)?
                     .context("Git request dispatch is unavailable")
             }
+            Request::Run { request } => value(self.run_request(client, request)?),
             Request::Hello => value(&self.info),
             Request::List { project } => value(
                 self.slots
                     .values()
+                    .filter(|slot| matches!(slot.purpose, SlotPurpose::Terminal(_)))
                     .filter(|slot| {
                         project
                             .as_ref()
@@ -382,7 +425,9 @@ impl Actor {
                     .collect::<Vec<_>>(),
             ),
             Request::Definition { session } => {
-                let SlotPurpose::Terminal(definition) = &self.slot(session)?.purpose;
+                let SlotPurpose::Terminal(definition) = &self.slot(session)?.purpose else {
+                    anyhow::bail!("run/editor session has no ordinary shell definition");
+                };
                 value(definition.as_ref().context(
                     "original terminal definition is no longer retained for this ended session",
                 )?)
@@ -583,6 +628,23 @@ impl Actor {
                 value(ClosePreview {
                     project: project.clone(),
                     targets: self.targets(project.as_deref()),
+                    run_relations: self
+                        .slots
+                        .values()
+                        .filter(|slot| {
+                            slot.info.state.is_live()
+                                && project
+                                    .as_ref()
+                                    .is_none_or(|id| id == &slot.info.project_id)
+                        })
+                        .filter_map(|slot| match &slot.purpose {
+                            SlotPurpose::Run { run_id } => Some(RunCloseRelation {
+                                session_id: slot.info.session_id.clone(),
+                                run_id: run_id.clone(),
+                            }),
+                            _ => None,
+                        })
+                        .collect(),
                 })
             }
             Request::CloseProject {
@@ -593,6 +655,211 @@ impl Actor {
             Request::Shutdown { sessions, force } => {
                 value(self.close_many(None, sessions, *force)?)
             }
+        }
+    }
+
+    fn run_request(&mut self, client: &str, request: &RunRequest) -> Result<RunJob> {
+        match request {
+            RunRequest::Job { job_id } => return self.runs.job(client, job_id),
+            RunRequest::CancelJob { job_id } => {
+                let job = self.runs.cancel_job(client, job_id)?;
+                if let Some(session) = &job.session_id {
+                    if self.slots.contains_key(session) {
+                        self.request_close(session, false)?;
+                    }
+                }
+                return Ok(job);
+            }
+            _ => {}
+        }
+        ensure!(
+            !self.quiescing
+                || matches!(
+                    request,
+                    RunRequest::Info { .. }
+                        | RunRequest::List { .. }
+                        | RunRequest::Log { .. }
+                        | RunRequest::Cancel { .. }
+                ),
+            "host shutdown in progress; no new run jobs accepted"
+        );
+        let launch = match request {
+            RunRequest::Start { project_id, .. } => Some((
+                project_id.clone(),
+                SlotPurpose::Run { run_id: None },
+                "Task starting",
+            )),
+            RunRequest::EditorOpen { review_id, .. } => Some((
+                self.runs.editor_project(client, review_id)?,
+                SlotPurpose::Editor,
+                "Editor",
+            )),
+            _ => None,
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let session = if let Some((project, purpose, name)) = launch {
+            ensure!(
+                self.slots
+                    .values()
+                    .filter(|slot| slot.info.state.is_live())
+                    .count()
+                    + self.git.occupied()
+                    < MAX_TERMINALS,
+                "host live terminal limit reached"
+            );
+            ensure!(
+                self.slots.len() < MAX_TRACKED,
+                "host tracked terminal limit reached"
+            );
+            let id = new_id();
+            let info = SessionInfo {
+                session_id: id.clone(),
+                project_id: project,
+                terminal_id: new_id(),
+                name: name.into(),
+                host_instance: self.info.host_instance.clone(),
+                persistent: false,
+                state: SessionState::Preparing,
+                initialization: Some(InitializationState::Initializing),
+                input_epoch: 0,
+                owner: None,
+                generation: 0,
+                child_pid: None,
+                cwd: None,
+                definition_revision: 0,
+                launch_digest: None,
+                exit: None,
+                error: None,
+            };
+            self.slots.insert(
+                id.clone(),
+                Slot {
+                    info,
+                    purpose,
+                    runtime: None,
+                    frozen: None,
+                    cancel: cancel.clone(),
+                    preparing: true,
+                    closing_at: None,
+                    exited_at: None,
+                    cleanup: Cleanup::default(),
+                    run_cancel_durable: false,
+                    run_finalized: false,
+                    run_cancel_pending: false,
+                    run_retry_after: None,
+                },
+            );
+            if let Err(error) = self.persist() {
+                self.slots.remove(&id);
+                return Err(error);
+            }
+            Some(id)
+        } else {
+            None
+        };
+        match self
+            .runs
+            .submit(client, request.clone(), session.clone(), cancel)
+        {
+            Ok(job) => Ok(job),
+            Err(error) => {
+                if let Some(session) = session {
+                    self.slots.remove(&session);
+                    let _ = self.persist();
+                }
+                Err(error)
+            }
+        }
+    }
+    fn accept_run_event(&mut self, mut event: run_jobs::Event) {
+        if let Some(session) = event.session_id.as_ref() {
+            if let Some(runtime) = event.runtime.take() {
+                if let Some(slot) = self.slots.get_mut(session) {
+                    if let Some(run) = &event.run {
+                        slot.purpose = SlotPurpose::Run {
+                            run_id: Some(run.run_id.clone()),
+                        };
+                        slot.info.terminal_id = run.run_id.clone();
+                        slot.info.name = run.name.clone();
+                        slot.run_cancel_durable = run.cancel_requested;
+                    }
+                    if event.result.is_err() {
+                        slot.cancel.store(true, Ordering::Release);
+                    }
+                }
+                self.accept_prepared(Completed {
+                    session: session.clone(),
+                    result: Ok(runtime),
+                });
+            } else if event.job_id.is_some() {
+                if let Some(slot) = self.slots.get_mut(session) {
+                    // A duplicate start returns the authoritative existing session.
+                    if matches!(&event.result,Ok(RunResult::Started(started)) if started.existing) {
+                        slot.preparing = false;
+                        slot.info.state = SessionState::Closed;
+                        slot.info.owner = None;
+                        slot.run_finalized = true;
+                        slot.exited_at = Some(Instant::now());
+                    } else if slot.preparing {
+                        slot.preparing = false;
+                        slot.info.state = if slot.cancel.load(Ordering::Acquire) {
+                            SessionState::Closed
+                        } else {
+                            SessionState::Failed
+                        };
+                        slot.run_finalized = true;
+                        slot.info.initialization = Some(InitializationState::Failed);
+                        slot.info.error = event.result.as_ref().err().map(safe_error);
+                        slot.exited_at = Some(Instant::now());
+                        if let Some(run) = &event.run {
+                            slot.purpose = SlotPurpose::Run {
+                                run_id: Some(run.run_id.clone()),
+                            };
+                            slot.info.terminal_id = run.run_id.clone();
+                            slot.info.name = run.name.clone();
+                        }
+                    }
+                }
+                let _ = self.persist();
+            }
+        }
+        if let Some((id, force)) = &event.cancel {
+            if event.result.is_ok() {
+                let session = self
+                    .slots
+                    .iter()
+                    .find_map(|(session, slot)| match &slot.purpose {
+                        SlotPurpose::Run {
+                            run_id: Some(run_id),
+                        } if run_id == id => Some(session.clone()),
+                        _ => None,
+                    });
+                if let Some(session) = session {
+                    if let Some(slot) = self.slots.get_mut(&session) {
+                        slot.run_cancel_durable = true;
+                        slot.run_cancel_pending = false;
+                    }
+                    let _ = self.request_close(&session, *force);
+                    let _ = self.persist();
+                }
+            }
+        }
+        if event.job_id.is_none() && event.result.is_err() {
+            if let Some(session) = &event.session_id {
+                if let Some(slot) = self.slots.get_mut(session) {
+                    slot.info.error = event.result.as_ref().err().map(safe_error);
+                    if !slot.info.state.is_live() {
+                        slot.run_finalized = false;
+                    }
+                    if event.cancel.is_some() {
+                        slot.run_cancel_pending = false;
+                    }
+                    slot.run_retry_after = Some(Instant::now() + Duration::from_millis(250));
+                }
+            }
+        }
+        if let Some(id) = event.job_id {
+            self.runs.complete(&id, event.result);
         }
     }
 
@@ -720,6 +987,10 @@ impl Actor {
                 closing_at: None,
                 exited_at: None,
                 cleanup: Cleanup::default(),
+                run_cancel_durable: false,
+                run_finalized: false,
+                run_cancel_pending: false,
+                run_retry_after: None,
             },
         );
         let scheduled = self.persist().and_then(|()| {
@@ -767,6 +1038,28 @@ impl Actor {
         signalled
     }
     fn request_close(&mut self, session: &str, force: bool) -> Result<()> {
+        let run_to_cancel = match &self.slot(session)?.purpose {
+            SlotPurpose::Run { run_id: Some(id) }
+                if !self.slot(session)?.run_cancel_durable
+                    && self.slot(session)?.info.state.is_live() =>
+            {
+                Some(id.clone())
+            }
+            _ => None,
+        };
+        if let Some(id) = run_to_cancel {
+            if !self.slot(session)?.run_cancel_pending {
+                self.runs.cancel_run(&id, force)?;
+                self.slot_mut(session)?.run_cancel_pending = true;
+            }
+            let slot = self.slot_mut(session)?;
+            slot.cancel.store(true, Ordering::Release);
+            slot.info.state = SessionState::Closing;
+            slot.cleanup.requested = true;
+            slot.cleanup.force |= force;
+            slot.closing_at.get_or_insert_with(Instant::now);
+            return Ok(());
+        }
         let slot = self.slot_mut(session)?;
         if !slot.info.state.is_live() {
             return Ok(());
@@ -1044,6 +1337,8 @@ impl Actor {
                     }
                     Ok(children::ChildState::Running) => {
                         if slot.cleanup.requested
+                            && (!matches!(slot.purpose, SlotPurpose::Run { .. })
+                                || slot.run_cancel_durable)
                             && slot.cleanup.signalled.get(&process.pid).copied()
                                 != Some(slot.cleanup.force)
                         {
@@ -1125,6 +1420,36 @@ impl Actor {
     }
 
     pub fn tick(&mut self) {
+        for _ in 0..16 {
+            let Some(event) = self.runs.poll() else {
+                break;
+            };
+            self.accept_run_event(event);
+        }
+        let retry_cancel: Vec<_> = self
+            .slots
+            .values()
+            .filter(|slot| {
+                slot.cleanup.requested
+                    && !slot.run_cancel_durable
+                    && !slot.run_cancel_pending
+                    && slot.info.state.is_live()
+                    && slot.run_retry_after.is_none_or(|at| Instant::now() >= at)
+            })
+            .filter_map(|slot| match &slot.purpose {
+                SlotPurpose::Run { run_id: Some(id) } => {
+                    Some((slot.info.session_id.clone(), id.clone(), slot.cleanup.force))
+                }
+                _ => None,
+            })
+            .collect();
+        for (session, id, force) in retry_cancel {
+            if self.runs.cancel_run(&id, force).is_ok() {
+                if let Some(slot) = self.slots.get_mut(&session) {
+                    slot.run_cancel_pending = true;
+                }
+            }
+        }
         for _ in 0..8 {
             let Ok(completed) = self.results.try_recv() else {
                 break;
@@ -1142,6 +1467,9 @@ impl Actor {
                 if let Ok(status) = runtime.terminal.status() {
                     slot.info.generation = status.generation;
                     if let Some(error) = status.error {
+                        if let Some(output) = &runtime.output {
+                            output.mark_partial();
+                        }
                         slot.info.error = Some(safe_error(error));
                     }
                 }
@@ -1185,6 +1513,9 @@ impl Actor {
                             .status()
                             .is_ok_and(|status| status.reader_closed);
                         if cutoff {
+                            if let Some(output) = &runtime.output {
+                                output.mark_partial();
+                            }
                             if let Err(error) = runtime.terminal.end_collection() {
                                 slot.info.error = Some(safe_error(error));
                             }
@@ -1267,6 +1598,36 @@ impl Actor {
                 }
             }
         }
+        let final_runs: Vec<_> = self
+            .slots
+            .values()
+            .filter(|slot| {
+                !slot.info.state.is_live()
+                    && !slot.preparing
+                    && slot.runtime.is_none()
+                    && !slot.run_finalized
+                    && slot.run_retry_after.is_none_or(|at| Instant::now() >= at)
+            })
+            .filter_map(|slot| match &slot.purpose {
+                SlotPurpose::Run { run_id: Some(id) } => Some((
+                    slot.info.session_id.clone(),
+                    id.clone(),
+                    slot.info.exit.clone(),
+                    slot.info.error.clone(),
+                    slot.frozen
+                        .as_ref()
+                        .is_some_and(|screen| screen.output_limited),
+                )),
+                _ => None,
+            })
+            .collect();
+        for (session, id, exit, error, partial) in final_runs {
+            if self.runs.finish(&id, exit, error, partial).is_ok() {
+                if let Some(slot) = self.slots.get_mut(&session) {
+                    slot.run_finalized = true;
+                }
+            }
+        }
         self.schedule_child_inventory();
         // Preserve minimal durable tombstones for every saved definition. Only
         // final screen memory is evicted; closed defaults never silently reopen.
@@ -1282,6 +1643,24 @@ impl Actor {
             if let Some(slot) = self.slots.get_mut(&id) {
                 slot.frozen = None;
             }
+        }
+        let mut retired_runs: Vec<_> = self
+            .slots
+            .iter()
+            .filter(|(_, slot)| {
+                !matches!(slot.purpose, SlotPurpose::Terminal(_))
+                    && !slot.info.state.is_live()
+                    && !slot.preparing
+                    && slot.runtime.is_none()
+                    && slot.run_finalized
+            })
+            .map(|(id, slot)| (slot.exited_at, id.clone()))
+            .collect();
+        retired_runs.sort();
+        let retire_count = retired_runs.len().saturating_sub(64);
+        for (_, id) in retired_runs.into_iter().take(retire_count) {
+            self.slots.remove(&id);
+            changed = true;
         }
         let transient_definitions = self
             .slots
@@ -1353,7 +1732,8 @@ impl Actor {
             Ok(runtime) => {
                 slot.info.child_pid = runtime.terminal.child_pid();
                 slot.info.definition_revision = runtime.revision;
-                slot.info.launch_digest = Some(runtime.digest.clone());
+                slot.info.launch_digest =
+                    (!runtime.digest.is_empty()).then(|| runtime.digest.clone());
                 let cancelled = slot.cancel.load(Ordering::Acquire) || self.quiescing;
                 slot.info.state = if cancelled {
                     SessionState::Closing
@@ -1378,10 +1758,22 @@ impl Actor {
                         .into(),
                     );
                     runtime.bootstrap.clear();
-                    let _ = runtime.terminal.request_host_close(false);
+                    if let SlotPurpose::Run { run_id: Some(id) } = &slot.purpose {
+                        if slot.run_cancel_durable {
+                            let _ = runtime.terminal.request_host_close(false);
+                        } else {
+                            let _ = self.runs.cancel_run(id, false);
+                        }
+                    } else {
+                        let _ = runtime.terminal.request_host_close(false);
+                    }
                 } else {
                     let bootstrap = std::mem::take(&mut runtime.bootstrap);
-                    if let Err(error) = runtime.terminal.input(&bootstrap) {
+                    if let Err(error) = if bootstrap.is_empty() {
+                        Ok(())
+                    } else {
+                        runtime.terminal.input(&bootstrap)
+                    } {
                         slot.info.state = SessionState::Closing;
                         slot.cleanup.requested = true;
                         slot.closing_at = Some(Instant::now());

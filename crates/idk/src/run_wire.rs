@@ -122,3 +122,228 @@ pub struct LogSearch {
     pub truncated: bool,
     pub cancelled: bool,
 }
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RunRequest {
+    Tasks {
+        project_id: String,
+    },
+    List {
+        project_id: Option<String>,
+    },
+    ReviewTask {
+        project_id: String,
+        task_id: String,
+        environment: std::collections::BTreeMap<String, String>,
+    },
+    ApproveTask {
+        revision: u64,
+        project_id: String,
+        task_id: String,
+        digest: String,
+        environment: std::collections::BTreeMap<String, String>,
+    },
+    SaveTask {
+        revision: u64,
+        project_id: String,
+        task: crate::model::TaskDefinition,
+    },
+    Start {
+        project_id: String,
+        task_id: String,
+        operation_id: String,
+        environment: std::collections::BTreeMap<String, String>,
+        parallel: bool,
+        rows: u16,
+        cols: u16,
+    },
+    Info {
+        run_id: String,
+    },
+    Cancel {
+        run_id: String,
+        force: bool,
+    },
+    Reconcile {
+        run_id: String,
+    },
+    Log {
+        run_id: String,
+        generation: u64,
+        offset: u64,
+        limit: usize,
+    },
+    Search {
+        run_id: String,
+        generation: u64,
+        query: String,
+    },
+    Problems {
+        run_id: String,
+    },
+    EditorReview {
+        run_id: String,
+        problem_id: String,
+        log_generation: u64,
+    },
+    EditorOpen {
+        review_id: String,
+        environment: std::collections::BTreeMap<String, String>,
+        rows: u16,
+        cols: u16,
+    },
+    SaveEditor {
+        revision: u64,
+        project_id: String,
+        config: crate::model::EditorConfig,
+    },
+    Job {
+        job_id: String,
+    },
+    CancelJob {
+        job_id: String,
+    },
+}
+impl std::fmt::Debug for RunRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunRequest")
+            .field("kind", &std::mem::discriminant(self))
+            .field("payload", &"[redacted]")
+            .finish()
+    }
+}
+impl RunRequest {
+    pub(crate) fn validate(&self) -> anyhow::Result<()> {
+        use crate::model::valid_id;
+        use anyhow::ensure;
+        match self {
+            Self::Tasks { project_id }
+            | Self::SaveTask { project_id, .. }
+            | Self::SaveEditor { project_id, .. } => valid_id(project_id)?,
+            Self::List { project_id } => {
+                if let Some(id) = project_id {
+                    valid_id(id)?;
+                }
+            }
+            Self::ReviewTask {
+                project_id,
+                task_id,
+                environment,
+            }
+            | Self::ApproveTask {
+                project_id,
+                task_id,
+                environment,
+                ..
+            } => {
+                valid_id(project_id)?;
+                valid_id(task_id)?;
+                crate::project::LaunchEnvironment::from_variables(environment.clone())?;
+            }
+            Self::Start {
+                project_id,
+                task_id,
+                operation_id,
+                environment,
+                rows,
+                cols,
+                ..
+            } => {
+                valid_id(project_id)?;
+                valid_id(task_id)?;
+                valid_id(operation_id)?;
+                crate::project::LaunchEnvironment::from_variables(environment.clone())?;
+                crate::protocol::validate_dimensions(*rows, *cols)?;
+            }
+            Self::Info { run_id }
+            | Self::Cancel { run_id, .. }
+            | Self::Reconcile { run_id }
+            | Self::Problems { run_id } => valid_id(run_id)?,
+            Self::Log { run_id, limit, .. } => {
+                valid_id(run_id)?;
+                ensure!(
+                    *limit > 0 && *limit <= 65536,
+                    "log read limit must be 1–65536"
+                );
+            }
+            Self::Search { run_id, query, .. } => {
+                valid_id(run_id)?;
+                ensure!(
+                    !query.is_empty()
+                        && query.len() <= 1024
+                        && !query.chars().any(char::is_control),
+                    "invalid log search query"
+                );
+            }
+            Self::EditorReview {
+                run_id, problem_id, ..
+            } => {
+                valid_id(run_id)?;
+                ensure!(
+                    problem_id.len() <= 128 && !problem_id.is_empty(),
+                    "invalid problem ID"
+                );
+            }
+            Self::EditorOpen {
+                review_id,
+                environment,
+                rows,
+                cols,
+            } => {
+                valid_id(review_id)?;
+                crate::project::LaunchEnvironment::from_variables(environment.clone())?;
+                crate::protocol::validate_dimensions(*rows, *cols)?;
+            }
+            Self::Job { job_id } | Self::CancelJob { job_id } => valid_id(job_id)?,
+        }
+        if let Self::ApproveTask { digest, .. } = self {
+            ensure!(
+                digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()),
+                "invalid task approval digest"
+            );
+        }
+        Ok(())
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RunJobState {
+    Pending,
+    Complete,
+    Failed,
+    Cancelled,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunJob {
+    pub job_id: String,
+    pub state: RunJobState,
+    pub result: Option<RunResult>,
+    pub error: Option<String>,
+    pub session_id: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum RunResult {
+    Tasks {
+        revision: u64,
+        tasks: Vec<crate::model::TaskDefinition>,
+    },
+    Runs(Vec<RunInfo>),
+    Review(crate::task::TaskReview),
+    Task(crate::model::TaskDefinition),
+    Approved,
+    EditorSaved,
+    Started(RunStartReply),
+    Run(RunInfo),
+    Log(LogChunk),
+    Search(LogSearch),
+    Problems(crate::problems::ProblemSet),
+    EditorReview {
+        review_id: String,
+        review: crate::editor::EditorReview,
+    },
+    EditorOpened {
+        session_id: String,
+    },
+    Reconciled(RunInfo),
+}

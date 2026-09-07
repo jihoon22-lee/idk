@@ -20,6 +20,16 @@ pub struct Client {
 }
 
 impl Client {
+    pub fn git_reconcile(
+        &mut self,
+        operation: &str,
+        repository: crate::git::Repository,
+    ) -> Result<GitOperationInfo> {
+        self.call(Request::GitOperationReconcile {
+            operation: operation.into(),
+            repository,
+        })
+    }
     pub fn git_submit(&mut self, task: GitTask) -> Result<GitJobInfo> {
         self.call(Request::GitSubmit { task })
     }
@@ -228,6 +238,9 @@ impl Client {
     }
     fn call<T: DeserializeOwned>(&mut self, request: Request) -> Result<T> {
         self.request(request)?.decode()
+    }
+    pub fn run(&mut self, request: crate::run_wire::RunRequest) -> Result<crate::run_wire::RunJob> {
+        self.request(Request::Run { request })?.decode()
     }
     pub fn list(&mut self, project: Option<&str>) -> Result<Vec<SessionInfo>> {
         self.call(Request::List {

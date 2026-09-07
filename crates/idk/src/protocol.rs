@@ -37,6 +37,9 @@ pub struct Envelope {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
+    Run {
+        request: crate::run_wire::RunRequest,
+    },
     GitSubmit {
         task: GitTask,
     },
@@ -73,6 +76,10 @@ pub enum Request {
         epoch: u64,
         rows: u16,
         cols: u16,
+    },
+    GitOperationReconcile {
+        operation: String,
+        repository: crate::git::Repository,
     },
     GitOperationCancel {
         operation: String,
@@ -174,7 +181,9 @@ impl Request {
     pub fn is_mutating(&self) -> bool {
         !matches!(
             self,
-            Self::Hello
+            Self::Run {
+                request: crate::run_wire::RunRequest::Job { .. }
+            } | Self::Hello
                 | Self::List { .. }
                 | Self::Definition { .. }
                 | Self::Snapshot { .. }
@@ -187,8 +196,18 @@ impl Request {
     }
     fn validate(&self) -> Result<()> {
         match self {
+            Self::Run { request } => request.validate()?,
             Self::GitSubmit { task } => task.validate()?,
             Self::GitJob { job } => valid_id(job)?,
+            Self::GitOperationReconcile {
+                operation,
+                repository,
+            } => {
+                valid_id(operation)?;
+                crate::model::absolute_path(&repository.root)?;
+                crate::model::absolute_path(&repository.git_dir)?;
+                crate::model::absolute_path(&repository.common_dir)?;
+            }
             Self::GitExecute { plan, rows, cols } => {
                 valid_id(plan)?;
                 validate_dimensions(*rows, *cols)?;
@@ -457,6 +476,13 @@ pub struct SearchReply {
 pub struct ClosePreview {
     pub project: Option<String>,
     pub targets: Vec<SessionInfo>,
+    #[serde(default)]
+    pub run_relations: Vec<RunCloseRelation>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunCloseRelation {
+    pub session_id: String,
+    pub run_id: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloseReply {

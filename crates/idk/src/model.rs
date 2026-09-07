@@ -491,6 +491,7 @@ pub struct SourceGate(Arc<Mutex<HashMap<PathBuf, GateState>>>);
 #[derive(Debug, Default, Serialize, Clone)]
 pub struct GateState {
     pub provider_ready: bool,
+    pub blocks: BTreeMap<String, String>,
     pub runs: BTreeMap<String, String>,
     pub mutation: Option<String>,
     pub generation: u64,
@@ -504,6 +505,30 @@ pub struct GateLease {
 }
 
 impl SourceGate {
+    pub fn block(&self, identity: &Path, id: &str, reason: &str) -> Result<()> {
+        let mut states = self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("source-use provider unavailable"))?;
+        states
+            .entry(identity.to_path_buf())
+            .or_default()
+            .blocks
+            .insert(id.into(), reason.into());
+        Ok(())
+    }
+    pub fn unblock(&self, identity: &Path, id: &str) -> Result<()> {
+        let mut states = self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("source-use provider unavailable"))?;
+        states
+            .entry(identity.to_path_buf())
+            .or_default()
+            .blocks
+            .remove(id);
+        Ok(())
+    }
     /// A stopped/crashed run provider must not leave an idle-ready observation behind.
     pub fn unavailable(&self, identity: &Path) -> Result<()> {
         let mut states = self
@@ -533,7 +558,9 @@ impl SourceGate {
             .0
             .lock()
             .map_err(|_| anyhow::anyhow!("source-use provider unavailable"))?;
-        Ok(states.get(identity).cloned().unwrap_or_default())
+        let mut state = states.get(identity).cloned().unwrap_or_default();
+        state.provider_ready &= state.blocks.is_empty();
+        Ok(state)
     }
 
     pub fn reserve_run(&self, identity: &Path, operation: &str, name: &str) -> Result<GateLease> {
@@ -550,7 +577,7 @@ impl SourceGate {
             .lock()
             .map_err(|_| anyhow::anyhow!("source-use provider unavailable"))?;
         let state = states.entry(identity.to_path_buf()).or_default();
-        if !state.provider_ready {
+        if !state.provider_ready || !state.blocks.is_empty() {
             bail!("source-use state unknown; provider is not ready");
         }
         if state.mutation.is_some() || (run.is_none() && !state.runs.is_empty()) {
@@ -592,6 +619,23 @@ impl Drop for GateLease {
 mod tests {
     use super::*;
 
+    #[test]
+    fn independent_unknown_blocks_survive_readiness_until_each_explicit_release() {
+        let gate = SourceGate::default();
+        let identity = Path::new("/worktree/.git");
+        gate.ready(identity).unwrap();
+        gate.block(identity, "unknown1", "old operation").unwrap();
+        gate.block(identity, "unknown2", "another operation")
+            .unwrap();
+        gate.ready(identity).unwrap();
+        assert!(!gate.state(identity).unwrap().provider_ready);
+        assert!(gate.reserve_run(identity, "new", "build").is_err());
+        gate.unblock(identity, "unknown1").unwrap();
+        assert!(gate.reserve_mutation(identity, "switch").is_err());
+        gate.unblock(identity, "unknown2").unwrap();
+        assert!(gate.state(identity).unwrap().provider_ready);
+        assert!(gate.reserve_mutation(identity, "switch").is_ok());
+    }
     #[test]
     fn unavailable_is_not_idle_and_reservations_exclude_source_changes() {
         let gate = SourceGate::default();
