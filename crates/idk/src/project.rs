@@ -1149,7 +1149,7 @@ fn scope_result(
         },
     }
 }
-fn common_scope(project: &Project, environment: &LaunchEnvironment) -> TrustScopeReview {
+pub(crate) fn common_scope(project: &Project, environment: &LaunchEnvironment) -> TrustScopeReview {
     let mut files = Vec::new();
     let result = (|| {
         let inspection = inspect_shell(&project.shell.executable, &environment.variables)?;

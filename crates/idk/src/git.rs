@@ -378,6 +378,14 @@ fn stop_owned_process(child: &mut Child) {
     let _ = child.wait();
 }
 
+/// Bounded read-only Git capture for run provenance. Does not acquire a mutation lease.
+pub(crate) fn run_readonly(executable: &Path, cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let args = args.iter().map(OsString::from).collect::<Vec<_>>();
+    let output = run(executable, cwd, &args, Duration::from_secs(2), 1024 * 1024)?;
+    ensure!(output.status.success(), "Git provenance observation failed");
+    Ok(output.stdout)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

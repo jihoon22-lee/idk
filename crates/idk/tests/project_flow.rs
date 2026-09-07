@@ -670,6 +670,13 @@ fn framed_task_digest_cannot_move_command_bytes_into_the_cwd() {
         sources: Vec::new(),
         artifact: None,
         approved_digest: None,
+        steps: Vec::new(),
+        failure_policy: Default::default(),
+        logging: Default::default(),
+        interactive: false,
+        build_outputs: Vec::new(),
+        artifact_from_task: None,
+        timeout_seconds: None,
     };
     let mut other = task.clone();
     other.command = "echo safe/tmp/prefix".into();

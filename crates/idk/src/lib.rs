@@ -13,3 +13,9 @@ pub mod shell;
 pub mod store;
 pub mod terminal;
 pub mod ui;
+
+pub mod editor;
+pub mod problems;
+pub mod run;
+pub mod run_wire;
+pub mod task;
