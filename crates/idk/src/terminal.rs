@@ -91,6 +91,7 @@ pub struct TerminalModes {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TerminalSnapshot {
+    pub generation: u64,
     pub rows: u16,
     pub cols: u16,
     /// Dense row-major screen cells, including wide-character spacer cells.
@@ -134,6 +135,23 @@ impl TerminalSnapshot {
 pub struct TerminalExit {
     pub code: u32,
     pub signal: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct TerminalMatch {
+    /// Terminal grid line: negative values refer to stored scrollback.
+    pub line: i32,
+    pub column: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct TerminalStatus {
+    pub generation: u64,
+    pub rows: u16,
+    pub cols: u16,
+    pub reader_closed: bool,
+    pub error: Option<String>,
+    pub output_limited: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -308,6 +326,8 @@ struct Engine {
     error: Option<String>,
     limit_scan: usize,
     output_limited: bool,
+    generation: u64,
+    search_cursor: Option<(String, TerminalMatch, u64)>,
 }
 
 impl Engine {
@@ -337,6 +357,8 @@ impl Engine {
             error: None,
             limit_scan: 0,
             output_limited: false,
+            generation: 1,
+            search_cursor: None,
         }
     }
 
@@ -353,14 +375,21 @@ impl Engine {
     }
 
     fn process(&mut self, bytes: &[u8]) {
+        let was_limited = self.output_limited;
         let filtered = self.ingress.filter(bytes);
+        let has_bytes = !filtered.is_empty();
         self.parser.advance(&mut self.term, &filtered);
         self.output_limited |= self.ingress.limited;
         self.limit_cell_storage();
         self.events();
+        if has_bytes || was_limited != self.output_limited {
+            self.changed();
+        }
     }
 
     fn tick(&mut self) {
+        let before = (self.error.clone(), self.output_limited, self.title.clone());
+        let mut synchronized_flush = false;
         if self
             .parser
             .sync_timeout()
@@ -368,10 +397,20 @@ impl Engine {
             .is_some_and(|deadline| Instant::now() >= deadline)
         {
             self.parser.stop_sync(&mut self.term);
+            synchronized_flush = true;
         }
         self.events();
         self.limit_cell_storage();
         self.flush();
+        if synchronized_flush
+            || before != (self.error.clone(), self.output_limited, self.title.clone())
+        {
+            self.changed();
+        }
+    }
+
+    fn changed(&mut self) {
+        self.generation = self.generation.wrapping_add(1).max(1);
     }
 
     fn finish_output(&mut self) {
@@ -386,6 +425,7 @@ impl Engine {
         self.events();
         self.limit_cell_storage();
         self.reader_closed = true;
+        self.changed();
     }
 
     fn limit_cell_storage(&mut self) {
@@ -563,6 +603,7 @@ impl Engine {
             })
             .collect();
         TerminalSnapshot {
+            generation: self.generation,
             rows: self.term.screen_lines() as u16,
             cols: self.term.columns() as u16,
             cells,
@@ -654,7 +695,7 @@ type OwnedChild = Box<dyn Child + Send + Sync>;
 /// Drop reaps the owned child without treating hangup as confirmed cancellation
 /// and without waiting for a long-running child while holding a host lock.
 pub struct TerminalSession {
-    master: Box<dyn MasterPty + Send>,
+    master: Option<Box<dyn MasterPty + Send>>,
     child: Option<OwnedChild>,
     pid: Option<u32>,
     engine: Arc<Mutex<Engine>>,
@@ -662,6 +703,8 @@ pub struct TerminalSession {
     reader: Option<JoinHandle<()>>,
     reaper: Option<mpsc::SyncSender<OwnedChild>>,
     exit: Option<TerminalExit>,
+    defer_reap: bool,
+    reaped: bool,
 }
 
 impl TerminalSession {
@@ -722,7 +765,7 @@ impl TerminalSession {
             }
         };
         Ok(Self {
-            master: pair.master,
+            master: Some(pair.master),
             child: Some(child),
             pid,
             engine,
@@ -730,6 +773,8 @@ impl TerminalSession {
             reader: Some(reader_thread),
             reaper: Some(reaper),
             exit: None,
+            defer_reap: false,
+            reaped: false,
         })
     }
 
@@ -743,6 +788,27 @@ impl TerminalSession {
         Ok(self.engine()?.snapshot())
     }
 
+    pub fn snapshot_since(&self, generation: Option<u64>) -> Result<Option<TerminalSnapshot>> {
+        let engine = self.engine()?;
+        if generation == Some(engine.generation) {
+            Ok(None)
+        } else {
+            Ok(Some(engine.snapshot()))
+        }
+    }
+
+    pub fn status(&self) -> Result<TerminalStatus> {
+        let engine = self.engine()?;
+        Ok(TerminalStatus {
+            generation: engine.generation,
+            rows: engine.term.screen_lines() as u16,
+            cols: engine.term.columns() as u16,
+            reader_closed: engine.reader_closed,
+            error: engine.error.clone(),
+            output_limited: engine.output_limited,
+        })
+    }
+
     /// Accept bytes into the bounded queue. Later I/O errors appear in snapshot.error.
     pub fn input(&mut self, bytes: &[u8]) -> Result<()> {
         ensure!(self.try_wait()?.is_none(), "terminal shell has exited");
@@ -752,19 +818,33 @@ impl TerminalSession {
             bail!("terminal I/O failed: {error}");
         }
         engine.queue(bytes)?;
+        let offset = engine.term.grid().display_offset();
         engine.term.scroll_display(Scroll::Bottom);
+        if offset != 0 {
+            engine.changed();
+        }
         Ok(())
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16) -> Result<()> {
         let size = Size::checked(rows, cols)?;
         let mut engine = self.engine()?;
+        if engine.term.screen_lines() == usize::from(rows)
+            && engine.term.columns() == usize::from(cols)
+        {
+            return Ok(());
+        }
         ensure!(
             engine.scrollback.saturating_mul(usize::from(cols)) <= MAX_SCROLLBACK_CELLS,
             "resized scrollback exceeds cell limit"
         );
-        self.master.resize(size.pty()).context("resize PTY")?;
+        self.master
+            .as_ref()
+            .context("terminal output collection has ended")?
+            .resize(size.pty())
+            .context("resize PTY")?;
         engine.term.resize(size);
+        engine.changed();
         Ok(())
     }
 
@@ -772,14 +852,115 @@ impl TerminalSession {
         // The upstream grid adds this delta using i32 arithmetic. IPC callers
         // may legitimately use extreme values for top/bottom; clamp first.
         let bound = MAX_SCROLLBACK_CELLS as i32;
-        self.engine()?
+        let mut engine = self.engine()?;
+        let offset = engine.term.grid().display_offset();
+        engine
             .term
             .scroll_display(Scroll::Delta(delta.clamp(-bound, bound)));
+        if engine.term.grid().display_offset() != offset {
+            engine.changed();
+        }
         Ok(())
     }
 
+    /// Literal search over all retained display rows, wrapping at history ends.
+    /// A query does not span a display-row boundary. Repeat searches advance;
+    /// new output restarts at the current viewport rather than using stale rows.
+    pub fn search(
+        &mut self,
+        query: &str,
+        backwards: bool,
+    ) -> Result<(Option<TerminalMatch>, usize)> {
+        ensure!(
+            !query.is_empty() && query.len() <= 256 && !query.chars().any(char::is_control),
+            "search needs 1–256 bytes of visible text"
+        );
+        let mut engine = self.engine()?;
+        let history = engine.term.history_size();
+        let rows = engine.term.total_lines();
+        let cols = engine.term.columns();
+        let old = engine
+            .search_cursor
+            .as_ref()
+            .filter(|(text, _, generation)| text == query && *generation == engine.generation)
+            .map(|(_, point, _)| *point);
+        let anchor = old.unwrap_or(TerminalMatch {
+            line: if backwards {
+                engine.term.screen_lines() as i32 - 1 - engine.term.grid().display_offset() as i32
+            } else {
+                -(engine.term.grid().display_offset() as i32)
+            },
+            column: if backwards { cols as u16 - 1 } else { 0 },
+        });
+        let mut first = None;
+        let mut last = None;
+        let mut next = None;
+        let mut previous = None;
+        for row in -(history as i32)..engine.term.screen_lines() as i32 {
+            let mut text = String::new();
+            let mut columns = Vec::with_capacity(cols);
+            for column in 0..cols {
+                let cell = &engine.term.grid()[Point::new(Line(row), Column(column))];
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+                columns.push((text.len(), column as u16));
+                if cell.flags.contains(Flags::HIDDEN) {
+                    text.push(' ');
+                } else {
+                    text.push(cell.c);
+                    if let Some(extra) = cell.zerowidth() {
+                        text.extend(extra.iter().take(MAX_COMBINING_MARKS));
+                    }
+                }
+            }
+            for (offset, _) in text.match_indices(query) {
+                let index = columns
+                    .partition_point(|(byte, _)| *byte <= offset)
+                    .saturating_sub(1);
+                let Some((_, column)) = columns.get(index) else {
+                    continue;
+                };
+                let point = TerminalMatch {
+                    line: row,
+                    column: *column,
+                };
+                if first.is_none() {
+                    first = Some(point);
+                }
+                last = Some(point);
+                if next.is_none() && (point > anchor || (old.is_none() && point == anchor)) {
+                    next = Some(point);
+                }
+                if point < anchor || (old.is_none() && point == anchor) {
+                    previous = Some(point);
+                }
+            }
+        }
+        let found = if backwards {
+            previous.or(last)
+        } else {
+            next.or(first)
+        };
+        if let Some(point) = found {
+            engine.term.scroll_to_point(Point::new(
+                Line(point.line),
+                Column(usize::from(point.column)),
+            ));
+            engine.changed();
+            engine.search_cursor = Some((query.into(), point, engine.generation));
+        }
+        Ok((found, rows))
+    }
+
     pub fn try_wait(&mut self) -> Result<Option<TerminalExit>> {
-        if self.exit.is_none() {
+        if self.defer_reap {
+            return self.observe_exit();
+        }
+        if !self.reaped {
             if let Some(status) = self
                 .child
                 .as_mut()
@@ -791,14 +972,109 @@ impl TerminalSession {
                     code: status.exit_code(),
                     signal: status.signal().map(str::to_owned),
                 });
+                self.reaped = true;
             }
         }
         Ok(self.exit.clone())
     }
 
+    /// Host-only lifetime mode: retain the leader as an unreaped SID anchor
+    /// until its adopted same-session descendants have been accounted for.
+    pub(crate) fn defer_reaping(&mut self) {
+        self.defer_reap = true;
+    }
+
+    fn observe_exit(&mut self) -> Result<Option<TerminalExit>> {
+        if self.exit.is_none() {
+            let pid = self.pid.context("terminal child PID unavailable")?;
+            let mut status: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let result = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid,
+                    &mut status,
+                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                )
+            };
+            if result != 0 {
+                return Err(std::io::Error::last_os_error())
+                    .context("observe owned terminal without releasing its SID");
+            }
+            if unsafe { status.si_pid() } != 0 {
+                use std::os::unix::process::ExitStatusExt;
+                let code = unsafe { status.si_status() };
+                let raw = match status.si_code {
+                    libc::CLD_EXITED => code << 8,
+                    libc::CLD_KILLED => code,
+                    libc::CLD_DUMPED => code | 0x80,
+                    _ => bail!("unexpected terminal wait status"),
+                };
+                let status =
+                    portable_pty::ExitStatus::from(std::process::ExitStatus::from_raw(raw));
+                self.exit = Some(TerminalExit {
+                    code: status.exit_code(),
+                    signal: status.signal().map(str::to_owned),
+                });
+            }
+        }
+        Ok(self.exit.clone())
+    }
+
+    pub(crate) fn reap_exit(&mut self) -> Result<TerminalExit> {
+        ensure!(
+            self.observe_exit()?.is_some(),
+            "terminal leader has not exited"
+        );
+        self.defer_reap = false;
+        self.try_wait()?
+            .context("terminal leader exit was not reaped")
+    }
+
+    /// Signal the still-owned leader alone. The host handles adopted background
+    /// children individually after exit; no process-group PID lookup grants it
+    /// authority to signal a potentially reused process group.
+    pub(crate) fn request_host_close(&mut self, force: bool) -> Result<()> {
+        if self.try_wait()?.is_some() {
+            return Ok(());
+        }
+        let pid = self.pid.context("terminal child PID unavailable")? as libc::pid_t;
+        ensure!(
+            unsafe { libc::getsid(pid) } == pid,
+            "terminal process session ownership changed"
+        );
+        signal(pid, if force { libc::SIGKILL } else { libc::SIGHUP })
+    }
+
+    /// Close bounded PTY collection while retaining an unreaped child handle.
+    /// This permits honest descendant cleanup after the final-output deadline.
+    pub(crate) fn end_collection(&mut self) -> Result<()> {
+        self.stop.store(true, Ordering::Release);
+        {
+            let mut engine = self.engine()?;
+            engine.output_limited = true;
+            engine.writer = Box::new(std::io::sink());
+            engine.pending.clear();
+            engine.pending_bytes = 0;
+            engine.pending_offset = 0;
+            engine.finish_output();
+        }
+        self.master.take();
+        Ok(())
+    }
+
     /// Request hangup of the owned shell and its current foreground job. This is
     /// a signal request, not proof of exit: callers must continue try_wait().
     pub fn terminate(&mut self) -> Result<()> {
+        self.signal_owned(libc::SIGHUP)
+    }
+
+    /// Force the still-owned shell and current owned foreground process group.
+    /// Detached/nohup descendants outside that group are not claimed as reaped.
+    pub fn force_terminate(&mut self) -> Result<()> {
+        self.signal_owned(libc::SIGKILL)
+    }
+
+    fn signal_owned(&mut self, requested: libc::c_int) -> Result<()> {
         if self.try_wait()?.is_some() {
             return Ok(());
         }
@@ -808,12 +1084,16 @@ impl TerminalSession {
         if unsafe { libc::getsid(pid) } != pid {
             bail!("terminal process session ownership changed");
         }
-        if let Some(group) = self.master.process_group_leader() {
-            if group != pid && group > 1 && unsafe { libc::getsid(group) } == pid {
-                signal(-group, libc::SIGHUP)?;
+        if let Some(group) = self
+            .master
+            .as_ref()
+            .and_then(|master| master.process_group_leader())
+        {
+            if group > 1 && unsafe { libc::getsid(group) } == pid {
+                signal(-group, requested)?;
             }
         }
-        signal(pid, libc::SIGHUP)
+        signal(pid, requested)
     }
 
     pub fn child_pid(&self) -> Option<u32> {
@@ -915,6 +1195,9 @@ fn reader_loop(
             }
             Ok(count) => {
                 if let Ok(mut state) = engine.lock() {
+                    if stop.load(Ordering::Acquire) {
+                        break;
+                    }
                     state.process(&bytes[..count]);
                 } else {
                     break;

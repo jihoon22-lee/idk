@@ -15,6 +15,10 @@ const SELECTED: Color = Color::Rgb(25, 53, 65);
 
 pub(super) fn render(app: &mut App<'_>, frame: &mut Frame<'_>) {
     let area = frame.area();
+    if app.terminal_connected && !app.menu_visible && app.runtime.is_some() {
+        live_screen(app, frame, area);
+        return;
+    }
     if area.width < 24 || area.height < 8 {
         frame.render_widget(Paragraph::new("idk\nA larger terminal is needed.\nYour draft is kept.\nEsc: close dialog / screen"), area);
         return;
@@ -200,6 +204,39 @@ fn content(app: &App<'_>, frame: &mut Frame<'_>, area: Rect) {
                             ),
                             Span::raw(visible_text(&terminal.name)),
                             Span::styled(
+                                app.runtime
+                                    .as_ref()
+                                    .and_then(|runtime| {
+                                        runtime
+                                            .sessions
+                                            .iter()
+                                            .rev()
+                                            .find(|session| {
+                                                session.project_id == project.project.id
+                                                    && session.terminal_id == terminal.id
+                                            })
+                                            .map(|session| {
+                                                format!(
+                                                    " · {:?}{}",
+                                                    session.state,
+                                                    if session.generation
+                                                        > runtime
+                                                            .seen
+                                                            .get(&session.session_id)
+                                                            .copied()
+                                                            .unwrap_or(0)
+                                                    {
+                                                        " +output"
+                                                    } else {
+                                                        ""
+                                                    }
+                                                )
+                                            })
+                                    })
+                                    .unwrap_or_else(|| " · not open".into()),
+                                Style::default().fg(ACCENT),
+                            ),
+                            Span::styled(
                                 if terminal.persistent {
                                     " · saved"
                                 } else {
@@ -239,7 +276,21 @@ fn content(app: &App<'_>, frame: &mut Frame<'_>, area: Rect) {
                     ),
                 ];
                 if detail_height >= 8 {
-                    lines.push("Live folder: unknown · terminal not open".into());
+                    lines.push(
+                        app.selected_live()
+                            .map(|session| {
+                                format!(
+                                    "Live folder: {} · initialization {:?}",
+                                    session
+                                        .cwd
+                                        .as_ref()
+                                        .map(|path| path.display().to_string())
+                                        .unwrap_or_else(|| "unknown".into()),
+                                    session.initialization
+                                )
+                            })
+                            .unwrap_or_else(|| "Live folder: unknown · terminal not open".into()),
+                    );
                     lines.push(format!(
                         "Primary Git: {}",
                         project
@@ -257,6 +308,19 @@ fn content(app: &App<'_>, frame: &mut Frame<'_>, area: Rect) {
                         }
                         .into(),
                     );
+                }
+                if let Some(notice) = app
+                    .runtime
+                    .as_ref()
+                    .filter(|runtime| {
+                        runtime.active.as_ref().is_some_and(|active| {
+                            active.project_id == project.project.id
+                                && active.terminal_id == terminal.id
+                        })
+                    })
+                    .and_then(|runtime| runtime.definition_notice.as_ref())
+                {
+                    lines.push(notice.clone());
                 }
                 if let PathAvailability::Unavailable { message } = availability {
                     lines.push(message);
@@ -490,6 +554,7 @@ fn dialog_view(app: &App<'_>, dialog: &mut Dialog, frame: &mut Frame<'_>, area: 
                 "F2 Approve temporary scripts · Esc Cancel · ↑↓ Scroll",
             );
         }
+        Dialog::Live(dialog) => live_dialog(app, dialog, frame, area),
         Dialog::Help { scroll } => {
             let inner = popup(frame, area, "Project controls", 88);
             let lines = [
@@ -500,7 +565,10 @@ fn dialog_view(app: &App<'_>, dialog: &mut Dialog, frame: &mut Frame<'_>, area: 
                 "Terminals: 1 opens terminal definitions.",
                 "  n Add · e Edit · c Copy with a new identity · Del Remove",
                 "  s Save temporary · d Choose default · Alt+↑/↓ Reorder",
-                "  Enter requests open; unavailable runtime stays clearly unavailable.",
+                "  Enter Open/attach · o Open defaults · F8 Continue paused · O Cancel remaining",
+                "  l All host shells (including removed definitions) · x Close selected",
+                "  X Close project shells · H Close all shells and stop host",
+                "  / Search scrollback · Shift+PgUp/PgDn Scroll · y Copy preview",
                 "",
                 "Git: 2 shows the primary and explicitly related repositories.",
                 "  n / g Connect · Enter Review selected repository as primary",
@@ -521,7 +589,8 @@ fn dialog_view(app: &App<'_>, dialog: &mut Dialog, frame: &mut Frame<'_>, area: 
                 "",
                 "When a real terminal is focused, keys go to that terminal.",
                 "Ctrl+g opens controls; a second Ctrl+g forwards Ctrl+g.",
-                "There is no terminal runtime attached in this build.",
+                "q in controls detaches this UI; the host and shells stay alive.",
+                "Clipboard export requires y then F2; terminal output never copies itself.",
                 "",
                 "q / Esc closes this screen. Closing controls is not killing a shell.",
             ]
@@ -747,4 +816,393 @@ fn input_window(input: &TextInput, width: u16) -> (String, u16) {
     }
     let column = Line::from(&text[start..cursor]).width().min(max_before) as u16;
     (text[start..end].to_owned(), column)
+}
+
+fn live_screen(app: &mut App<'_>, frame: &mut Frame<'_>, area: Rect) {
+    let runtime = app.runtime.as_ref().unwrap();
+    let active = runtime.active.as_ref();
+    let name = active
+        .map(|session| session.name.as_str())
+        .unwrap_or("Connecting");
+    let state = active
+        .map(|session| {
+            format!(
+                "{:?} · initialization {}",
+                session.state,
+                initialization_label(session.initialization.as_ref())
+            )
+        })
+        .unwrap_or_else(|| "unknown".into());
+    let writable = runtime.can_input();
+    let limited = runtime
+        .screen
+        .as_ref()
+        .is_some_and(|screen| screen.output_limited);
+    let error = runtime
+        .screen
+        .as_ref()
+        .and_then(|screen| screen.error.as_deref())
+        .or_else(|| active.and_then(|session| session.error.as_deref()));
+    // Status comes before the name so narrow views cannot hide a lossy screen.
+    let status = match (limited, error.is_some()) {
+        (true, true) => "Output limited · Error · ",
+        (true, false) => "Output limited · ",
+        (false, true) => "PTY error · ",
+        (false, false) => "",
+    };
+    frame.render_widget(
+        Paragraph::new(visible_text(&format!(
+            "{status}{name} · {state}{}",
+            if writable { "" } else { " · READ ONLY" }
+        )))
+        .style(Style::default().fg(ACCENT)),
+        Rect::new(area.x, area.y, area.width, 1),
+    );
+    if let Some(screen) = &runtime.screen {
+        super::screen::render(frame, app.viewport, screen, writable);
+    } else {
+        frame.render_widget(
+            Paragraph::new(empty_screen_message(
+                active.map(|session| session.state),
+                runtime.online,
+            ))
+            .wrap(Wrap { trim: false }),
+            app.viewport,
+        );
+    }
+    let notice = app
+        .notice
+        .as_ref()
+        .map(|notice| notice.message.as_str())
+        .unwrap_or("double Ctrl+g sends Ctrl+g · q in controls detaches");
+    let (footer, color) = if let Some(error) = error {
+        (
+            format!("PTY error: {error} · Ctrl+g Controls"),
+            Color::LightRed,
+        )
+    } else if limited {
+        (
+            "Output limited; some output may be missing · Ctrl+g Controls".into(),
+            Color::LightYellow,
+        )
+    } else {
+        (format!("Ctrl+g Controls · {notice}"), MUTED)
+    };
+    frame.render_widget(
+        Paragraph::new(visible_text(&footer)).style(Style::default().fg(color)),
+        Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1),
+    );
+}
+
+fn empty_screen_message(
+    state: Option<crate::protocol::SessionState>,
+    online: bool,
+) -> &'static str {
+    use crate::protocol::SessionState;
+    match state {
+        Some(SessionState::Unknown) => "Screen unavailable after host replacement.\nThe previous shell state is unknown.\nCtrl+g: controls. Select its definition and Enter to review opening a new shell.",
+        Some(SessionState::Closed | SessionState::Exited) => "Screen no longer retained. This shell has ended.\nCtrl+g: controls. Select its definition and Enter to review opening a new shell.",
+        Some(SessionState::Failed) => "No screen is available for this failed launch.\nCtrl+g: controls. Review the error and initialization before explicitly reopening its definition.",
+        _ if !online => "Host connection unavailable.\nCtrl+g: controls; F5 explicitly reconnects. Buffered input is not replayed.",
+        Some(SessionState::Preparing | SessionState::Running) => "Waiting for the host screen.\nCtrl+g opens controls.",
+        Some(SessionState::Closing) => "Shell is closing; no screen is currently available.\nCtrl+g opens controls. Wait for confirmed exit before reopening.",
+        None => "No terminal is attached.\nCtrl+g opens controls; choose an existing shell or a terminal definition.",
+    }
+}
+
+fn live_dialog(
+    app: &App<'_>,
+    dialog: &mut super::live::LiveDialog,
+    frame: &mut Frame<'_>,
+    area: Rect,
+) {
+    use super::live::LiveDialog;
+    match dialog {
+        LiveDialog::Confirm {
+            title,
+            lines,
+            force,
+            scroll,
+            request,
+            ..
+        } => {
+            let inner = popup(frame, area, title, 100);
+            let mut text = lines.clone();
+            let closing = matches!(
+                request.as_ref(),
+                crate::protocol::Request::Close { .. }
+                    | crate::protocol::Request::CloseProject { .. }
+                    | crate::protocol::Request::Shutdown { .. }
+            );
+            if closing {
+                text.push(format!(
+                    "Forced termination: {}",
+                    if *force { "enabled" } else { "off" }
+                ));
+            }
+            scroll_text(
+                frame,
+                inner,
+                text,
+                scroll,
+                if closing {
+                    "F2 Confirm · F3 Toggle force · ↑↓ Scroll · Esc Cancel"
+                } else {
+                    "F2 Confirm · ↑↓ Scroll · Esc Cancel"
+                },
+            );
+        }
+        LiveDialog::Sessions { selected } => {
+            let inner = popup(
+                frame,
+                area,
+                "All host shells · Enter attaches · Esc cancels",
+                110,
+            );
+            let sessions = &app.runtime.as_ref().unwrap().sessions;
+            let items: Vec<ListItem<'static>> = sessions
+                .iter()
+                .map(|session| {
+                    ListItem::new(visible_text(&format!(
+                        "{} · {:?} · project {} · {}",
+                        session.name, session.state, session.project_id, session.session_id
+                    )))
+                })
+                .collect();
+            let mut state = ListState::default().with_selected(Some(*selected));
+            frame.render_stateful_widget(
+                List::new(items).highlight_style(Style::default().bg(SELECTED)),
+                inner,
+                &mut state,
+            );
+        }
+        LiveDialog::Search { input, backwards } => {
+            let inner = popup(
+                frame,
+                area,
+                "Search scrollback · Enter Search · Tab Direction · Esc Cancel",
+                96,
+            );
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "{}\n{}",
+                    if *backwards { "Backwards" } else { "Forwards" },
+                    visible_text(&input.text)
+                )),
+                inner,
+            );
+            let x = Line::from(&input.text[..input.cursor]).width() as u16;
+            if inner.height > 1 {
+                frame.set_cursor_position((
+                    inner.x + x.min(inner.width.saturating_sub(1)),
+                    inner.y + 1,
+                ));
+            }
+        }
+        LiveDialog::Copy { text, scroll } => {
+            let inner = popup(
+                frame,
+                area,
+                "Plain copy preview · outer terminal selection is available",
+                110,
+            );
+            scroll_text(
+                frame,
+                inner,
+                text.lines().map(str::to_owned).collect(),
+                scroll,
+                "F2 Request clipboard copy (OSC 52) · ↑↓ Scroll · Esc Cancel",
+            );
+        }
+    }
+}
+
+fn initialization_label(state: Option<&crate::shell::InitializationState>) -> &'static str {
+    match state {
+        Some(crate::shell::InitializationState::Initializing) => "in progress",
+        Some(crate::shell::InitializationState::Ready) => "ready",
+        Some(crate::shell::InitializationState::Failed) => "failed",
+        None => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod live_status_tests {
+    use super::*;
+    use crate::{
+        model::new_id,
+        project::LaunchEnvironment,
+        protocol::{HostInfo, InputOwner, SessionInfo, SessionState},
+        store::Store,
+        terminal::{TerminalCell, TerminalColor, TerminalModes, TerminalSnapshot},
+        ui::{runtime::Runtime, UiOutcome},
+    };
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::{backend::TestBackend, Terminal};
+    use std::collections::BTreeMap;
+
+    fn synthetic_attached_app(store: &Store) -> App<'_> {
+        let environment = LaunchEnvironment::from_variables(BTreeMap::from([(
+            "HOME".into(),
+            store.config_dir.to_string_lossy().into_owned(),
+        )]))
+        .unwrap();
+        let mut app = App::with_environment(store, environment).unwrap();
+        // This fixture never opens a socket or starts a shell. The synthetic
+        // status models an already verified attach, including its input epoch.
+        let mut runtime =
+            Runtime::new(store.clone(), store.runtime_dir.join("absent-launcher")).unwrap();
+        let host = new_id();
+        let client = new_id();
+        runtime.host = Some(HostInfo {
+            protocol: crate::model::PROTOCOL,
+            version: env!("CARGO_PKG_VERSION").into(),
+            build_id: "synthetic".into(),
+            host_instance: host.clone(),
+            pid: 1,
+            uid: 0,
+            max_sessions: 64,
+            max_cells: 12000,
+        });
+        runtime.client_id = Some(client.clone());
+        runtime.online = true;
+        runtime.active = Some(SessionInfo {
+            session_id: new_id(),
+            project_id: new_id(),
+            terminal_id: new_id(),
+            name: "A terminal with a long name".into(),
+            host_instance: host,
+            persistent: false,
+            state: SessionState::Running,
+            initialization: None,
+            input_epoch: 1,
+            owner: Some(InputOwner { client_id: client }),
+            generation: 1,
+            child_pid: Some(1),
+            cwd: None,
+            definition_revision: 0,
+            launch_digest: None,
+            exit: None,
+            error: None,
+        });
+        let cell = TerminalCell {
+            text: " ".into(),
+            fg: TerminalColor::Default,
+            bg: TerminalColor::Default,
+            bold: false,
+            dim: false,
+            italic: false,
+            underline: false,
+            inverse: false,
+            strike: false,
+            hidden: false,
+            wide: false,
+            wide_spacer: false,
+        };
+        runtime.screen = Some(TerminalSnapshot {
+            generation: 1,
+            rows: 6,
+            cols: 24,
+            cells: vec![cell; 6 * 24],
+            cursor: None,
+            display_offset: 0,
+            modes: TerminalModes::default(),
+            title: String::new(),
+            reader_closed: false,
+            error: None,
+            output_limited: true,
+        });
+        app.runtime = Some(runtime);
+        app.set_terminal_connected(true);
+        app
+    }
+
+    #[test]
+    fn limited_output_remains_visible_in_narrow_ui_and_does_not_disable_input() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(Some(directory.path())).unwrap();
+        let mut app = synthetic_attached_app(&store);
+        let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
+        let row = |terminal: &Terminal<TestBackend>, y| {
+            (0..24)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                .collect::<String>()
+        };
+        for message in ["Attached successfully", "Search complete"] {
+            app.info(message);
+            terminal.draw(|frame| app.render(frame)).unwrap();
+            assert!(row(&terminal, 0).starts_with("Output limited"));
+            assert!(row(&terminal, 7).starts_with("Output limited"));
+        }
+        let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        let outcome = app.handle_key(key).unwrap();
+        assert_eq!(outcome, UiOutcome::ForwardTerminalKey(key));
+        assert!(
+            app.forward_terminal(outcome).is_ok(),
+            "a nonfatal limit must preserve terminal input"
+        );
+        assert!(!app.menu_visible);
+
+        // A current snapshot error must win over stale successful session info.
+        app.runtime.as_mut().unwrap().screen.as_mut().unwrap().error = Some("reader failed".into());
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        assert!(row(&terminal, 0).starts_with("Output limited · Error"));
+        assert!(row(&terminal, 7).starts_with("PTY error: reader failed"));
+        assert!(!app.runtime.as_ref().unwrap().can_input());
+        assert!(!app.menu_visible);
+    }
+
+    #[test]
+    fn absent_final_screens_report_retention_instead_of_waiting_forever() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(Some(directory.path())).unwrap();
+        let mut app = synthetic_attached_app(&store);
+        app.runtime.as_mut().unwrap().screen = None;
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        for (state, expected) in [
+            (SessionState::Closed, "Screen no longer retained"),
+            (SessionState::Exited, "Screen no longer retained"),
+            (
+                SessionState::Unknown,
+                "Screen unavailable after host replacement",
+            ),
+            (
+                SessionState::Failed,
+                "No screen is available for this failed launch",
+            ),
+            (SessionState::Closing, "Shell is closing"),
+            (SessionState::Preparing, "Waiting for the host screen"),
+            (SessionState::Running, "Waiting for the host screen"),
+        ] {
+            app.runtime.as_mut().unwrap().active.as_mut().unwrap().state = state;
+            terminal.draw(|frame| app.render(frame)).unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(text.contains(expected), "{state:?}: {text}");
+            assert_eq!(
+                text.contains("Waiting for the host screen"),
+                matches!(state, SessionState::Preparing | SessionState::Running)
+            );
+            assert!(text.contains("Ctrl+g"));
+            assert!(!app.runtime.as_ref().unwrap().can_input());
+            assert!(!app.menu_visible);
+        }
+        app.runtime.as_mut().unwrap().online = false;
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("Host connection unavailable"));
+        assert!(text.contains("F5 explicitly reconnects"));
+        assert!(!text.contains("Waiting for the host screen"));
+    }
 }

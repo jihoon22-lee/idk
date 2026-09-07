@@ -74,6 +74,29 @@ Git source mutation과 run start는 동일 worktree identity의 SourceGate 예�
 provider unavailable은 unknown이고 idle이 아니다. 외부 CLI의 Git 작업까지 통제하지 않으므로
 실행 전후 source/index를 다시 확인한다.
 
+### B03의 실제 호스트 계약
+
+같은 바이너리의 `__host`가 세션을 소유한다. 준비 worker가 trust/path 검증과 PTY 생성을 수행하고,
+actor가 runtime을 수락·기록한 뒤 bootstrap을 한 번 전달한다. 관리 요청은 4개 IPC worker와 bounded
+queue를 거치며 UI는 비동기 worker를 사용한다. 소켓 연결 자체부터 절대 deadline을 적용한다.
+같은 사용자 자격증명, host UUID와 실행 파일 SHA-256을 확인한다. 같은 빌드여도 host가 바뀌면 이전
+요청을 새 host에 재실행하지 않는다. 입력·resize·scroll·detach·close는 입력 소유 epoch를 확인한다.
+
+변경 요청은 client/request ID·payload·deadline에 묶어 결과를 한시적으로 보관한다. 중복 ID의 다른
+내용이나 수용 한계를 넘는 요청을 거부한다. UI의 빠른 키 입력은 host/session/epoch별로 묶고, 연결
+실패 뒤 남은 입력을 버리며 자동 재접속 후 다시 보내지 않는다. 원본 terminal escape 출력은 재생하지
+않고 같은 generation의 셀·커서·모드를 전달한다. 변화가 없으면 셀을 다시 복제하지 않는다.
+
+동시 준비/실행 PTY는 64개, 각 scrollback은 2,000행이며 기존 cell cap도 적용한다. 최근 종료 화면은
+16개, 종료한 임시 정의의 내용은 64개까지 메모리에 남긴다. 최소 종료 기록은 별도 ledger에 보존하여
+화면/정의 cache 만료가 자동 재실행으로 이어지지 않게 한다. ledger는 4 MiB와 항목 수 제한이 있으며
+용량 한계에서 새 실행을 거부하고 기존 종료 기록을 몰래 버리지 않는다. 환경·입력·PID는 이 ledger에
+저장하지 않는다. host 교체 시 이전 live 상태는 Unknown이다.
+
+셸 실제 exit 뒤 PTY의 최종 출력은 최대 2초 동안 drain한다. 분리된 자식이 PTY를 계속 잡는 경우
+셸 종료와 전체 process-tree 정리를 같은 것으로 보고하지 않는다. 검색은 보관된 표시 행 단위의
+literal 검색이다. 외부 터미널의 물리 keypad 식별·클립보드 수락은 별도 호환성 한계다.
+
 ## 검증 환경과 성능 기준
 
 실제 개발 환경은 Ubuntu 26.04.1 / x86_64 / glibc 2.43이며 문서의 Ubuntu 24.04 지원 목표와
