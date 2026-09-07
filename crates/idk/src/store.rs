@@ -357,11 +357,12 @@ impl FileLock {
                 break;
             }
             let error = std::io::Error::last_os_error();
-            if error.kind() != std::io::ErrorKind::WouldBlock
-                || nonblocking
-                || std::time::Instant::now() >= deadline
-            {
-                return Err(error).context("resource is locked or filesystem locking is unavailable; retry after the other operation finishes");
+            if error.kind() != std::io::ErrorKind::WouldBlock {
+                return Err(error).context("filesystem locking is unavailable; data was not saved; use supported storage or restore the filesystem lock service");
+            }
+            if nonblocking || std::time::Instant::now() >= deadline {
+                return Err(error)
+                    .context("resource is locked; retry after the other operation finishes");
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }

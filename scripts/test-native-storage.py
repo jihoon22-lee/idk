@@ -110,10 +110,7 @@ def main():
             assert not list((data / "config").glob(".pending-*")), name
             assert not (data / "run" / "host.sock").exists(), name
             subprocess.run([*command, "project", "list"], env=env, capture_output=True, check=True)
-            print(
-                f"Candidate {name}: failure reported, "
-                "originals preserved, retry readable: PASS"
-            )
+            print(f"Candidate {name}: failure reported, originals preserved, retry readable: PASS")
 
 
 if __name__ == "__main__":
