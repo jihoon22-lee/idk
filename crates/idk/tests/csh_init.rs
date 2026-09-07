@@ -175,7 +175,7 @@ fn same_shell_preserves_alias_local_environment_nested_source_order_and_cwd() {
         &second,
         "@ source_count ++\nset order_seen = \"${local_only}-${nested_value}\"\n",
     );
-    p.sources = vec![first.clone(), second];
+    p.sources = vec![first.clone().into(), second.into()];
     let original = std::fs::read(&first).unwrap();
     let mut s = Session::start(&p, &tmp);
     s.ready();
@@ -246,7 +246,7 @@ fn input_wait_cannot_consume_bootstrap_or_registered_command() {
             &init,
             "echo WAITING_FOR_USER\nset supplied = $<\necho RECEIVED:$supplied\n",
         );
-        p.sources.push(init);
+        p.sources.push(init.into());
         if task {
             p.login = true;
             p.command = Some("echo TASK_AFTER:$supplied\nexit 23".into());
@@ -279,7 +279,7 @@ fn failed_initialization_never_starts_registered_task() {
     let mut p = plan(&tmp);
     let init = p.init_cwd.join("fail.csh");
     write(&init, "/bin/false\n");
-    p.sources.push(init);
+    p.sources.push(init.into());
     p.command = Some("echo SHOULD_NOT_RUN\n".into());
     let mut s = Session::start(&p, &tmp);
     assert_eq!(s.exit_code(), 125);
@@ -296,7 +296,7 @@ fn registered_task_retains_alias_local_variable_and_actual_exit_status() {
         &init,
         "set task_local = value\nalias do_task 'echo TASK_ALIAS:$task_local'\n",
     );
-    p.sources.push(init);
+    p.sources.push(init.into());
     p.command = Some("do_task\n/bin/sh -c 'exit 37'".into());
     let mut s = Session::start(&p, &tmp);
     s.until("TASK_ALIAS:value");
@@ -308,7 +308,7 @@ fn rejects_newline_paths_and_missing_directories_before_spawn() {
     let tmp = TempDir::new().unwrap();
     let mut p = plan(&tmp);
     let launcher = Path::new(env!("CARGO_BIN_EXE_idk"));
-    p.sources.push(PathBuf::from("evil\necho INJECTED"));
+    p.sources.push(PathBuf::from("evil\necho INJECTED").into());
     assert!(p.prepare(tmp.path(), launcher).is_err());
     p.sources.clear();
     p.start_cwd = tmp.path().join("absent");
@@ -326,7 +326,7 @@ fn startup_input_wait_and_builtin_aliases_do_not_redirect_initialization() {
     write(&home.join(".cshrc"), "echo RC_WAITING\nset rc_answer = $<\nalias source 'echo USER_SOURCE_ALIAS'\nalias cd 'echo USER_CD_ALIAS'\n");
     let init = p.init_cwd.join("after-rc.csh");
     write(&init, "set from_rc = \"$rc_answer\"\n");
-    p.sources.push(init);
+    p.sources.push(init.into());
     let mut s = Session::start(&p, &tmp);
     s.until("RC_WAITING");
     thread::sleep(Duration::from_millis(100));
@@ -350,10 +350,98 @@ fn malformed_initialization_does_not_report_ready_or_execute_task() {
     let mut p = plan(&tmp);
     let init = p.init_cwd.join("malformed.csh");
     write(&init, "echo $IDK_UNDEFINED_FIXTURE_VARIABLE\n");
-    p.sources.push(init);
+    p.sources.push(init.into());
     p.command = Some("touch TASK_STARTED".into());
     let mut s = Session::start(&p, &tmp);
     assert_ne!(s.exit_code(), 0);
     assert_ne!(s.prepared.state().unwrap(), InitializationState::Ready);
     assert!(!p.start_cwd.join("TASK_STARTED").exists());
+}
+
+#[test]
+fn source_arguments_are_literal_in_tcsh_and_explicitly_rejected_in_bsd_csh() {
+    use idk_workspace::model::SourceSpec;
+    use idk_workspace::shell::{inspect_shell, ShellKind};
+    let tmp = TempDir::new().unwrap();
+    let mut p = plan(&tmp);
+    let init = p.init_cwd.join("arguments.csh");
+    write(&init, "echo ARGC:$#argv\necho ARG1:\"$argv[1]\"\necho ARG2_START:\"$argv[2]\":ARG2_END\necho ARG3:\"$argv[3]\"\n");
+    p.sources.push(SourceSpec {
+        path: init,
+        args: vec!["space ' ! $ ` ; \\".into(), String::new(), "한글".into()],
+    });
+    let kind = inspect_shell(&p.shell, &p.env).unwrap().kind;
+    if kind == ShellKind::BsdCsh {
+        let error = p
+            .prepare(
+                &tmp.path().join("resources"),
+                Path::new(env!("CARGO_BIN_EXE_idk")),
+            )
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("does not support source arguments"));
+        assert!(!tmp.path().join("resources").exists());
+    } else {
+        let mut s = Session::start(&p, &tmp);
+        s.ready();
+        s.until("ARGC:3");
+        s.until("ARG1:space ' ! $ ` ; \\");
+        s.until("ARG2_START::ARG2_END");
+        s.until("ARG3:한글");
+        s.send("exit\n");
+        assert_eq!(s.exit_code(), 0);
+    }
+}
+
+#[test]
+fn bounded_private_initialization_state_rejects_corruption_without_blocking() {
+    use idk_workspace::store::atomic_write;
+    let tmp = TempDir::new().unwrap();
+    let p = plan(&tmp);
+    let prepared = p
+        .prepare(
+            &tmp.path().join("resources"),
+            Path::new(env!("CARGO_BIN_EXE_idk")),
+        )
+        .unwrap();
+    atomic_write(&prepared.state_path, b"").unwrap();
+    assert_eq!(prepared.state().unwrap(), InitializationState::Initializing);
+    atomic_write(&prepared.state_path, b"unknown").unwrap();
+    assert!(prepared.state().is_err());
+    atomic_write(&prepared.state_path, &[0xff]).unwrap();
+    assert!(prepared.state().is_err());
+    atomic_write(&prepared.state_path, &[b'x'; 65]).unwrap();
+    assert!(prepared.state().is_err());
+    std::fs::remove_file(&prepared.state_path).unwrap();
+    let path = std::ffi::CString::new(prepared.state_path.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    let start = Instant::now();
+    assert!(prepared.state().is_err());
+    assert!(start.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn user_environment_cannot_spoof_shell_implementation_or_startup_selection() {
+    use idk_workspace::shell::{inspect_shell, ShellKind};
+    let tmp = TempDir::new().unwrap();
+    let mut p = plan(&tmp);
+    let kind = inspect_shell(&p.shell, &p.env).unwrap().kind;
+    p.env.insert("tcsh".into(), "user-value".into());
+    p.env.insert("version".into(), "user-version".into());
+    p.login = true;
+    assert_eq!(inspect_shell(&p.shell, &p.env).unwrap().kind, kind);
+    let home = Path::new(&p.env["HOME"]);
+    write(&home.join(".cshrc"), "set selected_startup = csh\n");
+    write(&home.join(".tcshrc"), "set selected_startup = tcsh\n");
+    let mut s = Session::start(&p, &tmp);
+    s.ready();
+    s.send("echo STARTUP:$selected_startup\nprintenv tcsh\nexit\n");
+    s.until(if kind == ShellKind::Tcsh {
+        "STARTUP:tcsh"
+    } else {
+        "STARTUP:csh"
+    });
+    s.until("user-value");
+    assert_eq!(s.exit_code(), 0);
 }

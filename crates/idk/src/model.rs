@@ -15,7 +15,7 @@ pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Workspace {
     pub schema: u32,
@@ -23,6 +23,8 @@ pub struct Workspace {
     #[serde(default)]
     pub projects: Vec<Project>,
     pub selected_project: Option<String>,
+    #[serde(default)]
+    pub recent_projects: Vec<String>,
 }
 
 impl Default for Workspace {
@@ -32,17 +34,24 @@ impl Default for Workspace {
             revision: 0,
             projects: Vec::new(),
             selected_project: None,
+            recent_projects: Vec::new(),
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Project {
     pub id: String,
     pub name: String,
     pub root: PathBuf,
     pub repository: Option<PathBuf>,
+    #[serde(default)]
+    pub repository_binding: Option<crate::git::Repository>,
+    #[serde(default)]
+    pub related_repositories: Vec<crate::git::Repository>,
+    #[serde(default)]
+    pub default_terminal: Option<String>,
     pub shell: ShellConfig,
     #[serde(default)]
     pub terminals: Vec<TerminalDefinition>,
@@ -52,35 +61,80 @@ pub struct Project {
     pub editor: Option<EditorConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ShellConfig {
     pub executable: PathBuf,
     pub login: bool,
     pub init_cwd: PathBuf,
     #[serde(default)]
-    pub sources: Vec<PathBuf>,
+    pub sources: Vec<SourceSpec>,
     /// Approval binds to the chosen script bytes and definition, not arbitrary nested source files.
     pub trusted_digest: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TerminalDefinition {
     pub id: String,
     pub name: String,
     pub cwd: PathBuf,
     #[serde(default)]
-    pub sources: Vec<PathBuf>,
+    pub sources: Vec<SourceSpec>,
     #[serde(default = "default_true")]
     pub persistent: bool,
+    #[serde(default)]
+    pub trusted_digest: Option<String>,
+}
+
+/// Source arguments are argv items, never an additional shell command string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SourceSpec {
+    pub path: PathBuf,
+    pub args: Vec<String>,
+}
+
+impl From<PathBuf> for SourceSpec {
+    fn from(path: PathBuf) -> Self {
+        Self {
+            path,
+            args: Vec::new(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SourceSpec {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Detail {
+            path: PathBuf,
+            #[serde(default)]
+            args: Vec<String>,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Input {
+            Path(PathBuf),
+            Detail(Detail),
+        }
+        Ok(match Input::deserialize(deserializer)? {
+            Input::Path(path) => path.into(),
+            Input::Detail(value) => Self {
+                path: value.path,
+                args: value.args,
+            },
+        })
+    }
 }
 
 fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskDefinition {
     pub id: String,
@@ -89,12 +143,12 @@ pub struct TaskDefinition {
     pub command: String,
     pub cwd: PathBuf,
     #[serde(default)]
-    pub sources: Vec<PathBuf>,
+    pub sources: Vec<SourceSpec>,
     pub artifact: Option<PathBuf>,
     pub approved_digest: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EditorConfig {
     pub executable: PathBuf,
@@ -129,20 +183,26 @@ impl Workspace {
                 bail!("selected project is not registered");
             }
         }
+        let mut recent = std::collections::HashSet::new();
+        for id in &self.recent_projects {
+            if !project_ids.contains(id) || !recent.insert(id) {
+                bail!("recent project IDs must be unique registered projects");
+            }
+        }
         Ok(())
     }
 
     pub fn project(&self, id: &str) -> Result<&Project> {
         self.projects
             .iter()
-            .find(|p| p.id == id || p.name == id)
+            .find(|p| p.id == id)
             .context("project not found")
     }
 
     pub fn project_mut(&mut self, id: &str) -> Result<&mut Project> {
         self.projects
             .iter_mut()
-            .find(|p| p.id == id || p.name == id)
+            .find(|p| p.id == id)
             .context("project not found")
     }
 }
@@ -153,6 +213,22 @@ impl Project {
         absolute_path(&self.root)?;
         if let Some(repo) = &self.repository {
             absolute_path(repo)?;
+        }
+        if let Some(binding) = &self.repository_binding {
+            validate_repository(binding)?;
+            if self.repository.as_ref() != Some(&binding.root) {
+                bail!("primary repository path and observed binding disagree");
+            }
+        }
+        let mut repository_ids = std::collections::HashSet::new();
+        if let Some(binding) = &self.repository_binding {
+            repository_ids.insert(&binding.git_dir);
+        }
+        for binding in &self.related_repositories {
+            validate_repository(binding)?;
+            if !repository_ids.insert(&binding.git_dir) {
+                bail!("duplicate repository binding");
+            }
         }
         absolute_path(&self.shell.executable)?;
         absolute_path(&self.shell.init_cwd)?;
@@ -168,6 +244,15 @@ impl Project {
             validate_sources(&terminal.sources)?;
             if !ids.insert(&terminal.id) {
                 bail!("duplicate terminal/task id");
+            }
+        }
+        if let Some(default) = &self.default_terminal {
+            if !self
+                .terminals
+                .iter()
+                .any(|t| &t.id == default && t.persistent)
+            {
+                bail!("default terminal must identify a persistent terminal");
             }
         }
         for task in &self.tasks {
@@ -205,44 +290,90 @@ impl Project {
         Ok(())
     }
 
+    /// Definition/direct-source fingerprint. Full execution trust additionally
+    /// binds HOME and startup inventory in ProjectService; this alone is not approval.
     pub fn source_digest(&self) -> Result<String> {
         let mut digest = Sha256::new();
-        digest.update(self.shell.executable.as_os_str().as_encoded_bytes());
-        digest.update([u8::from(self.shell.login)]);
-        digest.update(self.shell.init_cwd.as_os_str().as_encoded_bytes());
+        hash_field(&mut digest, b"idk-source-definition-v2");
+        hash_field(
+            &mut digest,
+            self.shell.executable.as_os_str().as_encoded_bytes(),
+        );
+        hash_field(&mut digest, &[u8::from(self.shell.login)]);
+        hash_field(
+            &mut digest,
+            self.shell.init_cwd.as_os_str().as_encoded_bytes(),
+        );
         hash_sources(&mut digest, &self.shell.sources)?;
         Ok(format!("{:x}", digest.finalize()))
     }
 
     pub fn task_digest(&self, task: &TaskDefinition) -> Result<String> {
         let mut digest = Sha256::new();
-        digest.update(self.source_digest()?);
-        digest.update(task.command.as_bytes());
-        digest.update(task.cwd.as_os_str().as_encoded_bytes());
+        hash_field(&mut digest, b"idk-task-definition-v2");
+        hash_field(&mut digest, self.source_digest()?.as_bytes());
+        hash_field(&mut digest, task.command.as_bytes());
+        hash_field(&mut digest, task.cwd.as_os_str().as_encoded_bytes());
         hash_sources(&mut digest, &task.sources)?;
         if let Some(artifact) = &task.artifact {
-            digest.update(artifact.as_os_str().as_encoded_bytes());
+            hash_field(&mut digest, artifact.as_os_str().as_encoded_bytes());
         }
         Ok(format!("{:x}", digest.finalize()))
     }
 }
 
-fn hash_sources(digest: &mut Sha256, sources: &[PathBuf]) -> Result<()> {
+pub(crate) fn hash_field(digest: &mut Sha256, bytes: &[u8]) {
+    digest.update((bytes.len() as u64).to_be_bytes());
+    digest.update(bytes);
+}
+
+fn hash_sources(digest: &mut Sha256, sources: &[SourceSpec]) -> Result<()> {
     use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    hash_field(digest, &(sources.len() as u64).to_be_bytes());
     for source in sources {
-        digest.update([0]);
-        digest.update(source.as_os_str().as_encoded_bytes());
-        let file = std::fs::File::open(source)
-            .with_context(|| format!("cannot read initialization script {}", source.display()))?;
+        hash_field(digest, source.path.as_os_str().as_encoded_bytes());
+        hash_field(digest, &serde_json::to_vec(&source.args)?);
+        let canonical = source.path.canonicalize().with_context(|| {
+            format!(
+                "cannot resolve initialization script {}",
+                source.path.display()
+            )
+        })?;
+        let target = canonical.metadata()?;
+        if !target.is_file() {
+            bail!("initialization source must be a regular file");
+        }
+        if target.len() > 4 * 1024 * 1024 {
+            bail!("initialization script exceeds 4 MiB");
+        }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&canonical)
+            .with_context(|| {
+                format!(
+                    "cannot read initialization script {}",
+                    source.path.display()
+                )
+            })?;
+        if !file.metadata()?.is_file() {
+            bail!("initialization source must be a regular file");
+        }
         let mut bytes = Vec::new();
         file.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
         if bytes.len() > 4 * 1024 * 1024 {
             bail!("initialization script exceeds 4 MiB");
         }
-        digest.update([0]);
-        digest.update(bytes);
+        hash_field(digest, &bytes);
     }
     Ok(())
+}
+
+fn validate_repository(repo: &crate::git::Repository) -> Result<()> {
+    absolute_path(&repo.root)?;
+    absolute_path(&repo.git_dir)?;
+    absolute_path(&repo.common_dir)
 }
 
 pub fn valid_id(value: &str) -> Result<()> {
@@ -261,18 +392,30 @@ pub fn valid_name(value: &str) -> Result<()> {
 }
 
 pub fn absolute_path(path: &Path) -> Result<()> {
-    if !path.is_absolute() || path.as_os_str().as_encoded_bytes().contains(&0) {
-        bail!("an absolute path is required");
+    if !path.is_absolute()
+        || path
+            .to_str()
+            .is_none_or(|p| p.chars().any(char::is_control))
+    {
+        bail!("an absolute UTF-8 path without control characters is required");
     }
     Ok(())
 }
 
-fn validate_sources(paths: &[PathBuf]) -> Result<()> {
+pub fn validate_sources(paths: &[SourceSpec]) -> Result<()> {
     if paths.len() > 32 {
         bail!("too many initialization scripts");
     }
-    for path in paths {
-        absolute_path(path)?;
+    for source in paths {
+        absolute_path(&source.path)?;
+        if source.args.len() > 64
+            || source
+                .args
+                .iter()
+                .any(|arg| arg.len() > 8192 || arg.chars().any(char::is_control))
+        {
+            bail!("source arguments must be at most 64 literal values without control characters");
+        }
     }
     Ok(())
 }

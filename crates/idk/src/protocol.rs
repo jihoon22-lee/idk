@@ -16,7 +16,7 @@ pub struct Envelope {
     pub request: Request,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     Hello,
@@ -62,13 +62,35 @@ pub enum Request {
     Shutdown,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl std::fmt::Debug for Request {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Request")
+            .field("kind", &std::mem::discriminant(self))
+            .field("payload", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Response {
     pub protocol: u32,
     pub request_id: String,
     pub data: Option<serde_json::Value>,
     pub error: Option<String>,
+}
+
+impl std::fmt::Debug for Response {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Response")
+            .field("protocol", &self.protocol)
+            .field("request_id", &self.request_id)
+            .field("has_error", &self.error.is_some())
+            .field("payload", &"[redacted]")
+            .finish()
+    }
 }
 
 impl Envelope {
@@ -189,5 +211,26 @@ mod tests {
         envelope.client_id = "untrusted".into();
         assert!(envelope.validate().is_err());
         assert!(read_frame::<Envelope>(&mut &bytes[..bytes.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn debug_does_not_expose_launch_secrets_or_terminal_input() {
+        let request = Request::Start {
+            project: new_id(),
+            terminal: new_id(),
+            rows: 24,
+            cols: 80,
+            env: BTreeMap::from([("TOKEN".into(), "private-value".into())]),
+            reopen: false,
+        };
+        assert!(!format!("{request:?}").contains("private-value"));
+        let input = Request::Input {
+            session: new_id(),
+            data: "private-keystrokes".into(),
+            epoch: 1,
+        };
+        assert!(!format!("{input:?}").contains("private-keystrokes"));
+        let response = Response::success(new_id(), &"private-output").unwrap();
+        assert!(!format!("{response:?}").contains("private-output"));
     }
 }
