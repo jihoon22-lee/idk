@@ -1,0 +1,368 @@
+{
+  "components": [
+    {
+      "documents": [
+        {
+          "format": "html-visible-text",
+          "location": "sysroot",
+          "path": "share/doc/rust/COPYRIGHT-library.html",
+          "sha256": "0a65bb747c49c7bb816cbc7188319bd6e4e8d08091c1190b8a3c0971c47968ed",
+          "size": 279302,
+          "source_url": "https://static.rust-lang.org/dist/rustc-1.97.1-x86_64-unknown-linux-gnu.tar.xz#rustc/share/doc/rust/COPYRIGHT-library.html"
+        },
+        {
+          "location": "sysroot",
+          "path": "share/doc/rust/licenses/Apache-2.0.txt",
+          "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",
+          "size": 10280,
+          "source_url": "https://static.rust-lang.org/dist/rustc-1.97.1-x86_64-unknown-linux-gnu.tar.xz#rustc/share/doc/rust/licenses/Apache-2.0.txt"
+        },
+        {
+          "location": "sysroot",
+          "path": "share/doc/rust/licenses/MIT.txt",
+          "sha256": "b85dcd3e453d05982552c52b5fc9e0bdd6d23c6f8e844b984a88af32570b0cc0",
+          "size": 1078,
+          "source_url": "https://static.rust-lang.org/dist/rustc-1.97.1-x86_64-unknown-linux-gnu.tar.xz#rustc/share/doc/rust/licenses/MIT.txt"
+        },
+        {
+          "location": "sysroot",
+          "path": "share/doc/rust/licenses/BSD-2-Clause.txt",
+          "sha256": "f32fb3b417a194167cfad068223fc975ba96c5960513a10f66a3c28720aec1df",
+          "size": 1267,
+          "source_url": "https://static.rust-lang.org/dist/rustc-1.97.1-x86_64-unknown-linux-gnu.tar.xz#rustc/share/doc/rust/licenses/BSD-2-Clause.txt"
+        },
+        {
+          "location": "sysroot",
+          "path": "share/doc/rust/licenses/Unicode-3.0.txt",
+          "sha256": "f5062c9a188d81dfe66b56db4182dcf9e4b17c0d9b0d311a8e20b3a1b075c443",
+          "size": 1995,
+          "source_url": "https://static.rust-lang.org/dist/rustc-1.97.1-x86_64-unknown-linux-gnu.tar.xz#rustc/share/doc/rust/licenses/Unicode-3.0.txt"
+        },
+        {
+          "location": "sysroot",
+          "path": "share/doc/rust/licenses/LLVM-exception.txt",
+          "sha256": "e34c58338bd89d43e709e226610d8f32b3e3c47f4ad9a99a8dc1d4ac7842488e",
+          "size": 919,
+          "source_url": "https://static.rust-lang.org/dist/rustc-1.97.1-x86_64-unknown-linux-gnu.tar.xz#rustc/share/doc/rust/licenses/LLVM-exception.txt"
+        }
+      ],
+      "id": "rust-standard-library",
+      "license": "MIT OR Apache-2.0 with documented per-file/dependency exceptions",
+      "name": "Rust standard library",
+      "source_revision": "8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+      "version": "1.97.1"
+    },
+    {
+      "documents": [
+        {
+          "location": "repository",
+          "path": "packaging/native-notices/texts/compiler-builtins-LICENSE.txt",
+          "sha256": "ab6eec6caf0fa5775e411c7a8bc6a45c4ef2956b0980b157ab74fc5cd62a928b",
+          "size": 15078,
+          "source_url": "https://raw.githubusercontent.com/rust-lang/rust/8bab26f4f68e0e26f0bb7960be334d5b520ea452/library/compiler-builtins/LICENSE.txt"
+        },
+        {
+          "location": "repository",
+          "path": "packaging/native-notices/texts/compiler-builtins-libm-LICENSE.txt",
+          "sha256": "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7",
+          "size": 14088,
+          "source_url": "https://raw.githubusercontent.com/rust-lang/rust/8bab26f4f68e0e26f0bb7960be334d5b520ea452/library/compiler-builtins/libm/LICENSE.txt"
+        },
+        {
+          "location": "repository",
+          "path": "packaging/native-notices/texts/compiler-builtins-SOURCE-NOTICES.txt",
+          "sha256": "222dd0c973e072fdb35635c5b94811ac87b0b384ffd0ddff23f106e2f2d46e38",
+          "size": 45443,
+          "source_url": "https://github.com/rust-lang/rust/tree/8bab26f4f68e0e26f0bb7960be334d5b520ea452"
+        }
+      ],
+      "id": "compiler-builtins",
+      "license": "MIT AND Apache-2.0 WITH LLVM-exception AND (MIT OR Apache-2.0)",
+      "name": "Rust vendored compiler-builtins and libm",
+      "source_revision": "8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+      "version": "0.1.160 (Rust-vendored source)"
+    },
+    {
+      "documents": [
+        {
+          "location": "repository",
+          "path": "packaging/native-notices/texts/musl-COPYRIGHT",
+          "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af",
+          "size": 6204,
+          "source_url": "https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v1.2.5"
+        },
+        {
+          "location": "repository",
+          "path": "packaging/native-notices/texts/musl-SOURCE-NOTICES.txt",
+          "sha256": "ded33d3a4efc7dd3246337d0cfaefeb3c1511a34e2e48c7efb56df291a35e033",
+          "size": 96644,
+          "source_url": "https://www.musl-libc.org/releases/musl-1.2.5.tar.gz"
+        }
+      ],
+      "evidence": [
+        "https://github.com/rust-lang/rust/blob/8bab26f4f68e0e26f0bb7960be334d5b520ea452/src/ci/docker/scripts/musl.sh",
+        "https://github.com/rust-lang/rust/blob/8bab26f4f68e0e26f0bb7960be334d5b520ea452/src/ci/docker/scripts/musl-toolchain.sh"
+      ],
+      "id": "musl",
+      "license": "MIT with documented per-file exceptions",
+      "name": "musl libc and startup objects",
+      "source_revision": "v1.2.5; Rust build revision 8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+      "version": "1.2.5 with Rust 1.97.1 build-script patches"
+    },
+    {
+      "documents": [
+        {
+          "location": "repository",
+          "path": "packaging/native-notices/texts/llvm-libunwind-LICENSE.TXT",
+          "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d",
+          "size": 16706,
+          "source_url": "https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/libunwind/LICENSE.TXT"
+        },
+        {
+          "location": "repository",
+          "path": "packaging/native-notices/texts/llvm-libunwind-SOURCE-NOTICES.txt",
+          "sha256": "f07c860a8a01eae5b7beae588fa22ca6aa93234f7063291237c46365ec982584",
+          "size": 23408,
+          "source_url": "https://github.com/rust-lang/llvm-project/tree/dcc3606807c989700e0ac1cac18c31741bcd40d9"
+        }
+      ],
+      "id": "llvm-libunwind",
+      "license": "Apache-2.0 WITH LLVM-exception and included legacy notices",
+      "name": "LLVM libunwind",
+      "source_revision": "dcc3606807c989700e0ac1cac18c31741bcd40d9",
+      "version": "Rust 1.97.1 LLVM runtime"
+    },
+    {
+      "documents": [
+        {
+          "location": "repository",
+          "path": "packaging/native-notices/texts/llvm-compiler-rt-LICENSE.TXT",
+          "sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+          "size": 16708,
+          "source_url": "https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/compiler-rt/LICENSE.TXT"
+        },
+        {
+          "location": "repository",
+          "path": "packaging/native-notices/texts/llvm-compiler-rt-CREDITS.TXT",
+          "sha256": "a9901f47a089da41e4690682d00ce4cedaa2baf41fedbe79beee366d43ac2461",
+          "size": 1049,
+          "source_url": "https://raw.githubusercontent.com/rust-lang/llvm-project/dcc3606807c989700e0ac1cac18c31741bcd40d9/compiler-rt/CREDITS.TXT"
+        },
+        {
+          "location": "repository",
+          "path": "packaging/native-notices/texts/compiler-rt-crt-SOURCE-NOTICES.txt",
+          "sha256": "61983e5f4110fb3f9fa068e87822542d41c3f3bddd6f635593b06b032fcf8027",
+          "size": 1517,
+          "source_url": "https://github.com/rust-lang/llvm-project/tree/dcc3606807c989700e0ac1cac18c31741bcd40d9"
+        }
+      ],
+      "evidence": [
+        "https://github.com/rust-lang/rust/blob/8bab26f4f68e0e26f0bb7960be334d5b520ea452/src/bootstrap/src/core/build_steps/llvm.rs#L1609-L1665",
+        "https://github.com/rust-lang/rust/blob/8bab26f4f68e0e26f0bb7960be334d5b520ea452/src/bootstrap/src/core/build_steps/compile.rs#L383-L432"
+      ],
+      "id": "compiler-rt-crt",
+      "license": "Apache-2.0 WITH LLVM-exception and included legacy notices",
+      "name": "LLVM compiler-rt startup objects and builtins attribution",
+      "source_revision": "dcc3606807c989700e0ac1cac18c31741bcd40d9",
+      "version": "Rust 1.97.1 LLVM runtime"
+    }
+  ],
+  "llvm_commit": "dcc3606807c989700e0ac1cac18c31741bcd40d9",
+  "runtime_artifacts": [
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libaddr2line-95e9a04e236b857f.rlib",
+      "sha256": "709edae3937aae1b626899fab7599fb44595d61886647d1f1190d033b6e70aac",
+      "size": 28286
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libadler2-e024d94ef6aa67ce.rlib",
+      "sha256": "130b910eadcc9ca86ed4e1a05ad42ac8148ccfff5d0a80b09ce2d131a6423a35",
+      "size": 10004
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/liballoc-fb94d9d043f9fb44.rlib",
+      "sha256": "75fbf231e9ae326ea0e4a0823d7083494e5c9e7567a962b8297deb709b97d5c5",
+      "size": 916302
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libcfg_if-41bf38d1fdccdb7e.rlib",
+      "sha256": "d453f837bfb23f3e9a49ee952d0d7beaabf3f9edf1295e6b13b09ec6866ab7bd",
+      "size": 4890
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libcompiler_builtins-f84c2cc06aceddaf.rlib",
+      "sha256": "8a089f03dea685c0ad73d561540406f2ea0729788c162d76d17ea1832804a095",
+      "size": 4618910
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libcore-c02d9f641a39cc82.rlib",
+      "sha256": "bf3446467f5e245df9d69444bd526519725d322943b03d54e58282be4a7f6e39",
+      "size": 2929948
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libgetopts-332445d8278797ea.rlib",
+      "sha256": "c930f04b0aa6380e0d253603212dc647047fd40800f400529c4b61cb7a1530e3",
+      "size": 738940
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libgimli-92d6fd8bfac3132b.rlib",
+      "sha256": "a24b43f9ab5473d118b7327e1570bca2a5a42ad3230ffef9af8f53cc5335a3e6",
+      "size": 916078
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libhashbrown-0c265d994051e6ce.rlib",
+      "sha256": "5992221a7e3d160583396836939d3d125438bc7bb976a77fced015d1c14a189f",
+      "size": 40344
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/liblibc-20f525b972488324.rlib",
+      "sha256": "5c95805ea9c1535f87e57fee27298a7e00ab180b72a3770222f388646b03d51e",
+      "size": 28850
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libmemchr-8b08ae4541584a89.rlib",
+      "sha256": "166d75ed808e03ca6bea319c9feef233213dc6ee9c1c0b393cfd22b09f0dabaf",
+      "size": 414722
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libminiz_oxide-274d4973cf8ab077.rlib",
+      "sha256": "bbc07477ac102bae03ab621e4b0b56d03979b875be81b425dcd6ac4d298036a9",
+      "size": 102168
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libobject-20635b902cc05745.rlib",
+      "sha256": "93f827d7afbba006161fa6c5620037fc7098460e7c6ffb25269d847272b39ac7",
+      "size": 167168
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libpanic_abort-a2cd76a07df7e60d.rlib",
+      "sha256": "cf8c3cf2b71671b1e00122db691b9bb2904c5256ddf7f8dfd8f1e19c8759bee5",
+      "size": 10804
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libpanic_unwind-00e12221a0e9bfd4.rlib",
+      "sha256": "967e8bf5994b88950bbcf2c57be1c26093e3c3d17d6a490ce0ff21a6e1502694",
+      "size": 35814
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libproc_macro-25506cfeea2fa5c3.rlib",
+      "sha256": "a609f61c9365b88b6f53d41f9942054b97760f5db4ff90e857e8fc15ab18746d",
+      "size": 3610308
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libprofiler_builtins-27bd703624178b78.rlib",
+      "sha256": "365574088def0326d7a2a25866aff6b5071cfa57a10106c5970df8994887f6c1",
+      "size": 745824
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/librustc_demangle-f6bc3c477c996d3e.rlib",
+      "sha256": "958875ab7028fcda43ab2354bfd395f4228dca392692c1b7a72796a3d03ba6b9",
+      "size": 228510
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/librustc_literal_escaper-d22301f31274e28c.rlib",
+      "sha256": "e779ecd9aea7a92c9a55207b7bdf02ecff9dc09765e989489b4228fce4380076",
+      "size": 5048
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/librustc_std_workspace_alloc-c535cf7d203c39fd.rlib",
+      "sha256": "91f02d842ad9717b966d419a39e9d8be6c25f5f8a4f0c286409abbe31058b541",
+      "size": 5136
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/librustc_std_workspace_core-eebfb9841f84c55e.rlib",
+      "sha256": "bd0faa58bd404977566c08c37f1c786ce4b6c046d248e6c8d23fc07783dc3536",
+      "size": 5126
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/librustc_std_workspace_std-895668b70d3715e1.rlib",
+      "sha256": "4caad4889aa011c575fd1c68db4605f766fa2edef832ee8294ef3f9c0d41124d",
+      "size": 5116
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libstd-dfb742c400e8ef30.rlib",
+      "sha256": "8ff60d366af7bc26c8808031a1384bb3a681ee9a65f44cb35a655e7e4cfe143c",
+      "size": 11604470
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libstd_detect-af2cb78df77ddedb.rlib",
+      "sha256": "4b80273b5b440df0372ea8d0321548674573597b967b1c0ed57bc595caa609d9",
+      "size": 63266
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libsysroot-16865e02b582420e.rlib",
+      "sha256": "708ff2b49cb6c39b85095cae8ff10a224c84e30f1b276929246913dd1a3735e7",
+      "size": 4956
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libtest-15c3a5eb3dbcedf0.rlib",
+      "sha256": "915e9a96ab79b561165fddf7f712bc86edd6b97b300ad9f2bff31ad60effd388",
+      "size": 7214102
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/libunwind-f59ce054372fe5cc.rlib",
+      "sha256": "9bfd7cb97c980ba64b06466815f3104d23dfdc1b6241427f6c430c506ab9644f",
+      "size": 4946
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/self-contained/Scrt1.o",
+      "sha256": "cfb5b001408261d562d809eea6af636cf7ac10a233895a611ef79bbe4f8c60de",
+      "size": 3880
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/self-contained/crt1.o",
+      "sha256": "03c4111a1bc81580c7388e4227a889cebe978faa46c965bbdde4f2d8de1fc3a2",
+      "size": 3880
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/self-contained/crtbegin.o",
+      "sha256": "297960e338581a38bbfcbee45169a847bcdc5527ccaf68abe95b72b3b0856bed",
+      "size": 3536
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/self-contained/crtbeginS.o",
+      "sha256": "297960e338581a38bbfcbee45169a847bcdc5527ccaf68abe95b72b3b0856bed",
+      "size": 3536
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/self-contained/crtend.o",
+      "sha256": "0d11009c048ae289cdf184d726b767debc2972321e143838d28d7b6802b69c7c",
+      "size": 1048
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/self-contained/crtendS.o",
+      "sha256": "0d11009c048ae289cdf184d726b767debc2972321e143838d28d7b6802b69c7c",
+      "size": 1048
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/self-contained/crti.o",
+      "sha256": "5343749d306ea3578a4ae5c796be362100273f3314cec283be621bbe4a8ec720",
+      "size": 2656
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/self-contained/crtn.o",
+      "sha256": "794abd4b28db5de5f993b1445460d90fa3191cc9556a8b8881d5d34a5e8dfa87",
+      "size": 2600
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/self-contained/libc.a",
+      "sha256": "e699c64b0c6b427d89ad5bf767bf78beb30c19930c5dedff635951636e8f9f70",
+      "size": 6406314
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/self-contained/libunwind.a",
+      "sha256": "eb16569e611a5d6cdda2e7604fd6402a3ad810817dd8d63ed50baa2ce8070aaa",
+      "size": 201418
+    },
+    {
+      "path": "lib/rustlib/x86_64-unknown-linux-musl/lib/self-contained/rcrt1.o",
+      "sha256": "7998a49f23b463b1bf59aecd8fde59df5d0f0bf819d1272d92c6f00ae81fc429",
+      "size": 5224
+    }
+  ],
+  "runtime_scope": "All provided target Rust rlib archives and self-contained C runtime files are pinned; component attribution is conservative. Compiler identity alone is not treated as evidence of linked GCC runtime code.",
+  "rust_commit": "8bab26f4f68e0e26f0bb7960be334d5b520ea452",
+  "schema_version": 1,
+  "target": "x86_64-unknown-linux-musl",
+  "toolchain": "1.97.1"
+}

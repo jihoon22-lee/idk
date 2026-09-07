@@ -2,13 +2,13 @@
 //! No process is adopted or signalled here; the host reports confirmed ownership cleanup.
 use crate::model::{new_id, valid_id, FailurePolicy, GateLease, SourceGate, TaskLogging};
 use crate::run_wire::*;
+use crate::saved_state::RunLedger as Ledger;
 use crate::shell::ShellPlan;
 use crate::store::{ensure_private_dir, read_private, Store};
 use crate::task::{steps, TaskLaunchPlan};
 use crate::terminal::TerminalExit;
 use anyhow::{ensure, Context, Result};
 use base64::Engine;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-const HISTORY_LIMIT: usize = 64;
-const LOG_LIMIT: u64 = 4 * 1024 * 1024;
+const HISTORY_LIMIT: usize = crate::saved_state::RUN_RECORD_LIMIT;
+const LOG_LIMIT: u64 = crate::saved_state::LOG_BYTE_LIMIT;
 const CHUNK_LIMIT: usize = 64 * 1024;
 const LEDGER: &str = "runs.json";
 
@@ -163,12 +163,6 @@ impl RunOutputSink {
         desc
     }
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Ledger {
-    schema: u32,
-    runs: Vec<RunInfo>,
-}
 struct Active {
     plan: TaskLaunchPlan,
     shell: ShellPlan,
@@ -211,10 +205,7 @@ impl RunRegistry {
             schema: 1,
             runs: vec![],
         });
-        ensure!(
-            ledger.schema == 1 && ledger.runs.len() <= HISTORY_LIMIT,
-            "unsupported or oversized run ledger; preserved"
-        );
+        ledger.validate()?;
         let mut runs = ledger.runs;
         let mut ids = std::collections::HashSet::new();
         for run in &mut runs {

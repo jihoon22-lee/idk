@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 const PREPARE_BUDGET: Duration = Duration::from_secs(10);
 const REATTACH_BUDGET: Duration = Duration::from_secs(1);
+const FLOOD_RECOVERY_BUDGET: Duration = Duration::from_secs(2);
 const IDLE_RSS_BUDGET_KIB: u64 = 256 * 1024;
 
 struct Sandbox(PathBuf);
@@ -342,6 +343,56 @@ fn live_host_rss_kib(child: &mut Child) -> Result<u64> {
     Ok(rss)
 }
 
+fn interrupt_flood(client: &mut Client, session: &str) -> Result<u64> {
+    let yes = ["/usr/bin/yes", "/bin/yes"]
+        .into_iter()
+        .map(Path::new)
+        .find(|path| path.is_file())
+        .context("synthetic flood proof requires coreutils yes")?;
+    let attached = client.attach(session, false)?;
+    client.input(
+        session,
+        attached.input_epoch,
+        format!("{} IDK_FLOOD_OUTPUT\n", yes.display()).as_bytes(),
+    )?;
+    // Output must actually arrive before the interruption budget begins.
+    wait_line(client, session, "IDK_FLOOD_OUTPUT")?;
+    std::thread::sleep(Duration::from_millis(120));
+    let interrupted = Instant::now();
+    client.input(session, attached.input_epoch, &[3])?;
+    client.input(
+        session,
+        attached.input_epoch,
+        b"printf 'IDK_%s\\n' FLOOD_RECOVERED\n",
+    )?;
+    loop {
+        let snapshot = client.snapshot(session, None)?;
+        let recovered = if let Some(screen) = snapshot.screen {
+            ensure!(
+                screen.error.is_none(),
+                "terminal error during flood recovery: {:?}",
+                screen.error
+            );
+            screen
+                .text()
+                .lines()
+                .any(|line| line.trim() == "IDK_FLOOD_RECOVERED")
+        } else {
+            false
+        };
+        let elapsed = interrupted.elapsed();
+        ensure!(
+            elapsed <= FLOOD_RECOVERY_BUDGET,
+            "Ctrl+C to observed input recovery took {} ms; ADR budget is 2000 ms",
+            elapsed.as_millis()
+        );
+        if recovered {
+            return Ok(elapsed.as_millis() as u64);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 pub(crate) fn run(shell: &Path, launcher: &Path) -> Result<Value> {
     // A deliberately short Linux-local path also works when TMPDIR is too long
     // for sockaddr_un. All generated inputs belong to this synthetic fixture.
@@ -359,7 +410,9 @@ pub(crate) fn run(shell: &Path, launcher: &Path) -> Result<Value> {
     ]);
     let environment = LaunchEnvironment::from_variables(variables.clone())?;
     let project = synthetic_project(&store, &root, shell, &environment)?;
+    let entering = Instant::now();
     let (mut host, mut client) = start_host(&store, launcher)?;
+    let initial_host_entry_ms = entering.elapsed().as_millis() as u64;
     let candidate_build_id = client.info().build_id.clone();
     let preparing = Instant::now();
     let batch = client.start_defaults(&project.id, variables.clone(), 24, 100)?;
@@ -429,6 +482,7 @@ pub(crate) fn run(shell: &Path, launcher: &Path) -> Result<Value> {
         initialization_count(&project)? == 5,
         "reattach repeated shell initialization"
     );
+    let flood_ctrl_c_input_recovery_ms = interrupt_flood(&mut client, &original[0].session_id)?;
     // The five synthetic shells have finished their marker commands and are
     // waiting for input. This is an actual RSS sample, not an inferred zero.
     std::thread::sleep(Duration::from_millis(100));
@@ -513,9 +567,10 @@ pub(crate) fn run(shell: &Path, launcher: &Path) -> Result<Value> {
         "git": git,
         "runs": runs,
         "saved_terminals": { "development": 2, "external_test": 3 },
-        "checks": { "defaults_five_ready": "PASS", "independent_shell_state": "PASS", "detach_reattach_same_pids": "PASS", "reattach_source_count_unchanged": "PASS", "explicit_close_reopen": "PASS", "unrelated_process_preserved": "PASS", "host_shutdown_observed": "PASS" },
-        "measurements": { "prepare5_ms": prepare5_ms, "reattachfirstscreen_ms": reattachfirstscreen_ms, "idlehostRSS_KiB": idle_host_rss_kib },
-        "budgets": { "prepare5_ms": 10000, "reattachfirstscreen_ms": 1000, "idlehostRSS_KiB": IDLE_RSS_BUDGET_KIB },
+        "checks": { "defaults_five_ready": "PASS", "independent_shell_state": "PASS", "detach_reattach_same_pids": "PASS", "reattach_source_count_unchanged": "PASS", "explicit_close_reopen": "PASS", "unrelated_process_preserved": "PASS", "host_shutdown_observed": "PASS", "flood_interrupt_input_recovery": "PASS" },
+        "entry_observation_scope": "spawn host to first verified IPC response; excludes TUI rendering; no separate ADR latency budget",
+        "measurements": { "initial_host_entry_ms": initial_host_entry_ms, "flood_ctrl_c_input_recovery_ms": flood_ctrl_c_input_recovery_ms, "prepare5_ms": prepare5_ms, "reattachfirstscreen_ms": reattachfirstscreen_ms, "idlehostRSS_KiB": idle_host_rss_kib },
+        "budgets": { "flood_ctrl_c_input_recovery_ms":2000, "prepare5_ms": 10000, "reattachfirstscreen_ms": 1000, "idlehostRSS_KiB": IDLE_RSS_BUDGET_KIB },
         "budget_result": "PASS"
     }))
 }

@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+mod cli_package;
 mod cli_project;
 mod cli_run;
 mod cli_session;
@@ -25,6 +26,20 @@ enum Commands {
         #[command(subcommand)]
         command: cli_run::RunCommand,
     },
+    /// Verify, install and recover an explicitly supplied offline bundle.
+    Package {
+        #[command(subcommand)]
+        command: cli_package::PackageCommand,
+    },
+    #[command(name = "__package-health", hide = true)]
+    PackageHealth {
+        #[arg(long)]
+        config_dir: std::path::PathBuf,
+        #[arg(long)]
+        state_dir: std::path::PathBuf,
+        #[arg(long)]
+        runtime_dir: std::path::PathBuf,
+    },
     /// Inspect this binary's build and protocol identity.
     Version,
     /// Connect and manage project definitions.
@@ -50,8 +65,11 @@ enum Commands {
     },
     /// Diagnose configuration and local tools without starting project commands.
     Doctor {
-        #[arg(long)]
+        #[arg(long, conflicts_with = "brief")]
         json: bool,
+        /// Print status counts without local paths, project names or error details.
+        #[arg(long)]
+        brief: bool,
         /// Return nonzero for warnings/errors (default diagnostic exit is zero).
         #[arg(long)]
         strict: bool,
@@ -104,6 +122,27 @@ fn main() {
                     eprintln!("idk: {error:#}");
                     std::process::exit(1);
                 }
+            }
+        }
+        Some(Commands::Package { command }) => {
+            if let Err(error) = cli_package::execute(cli.data_dir.as_deref(), command) {
+                eprintln!("idk: {error:#}");
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::PackageHealth {
+            config_dir,
+            state_dir,
+            runtime_dir,
+        }) => {
+            let store = idk_workspace::store::Store {
+                config_dir,
+                state_dir,
+                runtime_dir,
+            };
+            match idk_workspace::install::health(&store) {
+                Ok(report) => println!("{}", serde_json::to_string(&report).unwrap()),
+                Err(_) => std::process::exit(1),
             }
         }
         Some(Commands::Project { command }) => {
@@ -174,9 +213,15 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Some(Commands::Doctor { json, strict }) => {
+        Some(Commands::Doctor {
+            json,
+            brief,
+            strict,
+        }) => {
             let report = idk_workspace::doctor::inspect(cli.data_dir.as_deref());
-            if json {
+            if brief {
+                println!("{}", report.brief());
+            } else if json {
                 println!("{}", serde_json::to_string_pretty(&report).unwrap());
             } else {
                 println!("idk {}", report.version);

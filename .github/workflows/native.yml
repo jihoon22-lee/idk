@@ -32,6 +32,7 @@ jobs:
           cargo fmt --all -- --check
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo test --locked --workspace
+          python3 tests/test_native_packaging.py
 
       - name: Host startup and Git UI with software SHA-256
         env:
@@ -44,7 +45,7 @@ jobs:
           IDK_TEST_LAUNCHER: ${{ github.workspace }}/target/debug/idk
         run: |
           cargo build --locked -p idk-workspace --bin idk
-          cargo test --locked --workspace -- --ignored --nocapture
+          cargo test --locked -p idk-workspace --test terminal_core -- --ignored --nocapture
 
       - name: Actual traditional BSD csh initialization and project launch (required)
         env:
@@ -62,6 +63,12 @@ jobs:
         run: |
           ./scripts/build-native.sh
           ./scripts/smoke-native.sh
+          ./scripts/build-native-bundle.sh
+          native_version="$(./dist/idk-linux-x86_64 --version)"
+          native_bundle="dist/idk-${native_version#idk }-x86_64-unknown-linux-musl.tar.gz"
+          IDK_TEST_BUNDLE="$GITHUB_WORKSPACE/$native_bundle" \
+            IDK_TEST_BUNDLE_SHA256="$(sha256sum "$native_bundle" | cut -d ' ' -f 1)" \
+            cargo test --locked -p idk-workspace --test package_install -- --ignored --nocapture
           mkdir -p "$RUNNER_TEMP/idk-native-first"
           cp dist/idk-linux-x86_64 "$RUNNER_TEMP/idk-native-first/idk-linux-x86_64"
 
@@ -73,6 +80,7 @@ jobs:
         run: |
           ./scripts/build-native.sh
           ./scripts/smoke-native.sh
+          ./scripts/build-native-bundle.sh
           python3 - <<'PY'
           import json
           import os
@@ -83,6 +91,9 @@ jobs:
           assert first["source"]["sha"] == second["source"]["sha"]
           PY
           cmp "$RUNNER_TEMP/idk-native-first/idk-linux-x86_64" "$IDK_NATIVE_DIST/idk-linux-x86_64"
+          native_version="$(./dist/idk-linux-x86_64 --version)"
+          native_archive="idk-${native_version#idk }-x86_64-unknown-linux-musl.tar.gz"
+          cmp "dist/$native_archive" "$IDK_NATIVE_DIST/$native_archive"
 
       - name: Prepare test-only UBI 8.10 and tcsh image
         run: docker build --file tests/containers/ubi8.Dockerfile --tag idk-ubi8-test .
@@ -108,6 +119,14 @@ jobs:
       - name: Exact candidate peer identity across two actual UIDs
         run: ./scripts/test-native-peer.sh
 
+      - name: Native storage lock, atomic rename and filesystem inspection failures
+        run: |
+          python3 scripts/test-native-storage.py \
+            --candidate dist/idk-linux-x86_64 --shell /usr/bin/tcsh
+
+      - name: Package-only installation and filesystem failure recovery
+        run: ./scripts/test-native-install.sh
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: idk-native-candidate
@@ -118,3 +137,5 @@ jobs:
             dist/idk-native-SHA256SUMS
             dist/idk-third-party-licenses.json
             dist/idk-THIRD-PARTY-NOTICES.txt
+            dist/idk-*-x86_64-unknown-linux-musl.tar.gz
+            dist/idk-*-x86_64-unknown-linux-musl.tar.gz.sha256
