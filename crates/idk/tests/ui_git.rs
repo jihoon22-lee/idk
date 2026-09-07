@@ -216,6 +216,7 @@ fn done(app: &mut App<'_>, kind: &str) {
     control(app, 'g');
     key(app, KeyCode::Char('z'));
     wait(app, "Changes");
+    quiet(app); // Returning from an operation requests a fresh HEAD/index snapshot.
 }
 
 #[test]
@@ -321,8 +322,118 @@ fn changed_index_invalidates_commit_review_without_losing_multiline_draft() {
     assert!(screen(&mut app).contains("Keep this draft"));
 }
 
+fn run_request(
+    client: &mut Client,
+    request: idk_workspace::run_wire::RunRequest,
+) -> idk_workspace::run_wire::RunResult {
+    use idk_workspace::run_wire::*;
+    let mut job = client.run(request).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while job.state == RunJobState::Pending {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+        job = client.run(RunRequest::Job { job_id: job.job_id }).unwrap();
+    }
+    assert_eq!(job.state, RunJobState::Complete, "{:?}", job.error);
+    job.result.unwrap()
+}
+fn start_source_user(fixture: &Fixture) -> String {
+    use idk_workspace::{model::*, run_wire::*, task::TaskService};
+    let service = ProjectService {
+        store: &fixture.store,
+    };
+    let review = service
+        .review_initialization(&fixture.project, &fixture.environment)
+        .unwrap();
+    service
+        .approve_initialization(review.revision, review)
+        .unwrap();
+    let task = TaskDefinition {
+        id: new_id(),
+        name: "Registered source user".into(),
+        command: "sleep 120".into(),
+        cwd: fixture.root.clone(),
+        sources: vec![],
+        artifact: None,
+        approved_digest: None,
+        steps: vec![],
+        failure_policy: FailurePolicy::Stop,
+        logging: TaskLogging::Raw,
+        interactive: false,
+        build_outputs: vec![],
+        artifact_from_task: None,
+        timeout_seconds: None,
+    };
+    let service = TaskService {
+        store: &fixture.store,
+    };
+    service
+        .save(
+            fixture.store.load().unwrap().revision,
+            &fixture.project,
+            task.clone(),
+        )
+        .unwrap();
+    let review = service
+        .review(&fixture.project, &task.id, &fixture.environment)
+        .unwrap();
+    service
+        .approve(
+            review.revision,
+            &fixture.project,
+            &task.id,
+            &review.digest,
+            &fixture.environment,
+        )
+        .unwrap();
+    let mut client = fixture.client();
+    match run_request(
+        &mut client,
+        RunRequest::Start {
+            project_id: fixture.project.clone(),
+            task_id: task.id,
+            operation_id: new_id(),
+            environment: fixture.environment.variables().clone(),
+            parallel: false,
+            rows: 24,
+            cols: 100,
+        },
+    ) {
+        RunResult::Started(reply) => reply.run.run_id,
+        _ => panic!("expected registered Run"),
+    }
+}
+fn stop_source_user(fixture: &Fixture, run_id: &str) {
+    use idk_workspace::run_wire::*;
+    let mut client = fixture.client();
+    run_request(
+        &mut client,
+        RunRequest::Cancel {
+            run_id: run_id.into(),
+            force: true,
+        },
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let RunResult::Run(run) = run_request(
+            &mut client,
+            RunRequest::Info {
+                run_id: run_id.into(),
+            },
+        ) else {
+            panic!("expected Run")
+        };
+        if run.cleanup_confirmed {
+            assert_eq!(run.state, RunState::Cancelled);
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[test]
-fn fetch_is_explicit_and_source_guard_unknown_does_not_block_read_or_branch_creation() {
+fn fetch_and_push_stay_explicit_while_registered_run_blocks_pull_and_switch_until_cleanup() {
     let fixture = Fixture::new();
     let remote = fixture.temporary.path().join("remote.git");
     fs::create_dir(&remote).unwrap();
@@ -334,7 +445,9 @@ fn fetch_is_explicit_and_source_guard_unknown_does_not_block_read_or_branch_crea
     git(&fixture.root, &["push", "origin", "main"]);
     let mut app = fixture.app();
     assert!(!fixture.root.join(".git/FETCH_HEAD").exists());
-    assert!(screen(&mut app).contains("build activity unknown"));
+    let run_id = start_source_user(&fixture);
+    key(&mut app, KeyCode::F(5));
+    wait(&mut app, "builds using worktree");
     key(&mut app, KeyCode::Char('r'));
     wait(&mut app, "origin");
     key(&mut app, KeyCode::Char('f'));
@@ -369,6 +482,26 @@ fn fetch_is_explicit_and_source_guard_unknown_does_not_block_read_or_branch_crea
         git(&remote, &["rev-parse", "refs/heads/main"]),
         git(&fixture.root, &["rev-parse", "HEAD"])
     );
+    let remote_work = fixture.temporary.path().join("remote-work");
+    git(
+        fixture.temporary.path(),
+        &[
+            "clone",
+            "-b",
+            "main",
+            remote.to_str().unwrap(),
+            remote_work.to_str().unwrap(),
+        ],
+    );
+    git(&remote_work, &["config", "user.name", "Remote Fixture"]);
+    git(
+        &remote_work,
+        &["config", "user.email", "remote@example.invalid"],
+    );
+    fs::write(remote_work.join("remote-change"), "new remote bytes\n").unwrap();
+    git(&remote_work, &["add", "remote-change"]);
+    git(&remote_work, &["commit", "-m", "remote advance"]);
+    git(&remote_work, &["push", "origin", "main"]);
     quiet(&mut app);
     key(&mut app, KeyCode::Char('r'));
     wait(&mut app, "origin");
@@ -382,7 +515,7 @@ fn fetch_is_explicit_and_source_guard_unknown_does_not_block_read_or_branch_crea
     assert_eq!(
         fs::read(fixture.root.join(".git/FETCH_HEAD")).unwrap(),
         fetched_before,
-        "unknown build activity must block pull before remote contact"
+        "a registered Run must block pull before remote contact"
     );
     key(&mut app, KeyCode::Char('b'));
     wait(&mut app, "Branches");
@@ -401,10 +534,41 @@ fn fetch_is_explicit_and_source_guard_unknown_does_not_block_read_or_branch_crea
     key(&mut app, KeyCode::Enter);
     wait(&mut app, "Review Git action");
     key(&mut app, KeyCode::F(2));
-    wait(&mut app, "unknown");
+    done(&mut app, "Switch branch");
     assert_eq!(
         git(&fixture.root, &["branch", "--show-current"]).trim(),
         "main"
+    );
+    stop_source_user(&fixture, &run_id);
+    key(&mut app, KeyCode::F(5));
+    quiet(&mut app);
+    wait(&mut app, "shared worktree");
+    key(&mut app, KeyCode::Char('b'));
+    wait(&mut app, "topic");
+    key(&mut app, KeyCode::End);
+    key(&mut app, KeyCode::Enter);
+    wait(&mut app, "Review Git action");
+    key(&mut app, KeyCode::F(2));
+    done(&mut app, "Switch branch");
+    assert_eq!(
+        git(&fixture.root, &["branch", "--show-current"]).trim(),
+        "topic"
+    );
+    key(&mut app, KeyCode::Char('r'));
+    wait(&mut app, "origin");
+    key(&mut app, KeyCode::Char('p'));
+    event(&mut app, Event::Paste("main".into()));
+    key(&mut app, KeyCode::F(2));
+    wait(&mut app, "Review Git action");
+    key(&mut app, KeyCode::F(2));
+    done(&mut app, "Fast-forward pull");
+    assert_eq!(
+        git(&fixture.root, &["rev-parse", "HEAD"]),
+        git(&remote, &["rev-parse", "refs/heads/main"])
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("remote-change")).unwrap(),
+        "new remote bytes\n"
     );
     let mut client = fixture.client();
     let operations = client.git_operations(Some(&fixture.project)).unwrap();

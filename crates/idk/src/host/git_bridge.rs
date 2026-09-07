@@ -84,6 +84,8 @@ struct Record {
     repository: Repository,
     kind: GitOperationKind,
     state: GitOperationState,
+    #[serde(default)]
+    cleanup_acknowledged: bool,
     outcome: Option<GitOutcome>,
     exit_code: Option<u32>,
     commit: Option<String>,
@@ -181,6 +183,7 @@ impl Bridge {
                     } else {
                         GitOperationState::Unknown
                     },
+                    cleanup_acknowledged: record.cleanup_acknowledged,
                     owner: None,
                     input_epoch: 0,
                     generation: 0,
@@ -210,6 +213,7 @@ impl Bridge {
                 repository: operation.info.repository.clone(),
                 kind: operation.info.kind,
                 state: operation.info.state,
+                cleanup_acknowledged: operation.info.cleanup_acknowledged,
                 outcome: operation
                     .info
                     .result
@@ -235,6 +239,21 @@ impl Bridge {
                 operations,
             },
         )
+    }
+    pub fn unresolved_sources(&self) -> Vec<(PathBuf, String)> {
+        self.operations
+            .values()
+            .filter(|operation| {
+                operation.info.state == GitOperationState::Unknown
+                    && !operation.info.cleanup_acknowledged
+            })
+            .map(|operation| {
+                (
+                    operation.info.repository.identity().to_path_buf(),
+                    operation.info.id.clone(),
+                )
+            })
+            .collect()
     }
     pub fn occupied(&self) -> usize {
         self.operations
@@ -356,6 +375,31 @@ impl Bridge {
                 self.operation(operation)?
                     .resize(client, *epoch, *rows, *cols)?;
                 value(())
+            }
+            Request::GitOperationReconcile {
+                operation,
+                repository,
+            } => {
+                let saved = self.operation(operation)?;
+                ensure!(
+                    saved.info.state == GitOperationState::Unknown
+                        && !saved.active()
+                        && !saved.info.terminal_available,
+                    "only a recovered unknown Git operation can be reconciled"
+                );
+                ensure!(
+                    &saved.info.repository == repository,
+                    "Git reconciliation target changed; review the exact operation and repository"
+                );
+                let previous = saved.info.clone();
+                saved.info.cleanup_acknowledged = true;
+                saved.info.error=Some("user confirmed old process cleanup; Git outcome remains unknown, inspect local and remote state".into());
+                if let Err(error) = self.persist() {
+                    self.operation(operation)?.info = previous;
+                    return Err(error);
+                }
+                gate.unblock(repository.identity(), operation)?;
+                value(self.operation(operation)?.info.clone())
             }
             Request::GitOperationCancel {
                 operation,
@@ -768,7 +812,7 @@ impl Bridge {
             "owned Git/terminal process capacity reached"
         );
         if self.operations.len() >= MAX_OPERATIONS {
-            let oldest = self.operations.iter().filter(|(_, operation)| !operation.active() && operation.info.state == GitOperationState::Complete)
+            let oldest = self.operations.iter().filter(|(_, operation)| !operation.active() && (operation.info.state == GitOperationState::Complete || (operation.info.state == GitOperationState::Unknown && operation.info.cleanup_acknowledged)))
                 .min_by_key(|(_, operation)| operation.finished_at).map(|(id, _)| id.clone()).context("Git history capacity is occupied by unresolved outcomes; inspect them before new operations")?;
             self.operations.remove(&oldest);
         }
@@ -809,6 +853,7 @@ impl Bridge {
             host_instance: self.instance.clone(),
             kind: wire(&plan.value.preview().kind)?,
             state: GitOperationState::Pending,
+            cleanup_acknowledged: false,
             owner: None,
             input_epoch: 0,
             generation: 0,

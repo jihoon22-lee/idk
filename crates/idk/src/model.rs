@@ -146,6 +146,39 @@ pub struct TaskDefinition {
     pub sources: Vec<SourceSpec>,
     pub artifact: Option<PathBuf>,
     pub approved_digest: Option<String>,
+    #[serde(default)]
+    pub steps: Vec<TaskStep>,
+    #[serde(default)]
+    pub failure_policy: FailurePolicy,
+    #[serde(default)]
+    pub logging: TaskLogging,
+    #[serde(default)]
+    pub interactive: bool,
+    #[serde(default)]
+    pub build_outputs: Vec<PathBuf>,
+    #[serde(default)]
+    pub artifact_from_task: Option<String>,
+    #[serde(default)]
+    pub timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskStep {
+    pub name: String,
+    pub command: String,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FailurePolicy {
+    #[default]
+    Stop,
+    Continue,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskLogging {
+    #[default]
+    Raw,
+    Disabled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,11 +293,38 @@ impl Project {
             valid_name(&task.name)?;
             absolute_path(&task.cwd)?;
             validate_sources(&task.sources)?;
-            if task.command.trim().is_empty()
+            if (task.steps.is_empty() && task.command.trim().is_empty())
                 || task.command.len() > 65536
                 || task.command.contains('\0')
             {
                 bail!("invalid task command");
+            }
+            if task.steps.len() > 64 || task.build_outputs.len() > 32 {
+                bail!("too many task steps or output paths");
+            }
+            for step in &task.steps {
+                valid_name(&step.name)?;
+                if step.command.trim().is_empty()
+                    || step.command.len() > 65536
+                    || step.command.contains('\0')
+                {
+                    bail!("invalid task step command");
+                }
+            }
+            for path in &task.build_outputs {
+                absolute_path(path)?;
+            }
+            if let Some(id) = &task.artifact_from_task {
+                valid_id(id)?;
+            }
+            if task
+                .timeout_seconds
+                .is_some_and(|seconds| seconds == 0 || seconds > 604800)
+            {
+                bail!("task timeout must be 1–604800 seconds");
+            }
+            if task.interactive && task.logging != TaskLogging::Disabled {
+                bail!("interactive task must disable raw logging to protect echoed input");
             }
             if let Some(path) = &task.artifact {
                 absolute_path(path)?;
@@ -310,8 +370,11 @@ impl Project {
 
     pub fn task_digest(&self, task: &TaskDefinition) -> Result<String> {
         let mut digest = Sha256::new();
-        hash_field(&mut digest, b"idk-task-definition-v2");
+        hash_field(&mut digest, b"idk-task-definition-v3");
         hash_field(&mut digest, self.source_digest()?.as_bytes());
+        let mut definition = task.clone();
+        definition.approved_digest = None;
+        hash_field(&mut digest, &serde_json::to_vec(&definition)?);
         hash_field(&mut digest, task.command.as_bytes());
         hash_field(&mut digest, task.cwd.as_os_str().as_encoded_bytes());
         hash_sources(&mut digest, &task.sources)?;
@@ -428,6 +491,7 @@ pub struct SourceGate(Arc<Mutex<HashMap<PathBuf, GateState>>>);
 #[derive(Debug, Default, Serialize, Clone)]
 pub struct GateState {
     pub provider_ready: bool,
+    pub blocks: BTreeMap<String, String>,
     pub runs: BTreeMap<String, String>,
     pub mutation: Option<String>,
     pub generation: u64,
@@ -441,6 +505,42 @@ pub struct GateLease {
 }
 
 impl SourceGate {
+    pub fn block(&self, identity: &Path, id: &str, reason: &str) -> Result<()> {
+        let mut states = self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("source-use provider unavailable"))?;
+        states
+            .entry(identity.to_path_buf())
+            .or_default()
+            .blocks
+            .insert(id.into(), reason.into());
+        Ok(())
+    }
+    pub fn unblock(&self, identity: &Path, id: &str) -> Result<()> {
+        let mut states = self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("source-use provider unavailable"))?;
+        states
+            .entry(identity.to_path_buf())
+            .or_default()
+            .blocks
+            .remove(id);
+        Ok(())
+    }
+    /// A stopped/crashed run provider must not leave an idle-ready observation behind.
+    pub fn unavailable(&self, identity: &Path) -> Result<()> {
+        let mut states = self
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("source-use provider unavailable"))?;
+        states
+            .entry(identity.to_path_buf())
+            .or_default()
+            .provider_ready = false;
+        Ok(())
+    }
     pub fn ready(&self, identity: &Path) -> Result<()> {
         let mut states = self
             .0
@@ -458,7 +558,9 @@ impl SourceGate {
             .0
             .lock()
             .map_err(|_| anyhow::anyhow!("source-use provider unavailable"))?;
-        Ok(states.get(identity).cloned().unwrap_or_default())
+        let mut state = states.get(identity).cloned().unwrap_or_default();
+        state.provider_ready &= state.blocks.is_empty();
+        Ok(state)
     }
 
     pub fn reserve_run(&self, identity: &Path, operation: &str, name: &str) -> Result<GateLease> {
@@ -475,7 +577,7 @@ impl SourceGate {
             .lock()
             .map_err(|_| anyhow::anyhow!("source-use provider unavailable"))?;
         let state = states.entry(identity.to_path_buf()).or_default();
-        if !state.provider_ready {
+        if !state.provider_ready || !state.blocks.is_empty() {
             bail!("source-use state unknown; provider is not ready");
         }
         if state.mutation.is_some() || (run.is_none() && !state.runs.is_empty()) {
@@ -517,6 +619,23 @@ impl Drop for GateLease {
 mod tests {
     use super::*;
 
+    #[test]
+    fn independent_unknown_blocks_survive_readiness_until_each_explicit_release() {
+        let gate = SourceGate::default();
+        let identity = Path::new("/worktree/.git");
+        gate.ready(identity).unwrap();
+        gate.block(identity, "unknown1", "old operation").unwrap();
+        gate.block(identity, "unknown2", "another operation")
+            .unwrap();
+        gate.ready(identity).unwrap();
+        assert!(!gate.state(identity).unwrap().provider_ready);
+        assert!(gate.reserve_run(identity, "new", "build").is_err());
+        gate.unblock(identity, "unknown1").unwrap();
+        assert!(gate.reserve_mutation(identity, "switch").is_err());
+        gate.unblock(identity, "unknown2").unwrap();
+        assert!(gate.state(identity).unwrap().provider_ready);
+        assert!(gate.reserve_mutation(identity, "switch").is_ok());
+    }
     #[test]
     fn unavailable_is_not_idle_and_reservations_exclude_source_changes() {
         let gate = SourceGate::default();

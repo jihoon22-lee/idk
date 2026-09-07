@@ -709,6 +709,17 @@ pub struct TerminalSession {
 
 impl TerminalSession {
     pub fn spawn(command: CommandBuilder, rows: u16, cols: u16, scrollback: usize) -> Result<Self> {
+        Self::spawn_with_output(command, rows, cols, scrollback, None)
+    }
+
+    /// Opt-in registered-task output only. Input bytes never enter this sink.
+    pub fn spawn_with_output(
+        command: CommandBuilder,
+        rows: u16,
+        cols: u16,
+        scrollback: usize,
+        output: Option<crate::run::RunOutputSink>,
+    ) -> Result<Self> {
         let size = Size::checked(rows, cols)?;
         ensure!(
             scrollback.saturating_mul(usize::from(cols)) <= MAX_SCROLLBACK_CELLS,
@@ -750,7 +761,7 @@ impl TerminalSession {
         let reader_thread = match thread::Builder::new()
             .name("idk-pty".into())
             .spawn(move || {
-                reader_loop(reader, poll_file, thread_engine, thread_stop);
+                reader_loop(reader, poll_file, thread_engine, thread_stop, output);
                 // reader_loop owns and drops every PTY descriptor/engine ref
                 // before this wait. No extra thread is needed on normal Drop.
                 if let Ok(mut child) = reap_child.recv() {
@@ -1155,6 +1166,7 @@ fn reader_loop(
     poll_file: File,
     engine: Arc<Mutex<Engine>>,
     stop: Arc<AtomicBool>,
+    output: Option<crate::run::RunOutputSink>,
 ) {
     let mut bytes = [0u8; IO_CHUNK];
     while !stop.load(Ordering::Acquire) {
@@ -1194,6 +1206,9 @@ fn reader_loop(
                 break;
             }
             Ok(count) => {
+                if let Some(output) = &output {
+                    output.push(&bytes[..count]);
+                }
                 if let Ok(mut state) = engine.lock() {
                     if stop.load(Ordering::Acquire) {
                         break;

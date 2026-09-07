@@ -278,7 +278,7 @@ fn repository_tokens_reject_cross_context_selection_and_refresh_authentication_w
     let a = fixture.open(&mut client, &first, environment.clone());
     let b = fixture.open(&mut client, &second, fixture.env.clone());
     assert_eq!(a.repository.root, first.root);
-    assert!(!a.source_use.provider_ready);
+    assert!(a.source_use.provider_ready);
     let snapshot = status(&mut client, &a.id);
     assert!(client
         .git_submit(GitTask::Stage {

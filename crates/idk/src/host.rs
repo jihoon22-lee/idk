@@ -6,6 +6,7 @@ mod git_bridge;
 mod git_jobs;
 mod git_operation;
 mod launch;
+mod run_jobs;
 
 use crate::model::{new_id, MAX_TERMINALS, PROTOCOL};
 use crate::protocol::{self, Envelope, HostInfo, Response};
