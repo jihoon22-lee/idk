@@ -38,7 +38,7 @@ UI의 수명과 host/셸의 수명은 다르다. client를 닫아도 host가 실
 | `git/`, `git_wire.rs`, `host/git_*` | 실제 저장소 binding, immutable review/plan, index와 Git 작업 수명 |
 | `task.rs`, `run.rs`, `run_wire.rs`, `host/run_jobs.rs` | 등록 실행 의도, 결과·취소, source lease, 로그·retention |
 | `problems.rs`, `editor.rs` | raw-log 기반 진단, provenance, 승인된 현재/기록 root와 편집기 인자 |
-| `package.rs`, `install.rs`, `doctor.rs` | archive 검증, generation 활성화/복구, 현지 진단 |
+| `package.rs`, `install.rs`, `saved_state.rs`, `doctor.rs` | archive 검증, generation 활성화/복구, 현지 진단 |
 | `probe*.rs` | 배포된 실행 파일 자체가 수행하는 합성 셸/host/Git/Run 증거 |
 
 worker는 느린 파일/Git/초기화 작업을 actor 밖에서 처리한다. host는 실제 소유한 프로세스와
