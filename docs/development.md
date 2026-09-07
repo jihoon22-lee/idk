@@ -15,13 +15,14 @@
 ```bash
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked --workspace
+RUST_TEST_THREADS=4 cargo test --locked --workspace
 cargo test --locked --test terminal_core -- --ignored
 ./scripts/build-native.sh
 ./scripts/smoke-native.sh
 ```
 
-실제 셸 테스트의 환경 미준비는 실패이며 ignored native 검사는 두 번째 test 명령으로 명시 실행한다.
+각 lifecycle fixture가 독립 host와 여러 PTY를 만들기 때문에 전체 검사 동시성은 4로 제한한다.
+제품의 세션 수 제한이나 실패 검사를 줄이는 설정이 아니다. 실제 셸 테스트의 환경 미준비는 실패이며 ignored native 검사는 두 번째 test 명령으로 명시 실행한다.
 정적 바이너리는 Ubuntu 및 UBI 8.10의 격리된 rootless/network-none 환경에서도 검사한다.
 이 결과가 실제 폐쇄망 정책이나 사용자 startup 파일을 검증한 것은 아니다.
 
