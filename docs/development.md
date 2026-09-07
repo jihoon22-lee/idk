@@ -33,6 +33,7 @@ IDK_TEST_SHELL=/usr/bin/tcsh cargo test --locked -p idk-workspace --test termina
 ```
 
 host fixture는 별도 호스트와 여러 실제 PTY를 생성하므로 병렬 테스트 수를 4로 제한한다.
+제품 세션 한도나 실패 검사를 줄이는 설정이 아니다.
 `IDK_TEST_SHELL`과 필요한 경우 `IDK_TEST_LAUNCHER`에 실제 실행 파일의 절대 경로를 사용한다.
 BSD csh는 설치된 실제 경로로 같은 검사를 수행한다. 필수 actual 도구가 없거나 검사가 ignored인
 경우 실행했다고 표시하지 않는다. native CI는 software SHA-256 경로 등 별도 회귀도 수행하며
@@ -70,7 +71,23 @@ checksum, 전체 license inventory/notice를 같은 빌드 입력과 연결한�
 디렉터리의 두 빌드 bytes를 비교하고 같은 후보를 UBI 8.10/glibc 2.28 nonroot/network-none,
 실제 UID 분리, 설치·noexec/권한/read-only/disk-full 실패와 live host 보존 경로에서 실행한다.
 `tests/containers/ubi8.Dockerfile`, `scripts/test-native-install.sh`, `scripts/test-native-peer.sh`,
-`test-native-storage.py`가 패키지·UID·파일시스템 실패 검증에 사용된다. 검증한 후보가 바뀌면 이전 결과를 재사용하지 않는다.
+`scripts/test-native-storage.py`가 패키지·UID·파일시스템 실패 검증에 사용된다. 검증한 후보가 바뀌면 이전 결과를 재사용하지 않는다.
+
+패키지용 ignored 검사는 archive를 만든 후 실제 후보 경로와 digest를 주고 별도로 실행한다.
+초기 `--ignored` 단계에서는 `terminal_core`만 선택하여 아직 만들지 않은 bundle 검사를 섞지 않는다.
+
+```bash
+native_version="$(./dist/idk-linux-x86_64 --version)"
+native_bundle="$PWD/dist/idk-${native_version#idk }-x86_64-unknown-linux-musl.tar.gz"
+IDK_TEST_SHELL=/usr/bin/tcsh IDK_TEST_BUNDLE="$native_bundle" \
+  IDK_TEST_BUNDLE_SHA256="$(sha256sum "$native_bundle" | cut -d ' ' -f 1)" \
+  RUST_TEST_THREADS=4 cargo test --locked -p idk-workspace --test package_install -- --ignored
+python3 scripts/test-native-storage.py --candidate dist/idk-linux-x86_64 --shell /usr/bin/tcsh
+```
+
+저장 실패 검사는 실제 후보에서 ENOLCK·atomic rename·statfs 오류를 주입해 원본 보존을 확인한다.
+NFS state/runtime 거부는 지원 경계이며 오류 주입이나 UBI 결과를 실제 NFS/RHEL 실기로 바꾸지 않는다.
+공개 후 사용자 실기는 [후속 #53](https://github.com/jihoon22-lee/idk/issues/53)에서 따로 추적한다.
 
 main push에서만 exact-main provenance가 부여된다. 공개는 [릴리스 프로토콜](native-release.md)에
 따라 그 성공한 CI artifact를 재빌드 없이 게시하고 다시 다운로드해 비교한다. 대상 RHEL/폐쇄망

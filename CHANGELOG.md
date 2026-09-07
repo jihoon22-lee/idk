@@ -9,7 +9,7 @@
 
 ## [Unreleased]
 
-## [0.4.0]
+## [0.4.0] - 2026-09-07
 
 ### Added
 - 프로젝트별 실제 csh/tcsh 터미널과 사용자별 host. alias·셸 변수·cwd 상태를 유지하며
@@ -30,8 +30,11 @@
 - 제품 구현을 Rust CLI/TUI와 정적 Linux x86_64 musl 실행 파일로 전환했다. 기본 실행에
   Python/compiler·Zellij vendor·사외 서비스가 필요하지 않으며 기존 csh/tcsh와 Git을 사용한다.
 - 설정·이력·로그·runtime을 별도 v0.4 namespace로 분리했다. v0.3 설정과 사용자 `.csh`·소스는
-  자동 변환하지 않는다. 상세 전환 관계는 [사용 안내](docs/GUIDE.md)를 따른다.
+  자동 변환하지 않는다. 상세 전환 관계는
+  [v0.4 사용 안내](https://github.com/jihoon22-lee/idk/blob/v0.4.0/docs/GUIDE.md)를 따른다.
 - 개발 gate를 actual native 통합/패키지 검사와 남은 Python 빌드·릴리스 도구의 lint/fixture로 전환했다.
+- NFS host state/runtime은 지원하지 않는다. NFS home에서는 승인된 로컬 XDG 상태/runtime 경로나
+  `--data-dir`를 명시적으로 선택한다. 소스/config·기존 상태를 자동 이주하거나 조회 실패를 정상으로 처리하지 않는다.
 
 ### Removed
 - 현재 트리의 Python 제품 `src/idk/`, pyz 빌드/런처, `uv.lock` runtime 의존성과 이전 제품 테스트.
@@ -39,6 +42,12 @@
   `build --file` 인터페이스. 일부 흐름은 프로젝트/task/Run으로 대체하며 전체 기능 동등성을 제공하지 않는다.
 - Zellij/xclip vendor 다운로드와 legacy pyz 릴리스/CI 경로. Git history·이전 공개 릴리스와
   사용자 파일·기존 설정·살아 있는 외부 프로세스는 삭제 대상이 아니다.
+
+### 후속 수용
+- 대상 RHEL·폐쇄망 정책 실기는 공개 후 사용자가 수행하며 현재 미실행이다.
+  [후속 #53](https://github.com/jihoon22-lee/idk/issues/53)에 공개 결과물의 identity와 현지 판정을 연결한다.
+- 설치·업데이트·제거에서 기존 셸·Run·로그는 보존되며 원래 generation과 data 경로로 다시 접근한다.
+  [설치·복구 안내](https://github.com/jihoon22-lee/idk/blob/v0.4.0/docs/offline-workspace.md)를 따른다.
 
 ## [0.3.1] - 2026-08-22
 

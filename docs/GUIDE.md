@@ -19,13 +19,17 @@
 | `idk version` / `idk --version` | 제품 버전과 protocol/버전 정보 |
 | `idk probe --shell <absolute-csh-path>` | 사용자 프로젝트 대신 합성 입력을 사용하는 패키지 실행 검사 |
 
+상태와 host runtime은 NFS에서 지원하지 않는다. NFS home에서는 허용된 로컬 XDG 경로나
+`--data-dir`를 명시적으로 선택하며, 기존 workspace와 host를 자동으로 이동하지 않는다.
+
 상세 정의·키 안내는 [workspace-guide.md](workspace-guide.md), 패키지 수명과 저장 위치는
 [offline-workspace.md](offline-workspace.md)를 참조한다. 상세 문서는 각 구현과 함께 갱신한다.
 
 ## 수명을 구분하기
 
 화면을 닫거나 입력 소유권을 놓는 것은 작업 취소가 아니다. 재접속은 같은 살아 있는 셸을
-다시 보여 주며 source를 반복하지 않는다. 초기화 실패·취소 대기·호스트 장애 뒤의 Unknown은
+다시 보여 주며 source를 반복하지 않는다. 패키지 업데이트/entrypoint 제거도 기존 셸·Run을
+자동 취소하거나 로그를 복원·초기화하지 않는다. 기존 host에는 같은 generation과 data 경로로 접속한다. 초기화 실패·취소 대기·호스트 장애 뒤의 Unknown은
 각각 표시하며, 실제 exit와 정리가 확인될 때까지 완료나 idle로 간주하지 않는다.
 
 등록 작업 로그는 terminal scrollback과 별도로 보관된다. parser가 진단을 찾지 못해도 실제
@@ -50,3 +54,6 @@
 
 이전 `docs/plan.md`, `docs/spec-ws-run.md`, `docs/spec-dt.md`, `docs/env-survey.md`와 과거
 작업 기록은 역사적 자료다. 현재 설치·검증 명령이나 폐쇄망 반출 권한으로 해석하지 않는다.
+
+공개 후 대상 RHEL·폐쇄망 실기는 [후속 #53](https://github.com/jihoon22-lee/idk/issues/53)에서
+사용자가 공개 결과물로 수행한다. 공개 전 패키지/오류 주입 검사를 해당 환경의 PASS로 해석하지 않는다.

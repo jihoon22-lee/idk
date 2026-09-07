@@ -60,7 +60,7 @@ pub fn run(shell: &Path) -> Result<Value> {
         ensure_private_dir(path)?;
     }
     let source = init.join("setup.csh");
-    std::fs::write(&source, "alias idk_probe_alias 'echo IDK_ALIAS_OK'\nset idk_local = kept\nsetenv IDK_PROBE_ENV exported\necho once >> initializations\n")?;
+    std::fs::write(&source, "set prompt = ''\nalias idk_probe_alias 'echo IDK_ALIAS_OK'\nset idk_local = kept\nsetenv IDK_PROBE_ENV exported\necho once >> initializations\n")?;
     let launcher = std::env::current_exe()?;
     let environment = BTreeMap::from([
         ("HOME".into(), home.to_string_lossy().into_owned()),

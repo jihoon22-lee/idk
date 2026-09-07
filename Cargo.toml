@@ -13,3 +13,8 @@ repository = "https://github.com/jihoon22-lee/idk"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Hashing a full debug executable must fit the same host startup deadline on
+# CPUs without SHA instructions. Keep application debug checks/symbols intact.
+[profile.dev.package.sha2]
+opt-level = 3

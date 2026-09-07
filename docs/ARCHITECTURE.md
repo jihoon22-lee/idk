@@ -68,12 +68,16 @@ Run의 raw log는 terminal scrollback과 별개이고 크기·큐·보관 한도
 ## 저장과 배포
 
 v0.4는 XDG의 `idk/v0.4` namespace와 private host-local runtime을 사용한다. SQLite/WAL을
-사용하지 않으며 NFS home을 host socket이나 로컬 locking 환경으로 가정하지 않는다.
+사용하지 않는다. state/runtime에서 NFS를 확인하면 시작을 거부한다. 사용자가 허용된 로컬
+XDG 경로나 `--data-dir`를 명시적으로 선택하며, 소스/config나 기존 state를 자동 이주하지 않는다.
+statfs 조회 실패도 거부하고, 다른 파일시스템의 잠금·rename·fsync 지원까지 추정하지 않는다.
 경로·schema·설치 수명 상세는 [오프라인 운영 안내](offline-workspace.md)에 있다.
 
 정적 musl binary, manifest, checksum, 라이선스 inventory와 원문을 다섯 파일의 USTAR/gzip
 bundle로 만든다. 설치는 새 generation을 검증하고 journal로 managed link를 전환한다.
-기존 host와 generation, 실행 중 바뀐 사용자 데이터는 복구 시에도 보존한다. 설치 schema 2의
+기존 host와 generation, 살아 있는 셸·Run·로그 writer, 실행 중 바뀐 사용자 데이터는
+복구 시에도 보존한다. 업데이트의 health 검사는 typed host/Git/Run metadata를 읽고 검증하며
+등록 작업을 실행하거나 live 상태의 이전 snapshot을 복원하지 않는다. 설치 schema 2의
 committed version floor는 uninstall 뒤에도 유지하며 stage/건강 검사 실패로 올라가지 않는다.
 
 공개 빌드 도구의 Python과 제품 런타임을 구분한다. 릴리스는 성공한 exact-main native CI의
@@ -85,3 +89,6 @@ artifact를 재빌드하지 않고 승격하며 [릴리스 프로토콜](native-
 실행/실패 검증, 사용 문서를 같은 PR에서 연결한다. 종료·취소·복구를 mock 결과만으로
 완료 처리하지 않는다. 기존 v0.3 Python 구조와 서브커맨드 추가법은 Git history의 해당 버전을
 참조하며 현재 제품 경로로 다시 가져오지 않는다.
+
+대상 RHEL·폐쇄망 정책 수용은 [공개 후 사용자 실기 #53](https://github.com/jihoon22-lee/idk/issues/53)에
+미실행으로 남긴다. 합성 storage 오류 주입은 실제 NFS 마운트나 현지 정책의 수용 증거가 아니다.

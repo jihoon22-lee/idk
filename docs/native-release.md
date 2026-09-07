@@ -65,7 +65,12 @@ run attempt·artifact digest·파일 bytes가 달라졌거나 해당 릴리스�
 게시 후에는 GitHub Release에서 모든 asset을 새 경로로 다시 다운로드하여 이름·크기·해시를
 공개 전 후보와 비교하고 실제 기본 실행을 확인한다. 필수 공개 전 검증과 이 확인이 끝나야
 릴리스 완료로 기록한다. 대상 RHEL·폐쇄망 실기는 사용자가 공개 결과물로 수행할 후속 항목이며,
-해당 환경의 PASS로 대신 기록하지 않는다.
+해당 환경의 PASS로 대신 기록하지 않는다. [사용자 실기 #53](https://github.com/jihoon22-lee/idk/issues/53)에
+실제 공개 tag/main SHA/native CI/bundle 이름·크기·digest와 인계 내용을 연결한다.
+
+공개 안내에는 NFS host state/runtime 비지원과 허용된 로컬 XDG 경로 또는 명시적 `--data-dir`
+선택을 적는다. 다른 파일시스템이나 실제 NFS mount 검증을 추정하지 않는다. 기존 셸·Run·로그는
+업데이트와 entrypoint 제거에서 보존되며, 이전 generation과 같은 data 경로로 접근한다.
 
 ## 개발 검증
 

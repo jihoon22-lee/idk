@@ -27,7 +27,13 @@ PATH·shell startup 파일은 자동 변경하지 않는다. 실행이 허용된
 
 ## 2. 진단과 프로젝트 등록
 
-지정 prefix의 `idk`를 사용한다.
+**NFS에는 host state/runtime을 둘 수 없다.** NFS home의 기본 state 경로를 그대로 사용하지 않고,
+정책상 허용된 로컬 `XDG_STATE_HOME`·`XDG_RUNTIME_DIR` 또는 `--data-dir`를 명시적으로 선택한다.
+예를 들어 `idk --data-dir /approved/local/idk-data`는 별도 workspace를 선택하는 것이며 기존
+설정·Run·로그를 자동 이주하는 명령이 아니다. 이 경로는 실제 승인된 위치로 바꿔야 한다.
+소스/config의 NFS 사용은 해당 파일시스템의 잠금·rename·fsync 조건과 현지 정책을 별도로 확인한다.
+
+지정 prefix의 `idk`를 같은 data 경로로 사용한다.
 
 ```bash
 idk --version
@@ -44,11 +50,12 @@ Run의 로그·결과를 구분한다. `doctor`는 기본 exit 0이며 실패 ga
 [오프라인 운영 안내](offline-workspace.md)는 저장 경로, 활성 host 보존, generation 검증,
 중단 복구와 entrypoint 제거의 상세 절차다. 업데이트 뒤 기존 host에 연결하려면 그 host를
 시작한 원래 generation binary를 사용한다. 버전 문자열이 같아도 binary identity가 다르면
-자동으로 같은 host로 연결하지 않는다.
+자동으로 같은 host로 연결하지 않는다. 살아 있는 셸·등록 Run과 로그 writer는 이전 host에서
+계속되며 업데이트/제거가 해당 작업을 취소하거나 로그를 되돌리지 않는다.
 
 공개 전 검증은 실제 폐쇄망 환경의 수용과 별개다. 대상 RHEL 8.10의 startup, CA·인증,
 NFS/noexec·로그아웃·장기 프로세스 정책은 사용자가 공개 결과물로 이후 검증하며 현재 미실행이다.
-[수용 원장](acceptance/v0.4.0.md)의 후속 항목을 따른다.
+[수용 원장](acceptance/v0.4.0.md)과 [사용자 실기 #53](https://github.com/jihoon22-lee/idk/issues/53)을 따른다.
 
 폐쇄망 원본 증거는 현지에 보관한다. 파일·로그·소스·경로를 외부로 가져오는 절차가 없으며
 `doctor --brief`, 마스킹·요약·hash도 반출 허가를 대신하지 않는다. 정책상 허용된 판정만

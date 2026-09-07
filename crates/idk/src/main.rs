@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 mod cli_package;
 mod cli_project;
+mod cli_run;
 mod cli_session;
 
 #[derive(Parser)]
@@ -15,6 +16,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Register and review build/test tasks without executing them.
+    Task {
+        #[command(subcommand)]
+        command: cli_run::TaskCommand,
+    },
+    /// Start, inspect and cancel registered work in dedicated owned shells.
+    Run {
+        #[command(subcommand)]
+        command: cli_run::RunCommand,
+    },
     /// Verify, install and recover an explicitly supplied offline bundle.
     Package {
         #[command(subcommand)]
@@ -93,6 +104,26 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     match cli.command {
+        Some(Commands::Task { command }) => {
+            let result = idk_workspace::store::Store::open(cli.data_dir.as_deref())
+                .and_then(|store| cli_run::task(&store, command));
+            if let Err(error) = result {
+                eprintln!("idk: {error:#}");
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Run { command }) => {
+            let result = idk_workspace::store::Store::open(cli.data_dir.as_deref())
+                .and_then(|store| cli_run::run(&store, &std::env::current_exe()?, command));
+            match result {
+                Ok(code) if code != 0 => std::process::exit(code),
+                Ok(_) => {}
+                Err(error) => {
+                    eprintln!("idk: {error:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Some(Commands::Package { command }) => {
             if let Err(error) = cli_package::execute(cli.data_dir.as_deref(), command) {
                 eprintln!("idk: {error:#}");

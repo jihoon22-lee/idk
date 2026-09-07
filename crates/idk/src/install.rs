@@ -569,23 +569,13 @@ pub fn health(store: &Store) -> Result<HealthReport> {
             directory.is_absolute(),
             "health state paths must be absolute"
         );
-        ensure_private_dir(directory)?;
+        crate::store::inspect_private_dir(directory)?;
+    }
+    for directory in [&store.state_dir, &store.runtime_dir] {
+        crate::store::ensure_local_state_directory(directory)?;
     }
     store.load()?;
-    let mut state_schemas = BTreeMap::new();
-    for name in ["host-sessions.json", "runs.json"] {
-        if let Some(value) = store.read_state::<serde_json::Value>(name)? {
-            let schema = value
-                .get("schema")
-                .and_then(serde_json::Value::as_u64)
-                .context("state schema is missing; original preserved")?;
-            ensure!(
-                schema == 1,
-                "unsupported state schema; original preserved without migration"
-            );
-            state_schemas.insert(name.to_owned(), schema as u32);
-        }
-    }
+    let state_schemas = crate::saved_state::inspect(store)?;
     Ok(HealthReport {
         version: env!("CARGO_PKG_VERSION").into(),
         configuration_schema: SCHEMA,

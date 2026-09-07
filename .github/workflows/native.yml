@@ -13,14 +13,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
+      # Both independent builds verify main provenance only for an actual main push.
       IDK_EXPECT_MAIN_SHA: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || '' }}
+      # Each lifecycle fixture creates a separate host and several real PTYs.
+      RUST_TEST_THREADS: 4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Native build and test tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y tcsh csh binutils
+          sudo apt-get install -y tcsh csh binutils g++ make cmake python3 qt5-qmake qtbase5-dev-tools
           native_toolchain="$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)"
           [[ "$native_toolchain" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           rustup toolchain install "$native_toolchain" --profile minimal --component clippy --component rustfmt
@@ -33,6 +36,11 @@ jobs:
           cargo test --locked --workspace
           python3 tests/test_native_packaging.py
           python3 tests/test_native_release.py
+
+      - name: Host startup and Git UI with software SHA-256
+        env:
+          IDK_TEST_SHELL: /usr/bin/tcsh
+        run: cargo test --locked -p idk-workspace --features sha2/force-soft --test ui_git -- --nocapture
 
       - name: Actual tcsh and PTY integration (required)
         env:
@@ -50,6 +58,7 @@ jobs:
           test -x "$native_bsd_shell"
           IDK_TEST_SHELL="$native_bsd_shell" cargo test --locked -p idk-workspace --test csh_init -- --nocapture
           IDK_TEST_SHELL="$native_bsd_shell" cargo test --locked -p idk-workspace --test project_flow -- --nocapture
+          IDK_TEST_SHELL="$native_bsd_shell" cargo test --locked -p idk-workspace --test run_core --test host_runs -- --nocapture
 
       - name: First static native candidate and packaged probe
         env:
@@ -112,6 +121,11 @@ jobs:
 
       - name: Exact candidate peer identity across two actual UIDs
         run: ./scripts/test-native-peer.sh
+
+      - name: Native storage lock, atomic rename and filesystem inspection failures
+        run: |
+          python3 scripts/test-native-storage.py \
+            --candidate dist/idk-linux-x86_64 --shell /usr/bin/tcsh
 
       - name: Package-only installation and filesystem failure recovery
         run: ./scripts/test-native-install.sh

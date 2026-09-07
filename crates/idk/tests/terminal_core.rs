@@ -78,10 +78,28 @@ fn actual_tcsh_preserves_state_job_control_resize_and_detached_output() {
 
     // Output flooding cannot starve Ctrl-C or grow scrollback without a bound.
     session.input(b"yes output\r").unwrap();
+    wait_for(&session, |screen| has_line(screen, "output"));
     std::thread::sleep(Duration::from_millis(120));
+    let interrupted = Instant::now();
     session.input(&[3]).unwrap();
     session.input(b"printf 'FLOOD_%s\\n' recovered\r").unwrap();
-    wait_for(&session, |screen| has_line(screen, "FLOOD_recovered"));
+    loop {
+        let snapshot = session.snapshot().unwrap();
+        assert!(snapshot.error.is_none(), "{:?}", snapshot.error);
+        assert!(
+            interrupted.elapsed() <= Duration::from_secs(2),
+            "Ctrl+C to input recovery exceeded 2000 ms: {} ms",
+            interrupted.elapsed().as_millis()
+        );
+        if has_line(&snapshot, "FLOOD_recovered") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    eprintln!(
+        "FLOOD_INPUT_RECOVERY_MS={}",
+        interrupted.elapsed().as_millis()
+    );
     session.scroll(i32::MAX).unwrap();
     assert!(session.snapshot().unwrap().display_offset <= 1000);
     session.scroll(i32::MIN).unwrap();
@@ -216,7 +234,7 @@ fn terminating_owned_session_preserves_unrelated_process() {
     command.args(["-f", "-i"]);
     let mut session = TerminalSession::spawn(command, 24, 80, 100).unwrap();
     session
-        .input(b"set prompt = ''; printf 'OWNED_%s\\n' ready; sleep 30\r")
+        .input(b"set prompt = ''; printf '\\nOWNED_%s\\n' ready; sleep 30\r")
         .unwrap();
     wait_for(&session, |screen| has_line(screen, "OWNED_ready"));
     session.terminate().unwrap();
@@ -254,10 +272,11 @@ fn actual_oversized_control_output_keeps_user_interrupt_working() {
         command.arg(format!("/bin/cat '{}'; /bin/sleep 30", payload.display()));
         let mut session = TerminalSession::spawn(command, 24, 80, 100).unwrap();
         wait_for(&session, |screen| screen.output_limited);
+        let interrupted = Instant::now();
         session
             .input(&[3])
             .expect("output limits must never disable Ctrl-C");
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = interrupted + Duration::from_secs(2);
         while session.try_wait().unwrap().is_none() {
             assert!(
                 Instant::now() < deadline,
@@ -265,5 +284,13 @@ fn actual_oversized_control_output_keeps_user_interrupt_working() {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
+        assert!(
+            interrupted.elapsed() <= Duration::from_secs(2),
+            "oversized {name} interrupt exceeded 2000 ms"
+        );
+        eprintln!(
+            "OVERSIZED_{name}_INTERRUPT_EXIT_MS={}",
+            interrupted.elapsed().as_millis()
+        );
     }
 }

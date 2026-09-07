@@ -58,6 +58,16 @@ impl App<'_> {
             .map(Runtime::drain)
             .unwrap_or_default();
         for reply in replies {
+            let changed_host = reply.identity.as_ref().is_some_and(|(host, _)| {
+                self.runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.host.as_ref())
+                    .is_some_and(|old| old.host_instance != host.host_instance)
+            });
+            if changed_host {
+                self.git_host_changed();
+                self.run_host_changed();
+            }
             let runtime = self.runtime.as_mut().unwrap();
             if let Some((host, client_id)) = reply.identity {
                 if runtime
@@ -79,13 +89,11 @@ impl App<'_> {
             }
             match reply.result {
                 Err(error) => {
-                    if matches!(
-                        reply.tag,
-                        Tag::Connect | Tag::Input | Tag::Ack | Tag::Snapshot(_) | Tag::Attached
-                    ) {
-                        runtime.online = false;
-                        runtime.clear_input();
-                    }
+                    self.git_rpc_error(&reply.tag, &error.to_string());
+                    self.run_rpc_error(&reply.tag);
+                    let runtime = self.runtime.as_mut().unwrap();
+                    runtime.online = false;
+                    runtime.clear_input();
                     // A missing host at initial load is normal; opening is explicit.
                     if reply.tag != Tag::Connect || runtime.host.is_some() {
                         self.error(format!("{error:#}"));
@@ -102,6 +110,8 @@ impl App<'_> {
                 }
             }
         }
+        self.tick_git();
+        self.tick_runs();
         if let Some(runtime) = &mut self.runtime {
             if let Err(error) = runtime.poll() {
                 runtime.online = false;
@@ -111,11 +121,30 @@ impl App<'_> {
         }
     }
     fn accept_reply(&mut self, tag: Tag, value: serde_json::Value) -> Result<()> {
+        if matches!(
+            tag,
+            Tag::GitSubmit(_)
+                | Tag::GitJob(_)
+                | Tag::GitExecute(_)
+                | Tag::GitAttached
+                | Tag::GitSnapshot(_)
+                | Tag::GitOperations
+                | Tag::GitUpdated
+        ) {
+            return self.accept_git_reply(tag, value);
+        }
+        if matches!(
+            tag,
+            Tag::RunSubmit(_) | Tag::RunJob(_) | Tag::RunAttached(_) | Tag::RunAttachInfo(_)
+        ) {
+            return self.accept_run_reply(tag, value);
+        }
         let refresh_definition = matches!(tag, Tag::Definition(_));
         let runtime = self.runtime.as_mut().unwrap();
         match tag {
             Tag::Connect => {
                 runtime.submit(Some(Request::List { project: None }), Tag::List)?;
+                self.git_reconnected()?;
             }
             Tag::List => {
                 runtime.sessions = serde_json::from_value(value)?;
@@ -151,9 +180,12 @@ impl App<'_> {
                     "Shell {:?}; attaching. Initialization may still be in progress.",
                     session.state
                 ));
-                self.attach_session(&session.session_id, false)?;
+                self.review_attach(session)?;
             }
             Tag::Attached => {
+                self.runs.attached = None;
+                runtime.input_read_only = false;
+                self.git.focused = false;
                 let session: SessionInfo = serde_json::from_value(value)?;
                 let id = session.session_id.clone();
                 runtime.active = Some(session);
@@ -210,7 +242,13 @@ impl App<'_> {
                 let changed = runtime.batch.as_ref().is_none_or(|old| {
                     old.state != batch.state || old.waiting_session != batch.waiting_session
                 });
-                let message=format!("Default launch {:?}: {} started, {} remaining, {} failed. F8: continue unknown initialization · O: cancel remaining.",batch.state,batch.sessions.len(),batch.remaining.len(),batch.failures.len());
+                let message = format!(
+                    "Default launch {:?}: {} started, {} remaining, {} failed. F8: continue unknown initialization · O: cancel remaining.",
+                    batch.state,
+                    batch.sessions.len(),
+                    batch.remaining.len(),
+                    batch.failures.len()
+                );
                 runtime.batch = Some(batch);
                 if changed {
                     self.info(message);
@@ -224,9 +262,9 @@ impl App<'_> {
                     .map(|session| session.session_id.clone())
                     .collect();
                 let title = if preview.project.is_some() {
-                    "Close all project shells"
+                    "Close project terminals and Runs"
                 } else {
-                    "Close all shells and stop host"
+                    "Close all terminals and stop host"
                 };
                 let request = match preview.project {
                     Some(project) => Request::CloseProject {
@@ -256,6 +294,13 @@ impl App<'_> {
                             .as_ref()
                             .map(|owner| owner.client_id.as_str())
                             .unwrap_or("none")
+                    )
+                }));
+                lines.extend(preview.run_relations.iter().map(|relation| {
+                    format!(
+                        "Terminal {} · registered Run {}",
+                        relation.session_id,
+                        relation.run_id.as_deref().unwrap_or("pending registration")
                     )
                 }));
                 self.dialog = Some(Dialog::Live(LiveDialog::Confirm {
@@ -295,6 +340,7 @@ impl App<'_> {
                 ));
             }
             Tag::Ack | Tag::Input => {}
+            _ => unreachable!("Git replies are handled above"),
         }
         if refresh_definition {
             self.refresh_live_definition();
@@ -302,6 +348,15 @@ impl App<'_> {
         Ok(())
     }
     pub(super) fn refresh_live_definition(&mut self) {
+        if self.runs.attached.as_ref().is_some_and(|id| {
+            self.runtime
+                .as_ref()
+                .and_then(|runtime| runtime.active.as_ref())
+                .is_some_and(|active| &active.session_id == id)
+        }) {
+            return;
+        }
+
         let Some(active) = self
             .runtime
             .as_ref()
@@ -363,6 +418,9 @@ impl App<'_> {
         }
     }
     pub(super) fn live_menu_key(&mut self, key: KeyEvent) -> bool {
+        if matches!(self.tab, 1..=3) && self.focus == super::Focus::Content {
+            return false;
+        }
         if self.runtime.is_none() {
             return false;
         }
@@ -554,7 +612,10 @@ impl App<'_> {
     }
     fn active_owner(&self) -> Result<(String, u64)> {
         let runtime = self.runtime.as_ref().context("No runtime")?;
-        ensure!(runtime.can_input(),"Terminal is read-only or disconnected. Ctrl+g opens controls; refresh and attach explicitly.");
+        ensure!(
+            runtime.can_control(),
+            "Terminal is read-only or disconnected. Ctrl+g opens controls; refresh and attach explicitly."
+        );
         let active = runtime.active.as_ref().unwrap();
         Ok((active.session_id.clone(), active.input_epoch))
     }
@@ -573,6 +634,19 @@ impl App<'_> {
         if bytes.is_empty() {
             return Ok(());
         }
+        if self.git.focused {
+            ensure!(
+                self.git_writable(),
+                "Git terminal is read-only or disconnected. Input was not sent."
+            );
+            let operation = self.git.operation.as_ref().unwrap();
+            return self.runtime.as_mut().unwrap().buffer_git_input(
+                operation.id.clone(),
+                operation.input_epoch,
+                bytes,
+            );
+        }
+        ensure!(self.runtime.as_ref().is_some_and(|runtime|runtime.can_input()), "Captured Run input is disabled or the terminal is disconnected. Ctrl+g opens controls; k cancels the Run.");
         let (session, epoch) = self.active_owner()?;
         self.runtime
             .as_mut()
@@ -581,9 +655,7 @@ impl App<'_> {
     }
     pub fn forward_terminal(&mut self, outcome: UiOutcome) -> Result<()> {
         let modes = self
-            .runtime
-            .as_ref()
-            .and_then(|runtime| runtime.screen.as_ref())
+            .terminal_snapshot()
             .context("Waiting for a terminal screen; input was not sent.")?
             .modes
             .clone();
@@ -598,12 +670,7 @@ impl App<'_> {
         if !self.terminal_connected || self.menu_visible || self.dialog.is_some() {
             return Ok(());
         }
-        let Some(modes) = self
-            .runtime
-            .as_ref()
-            .and_then(|runtime| runtime.screen.as_ref())
-            .map(|screen| screen.modes.clone())
-        else {
+        let Some(modes) = self.terminal_snapshot().map(|screen| screen.modes.clone()) else {
             return Ok(());
         };
         let bytes = match event {
@@ -611,6 +678,9 @@ impl App<'_> {
             Event::FocusLost => super::input::encode_focus(false, &modes),
             Event::Mouse(mouse) => {
                 if !modes.mouse_click && !modes.mouse_motion && !modes.mouse_drag {
+                    if self.git.focused {
+                        return Ok(());
+                    }
                     match mouse.kind {
                         MouseEventKind::ScrollUp => self.scroll_live(3)?,
                         MouseEventKind::ScrollDown => self.scroll_live(-3)?,

@@ -49,14 +49,19 @@ NFS·로그아웃·장기 프로세스 정책은 현지에서 확인한다. 일�
 압축 경로 탈출·링크·특수 파일·중복/추가 파일·크기 한도 초과·metadata 모순은 설치 전에 거부한다.
 임의 postinstall이나 실제 사용자 빌드·테스트·Git push를 건강 검사로 실행하지 않는다.
 
-활성 host/PTY는 이전 실행 파일을 계속 사용한다. 이전 generation을 삭제하거나 host를 자동 재시작하지
+활성 host/PTY와 등록 Run은 이전 실행 파일을 계속 사용한다. Run의 로그 writer도 같은
+host에서 이어지며, 설치·업데이트·제거는 로그를 초기화하거나 이전 snapshot으로 되돌리지 않는다.
+Run 자체의 로그 한도·retention 정책은 별도로 계속 적용된다. 이전 generation을 삭제하거나 host를 자동 재시작하지
 않는다. 새 client와 기존 host의 실행 파일 SHA 또는 protocol이 다르면 연결을 거부한다. 설치 결과와
 `package status --prefix <prefix>`에 남은 generation 경로가 나온다. 기존 host에 연결할 때는 그 host를
-시작한 원래 generation의 `idk-linux-x86_64`로 TUI를 열어 살아 있는 셸을 선택한다. 같은 버전 번호여도
+시작한 원래 generation의 `idk-linux-x86_64`와 같은 `--data-dir`/XDG 경로로 TUI를 열어
+살아 있는 셸·Run을 선택한다. 같은 버전 번호여도
 build SHA가 다르면 같은 host로 취급하지 않는다. 정상 종료 후 새 entrypoint에서 새 host를 시작할 수 있다.
 
 현재 v0.4는 기존 schema와 protocol을 읽을 수 있는 업데이트만 지원한다. 데이터 schema migration이나
-commit 이후 낮은 버전으로의 downgrade를 제공하지 않는다. 바이너리만 되돌려 새 데이터가 호환되지
+commit 이후 낮은 버전으로의 downgrade를 제공하지 않는다. 설치 schema 2는 가장 높게 확정한
+버전 하한을 uninstall 뒤에도 보존한다. stage만 했거나 건강 검사에 실패한 높은 버전은 하한을
+올리지 않는다. 이전 설치 schema를 추정 변환하지 않으며 원본을 보존한 채 거부한다. 바이너리만 되돌려 새 데이터가 호환되지
 않는 구현에 열리도록 하지 않는다. 모든 설치 generation은 자동 정리 없이 보존하며 128개 한도에
 도달하면 새 설치를 거부한다. 임의 폴더의 실행 파일을 자동 발견해 대체 실행하지 않는다.
 
@@ -91,3 +96,21 @@ support archive나 자동 전송 절차는 없다. 현지 원본 증거를 보�
 nonroot/network-none 설치와 파일시스템 실패 검사를 수행한다. 대상 RHEL 8.10의 startup·CA·인증·
 NFS/noexec·로그아웃 정책 실기는 사용자 지시에 따라 공개된 동일 결과물로 릴리스 후 수행하며,
 실행하기 전에는 PASS로 간주하지 않는다.
+
+## NFS home과 상태 저장소 오류
+
+host state와 runtime은 NFS에 두지 않는다. NFS home을 쓰면 허용된 로컬 위치의
+`XDG_STATE_HOME`·`XDG_RUNTIME_DIR` 또는 명시적인 `--data-dir`를 먼저 선택한다. idk는 statfs로
+NFS state/runtime을 발견하면 시작을 거부하고, 조회 오류도 로컬 정상 상태로 간주하지 않는다.
+새 `--data-dir`나 XDG 경로를 선택하면 별도 workspace를 보게 되며 기존 host/로그를 자동으로
+이동하거나 다시 연결하지 않는다. 기존 실행에 접근할 때는 원래 generation과 data 경로를 사용한다.
+프로젝트 소스나 별도 config가 NFS에 있다는 사실만으로 소스 자체를 이동하지 않는다. 기존 state를
+자동 이주·초기화하거나 정책을 우회할 실행 위치를 만들지 않는다. 다른 파일시스템도 실제 잠금·rename·fsync
+동작과 현지 지원 여부를 확인해야 하며 NFS가 아니라는 판정만으로 모든 네트워크 파일시스템을 보증하지 않는다.
+
+잠금 서비스 사용 불가(`ENOLCK`)와 atomic rename 실패는 저장 실패로 보고하며 기존 설정을 보존한다.
+개발용 `scripts/test-native-storage.py`는 실제 후보 프로세스에 제한적인 seccomp 오류를 주입해
+ENOLCK·rename I/O 오류·statfs 실패를 검사한다. 이 검사는 실제 NFS 마운트나 폐쇄망 실기 PASS가 아니다.
+
+현지 담당은 사용자이며 [공개 후 실기 #53](https://github.com/jihoon22-lee/idk/issues/53)에
+S01~S08과 실제 릴리스 identity를 연결한다. 현재 실기는 미실행이며 공개 전 확인과 분리한다.

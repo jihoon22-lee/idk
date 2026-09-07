@@ -7,7 +7,12 @@ idk는 프로젝트의 개발 터미널, 외부 테스트 터미널, Git 작업�
 WSL/Linux에서 개발하며 RHEL 8.10 폐쇄망 사용을 목표로 한다. 정적 Linux x86_64 실행 파일과
 검증 정보·라이선스가 든 오프라인 번들로 배포한다. 제품 실행에 Python·Rust compiler·사외
 서비스·root 권한이 필요하지 않다. 기존 csh/tcsh와 Git은 해당 환경에 준비되어 있어야 한다.
-대상 RHEL·폐쇄망 정책 실기는 공개 후 사용자가 수행할 후속 검증이며 아직 미실행이다.
+대상 RHEL·폐쇄망 정책 실기는 공개 후 사용자가 수행하며
+[후속 #53](https://github.com/jihoon22-lee/idk/issues/53)에 미실행으로 추적한다.
+
+**host state/runtime은 NFS를 지원하지 않는다.** NFS home을 사용하는 경우 정책상 허용된 로컬
+`XDG_STATE_HOME`·`XDG_RUNTIME_DIR` 또는 명시적 `--data-dir`를 선택한다. 소스·설정·기존 상태를
+자동으로 옮기지 않으며, 다른 파일시스템도 현지 잠금·rename·fsync 조건을 확인해야 한다.
 
 ## 사용하는 흐름
 
@@ -35,7 +40,8 @@ idle로 추정하지 않는다. 사용자 소스·`.csh`·기존 설정과 무�
 ```
 
 검토한 설치 명령에 `--yes`를 붙여 활성화한다. 이후 지정 prefix의 `idk`로 실행한다.
-기존 호스트가 있다면 업데이트 뒤에도 원래 generation의 실행 파일로 다시 접속할 수 있다.
+기존 호스트가 있다면 업데이트 뒤에도 원래 generation과 같은 data 경로로 다시 접속한다.
+살아 있는 셸과 등록 Run, 해당 호스트의 로그 수집은 설치·제거 때문에 자동으로 중단되지 않는다.
 
 ```bash
 idk doctor --brief
