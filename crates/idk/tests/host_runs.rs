@@ -31,6 +31,9 @@ struct Fixture {
 }
 impl Fixture {
     fn new(command: &str, interactive: bool) -> Self {
+        Self::with_timeout(command, interactive, None)
+    }
+    fn with_timeout(command: &str, interactive: bool, timeout_seconds: Option<u64>) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("source");
         std::fs::create_dir(&root).unwrap();
@@ -65,7 +68,7 @@ impl Fixture {
             interactive,
             build_outputs: vec![],
             artifact_from_task: None,
-            timeout_seconds: None,
+            timeout_seconds,
         };
         let project = Project {
             id: new_id(),
@@ -714,6 +717,82 @@ fn failed_cancel_persistence_cannot_signal_owned_descendants_before_retry_succee
     let run = finished(&mut client, &started.run.run_id);
     assert_eq!(run.state, RunState::Cancelled);
     assert!(run.cleanup_confirmed);
+    shutdown(&mut client, &mut host);
+}
+#[test]
+fn timeout_cancels_owned_run_and_persists_cleanup() {
+    timeout_cleanup(false);
+}
+#[test]
+fn failed_timeout_persistence_retries_automatically_after_storage_recovers() {
+    timeout_cleanup(true);
+}
+fn timeout_cleanup(storage_fault: bool) {
+    // Bounded even if the host/test fails; heartbeat proves the task continues
+    // until cancellation is durable, rather than merely trusting a Run label.
+    let f = Fixture::with_timeout(
+        "set tick = 0\nwhile ($tick < 600)\n echo tick >> heartbeat\n @ tick++\n sleep 0.05\nend",
+        false,
+        Some(3),
+    );
+    let (mut host, mut client) = f.host();
+    let job = f.start(&mut client, &new_id());
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let session = started.run.session_id.clone().unwrap();
+    let ledger = f.store.state_dir.join("runs.json");
+    if storage_fault {
+        let backup = f.store.state_dir.join("runs.saved");
+        std::fs::rename(&ledger, &backup).unwrap();
+        std::fs::create_dir(&ledger).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&backup).unwrap()).unwrap();
+        assert_eq!(saved["runs"][0]["state"], "Running");
+        assert_eq!(saved["runs"][0]["cancel_requested"], false);
+        // Wait for the actual failed timeout write, not an assumed timer delay.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let snapshot = client.snapshot(&session, None).unwrap();
+            if snapshot.session.error.as_deref() == Some("destination must be a regular owned file")
+            {
+                assert!(snapshot.session.state.is_live());
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timeout fault not observed: {snapshot:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let heartbeat = f.root.join("heartbeat");
+        let before = std::fs::metadata(&heartbeat).unwrap().len();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while std::fs::metadata(&heartbeat).unwrap().len() == before {
+            assert!(
+                Instant::now() < deadline,
+                "task stopped before durable cancellation"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::fs::remove_dir(&ledger).unwrap();
+        std::fs::rename(&backup, &ledger).unwrap();
+    }
+    // No explicit cancel/close request: timeout recovery must finish on its own.
+    let run = finished(&mut client, &started.run.run_id);
+    assert_eq!(run.state, RunState::Cancelled);
+    assert!(run.timeout_requested && run.cancel_requested && run.cleanup_confirmed);
+    assert!(!client
+        .snapshot(&session, None)
+        .unwrap()
+        .session
+        .state
+        .is_live());
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&ledger).unwrap()).unwrap();
+    assert_eq!(saved["runs"][0]["state"], "Cancelled");
+    assert_eq!(saved["runs"][0]["timeout_requested"], true);
+    assert_eq!(saved["runs"][0]["cleanup_confirmed"], true);
     shutdown(&mut client, &mut host);
 }
 #[test]

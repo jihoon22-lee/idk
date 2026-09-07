@@ -506,10 +506,16 @@ impl RunRegistry {
             run.state.is_live(),
             "run is not live; unknown outcomes require inspection"
         );
+        let previous = run.clone();
         run.state = RunState::Cancelling;
         run.cancel_requested = true;
         run.timeout_requested |= timeout;
-        self.persist()?;
+        if let Err(error) = self.persist() {
+            // Keep failed automatic timeouts eligible for the next sweep. The
+            // caller must not clean up processes until cancellation is durable.
+            *self.run_mut(run_id)? = previous;
+            return Err(error);
+        }
         self.info(run_id)
     }
     /// Explicit user reconciliation after inspecting old processes. Never infers an

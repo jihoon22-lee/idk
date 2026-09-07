@@ -4,6 +4,13 @@ use flate2::{Compression, GzBuilder};
 use serde_json::json;
 use std::collections::BTreeMap;
 
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn next_version() -> String {
+    let (major, minor, patch) = version_tuple(CURRENT_VERSION).unwrap();
+    format!("{major}.{minor}.{}", patch.checked_add(1).unwrap())
+}
+
 // Static ELF structure fixture only; runnable candidate health is a separate
 // installer/packaged test. These bytes are never executed by the verifier.
 fn static_elf() -> Vec<u8> {
@@ -41,7 +48,7 @@ fn files(binary: Vec<u8>) -> BTreeMap<String, Vec<u8>> {
         "cargo_lock_sha256":"3".repeat(64),"runtime_notice_policy_sha256":"4".repeat(64),"notices_sha256":sha256(&notices),
         "packages":[components.remove(0)],"runtime_components":components});
     let manifest = json!({
-        "schema_version": 1, "artifact": BINARY, "version": "0.4.0", "target": "x86_64-unknown-linux-musl", "toolchain": "1.97.1",
+        "schema_version": 1, "artifact": BINARY, "version": CURRENT_VERSION, "target": "x86_64-unknown-linux-musl", "toolchain": "1.97.1",
         "source": {"sha":"1".repeat(40), "dirty":false}, "candidate_kind":"clean-source", "main_sha_verified":false,
         "input_tree_sha256":"2".repeat(64), "cargo_lock_sha256":"3".repeat(64), "size":binary.len(), "sha256":sha256(&binary),
         "elf":{"interpreter":null,"needed":[]}, "license_inventory":INVENTORY, "notices":NOTICES, "distribution_notices_complete":true,
@@ -127,8 +134,8 @@ fn interruption_at_every_activation_boundary_recovers_without_restoring_live_dat
         let temporary = tempfile::tempdir().unwrap();
         let installer = Installer::open(&temporary.path().join("install")).unwrap();
         let store = Store::open(Some(&temporary.path().join("data"))).unwrap();
-        let original = bundle("0.4.0", 0);
-        let replacement = bundle("0.4.1", 1);
+        let original = bundle(CURRENT_VERSION, 0);
+        let replacement = bundle(&next_version(), 1);
         installer
             .install_with(&original, |_| Ok(()), |_| Ok(()))
             .unwrap();
@@ -189,8 +196,8 @@ fn health_failure_before_or_after_activation_preserves_original_generation() {
     for fail_at in [0, 1] {
         let temporary = tempfile::tempdir().unwrap();
         let installer = Installer::open(&temporary.path().join("install")).unwrap();
-        let original = bundle("0.4.0", 2);
-        let replacement = bundle("0.4.1", 3);
+        let original = bundle(CURRENT_VERSION, 2);
+        let replacement = bundle(&next_version(), 3);
         installer
             .install_with(&original, |_| Ok(()), |_| Ok(()))
             .unwrap();
@@ -215,7 +222,10 @@ fn health_failure_before_or_after_activation_preserves_original_generation() {
         );
         installer.verify(&original.review().generation).unwrap();
         assert!(!installer.root.join(JOURNAL).exists());
-        assert_eq!(state.committed_version_floor.as_deref(), Some("0.4.0"));
+        assert_eq!(
+            state.committed_version_floor.as_deref(),
+            Some(CURRENT_VERSION)
+        );
         // Merely staging a higher version must not impose a compatibility floor.
         installer
             .install_with(&original, |_| Ok(()), |_| Ok(()))
@@ -227,7 +237,7 @@ fn health_failure_before_or_after_activation_preserves_original_generation() {
 fn interrupted_staging_can_only_adopt_the_exact_sealed_original() {
     let temporary = tempfile::tempdir().unwrap();
     let installer = Installer::open(&temporary.path().join("install")).unwrap();
-    let candidate = bundle("0.4.0", 4);
+    let candidate = bundle(CURRENT_VERSION, 4);
     let directory = installer.generation_path(&candidate.review().generation);
     candidate.stage(&directory).unwrap();
     atomic_write(&directory.join(ARCHIVE), candidate.archive_bytes()).unwrap();
@@ -255,7 +265,7 @@ fn interrupted_staging_can_only_adopt_the_exact_sealed_original() {
 fn uninstall_removes_only_managed_links_and_recovery_restores_interrupted_links() {
     let temporary = tempfile::tempdir().unwrap();
     let installer = Installer::open(&temporary.path().join("install")).unwrap();
-    let candidate = bundle("0.4.0", 5);
+    let candidate = bundle(CURRENT_VERSION, 5);
     installer
         .install_with(&candidate, |_| Ok(()), |_| Ok(()))
         .unwrap();
@@ -288,7 +298,7 @@ fn unrelated_entrypoint_future_schema_and_committed_downgrade_are_preserved() {
     let temporary = tempfile::tempdir().unwrap();
     let installer = Installer::open(&temporary.path().join("install")).unwrap();
     fs::write(installer.root.join("idk"), "user launcher").unwrap();
-    let old = bundle("0.4.0", 6);
+    let old = bundle(CURRENT_VERSION, 6);
     assert!(installer
         .install_with(&old, |_| Ok(()), |_| Ok(()))
         .is_err());
@@ -297,7 +307,7 @@ fn unrelated_entrypoint_future_schema_and_committed_downgrade_are_preserved() {
         b"user launcher"
     );
     fs::remove_file(installer.root.join("idk")).unwrap();
-    let newer = bundle("0.4.1", 7);
+    let newer = bundle(&next_version(), 7);
     installer
         .install_with(&newer, |_| Ok(()), |_| Ok(()))
         .unwrap();
@@ -339,8 +349,8 @@ fn schema_health_rejects_corruption_without_changing_existing_data() {
 fn uninstall_preserves_the_committed_floor_when_an_older_installer_is_used() {
     let temporary = tempfile::tempdir().unwrap();
     let installer = Installer::open(&temporary.path().join("install")).unwrap();
-    let newer = bundle("0.4.1", 8);
-    let older = bundle(env!("CARGO_PKG_VERSION"), 9);
+    let newer = bundle(&next_version(), 8);
+    let older = bundle(CURRENT_VERSION, 9);
     installer
         .install_with(&newer, |_| Ok(()), |_| Ok(()))
         .unwrap();
@@ -348,7 +358,7 @@ fn uninstall_preserves_the_committed_floor_when_an_older_installer_is_used() {
     assert!(uninstalled.active.is_none());
     assert_eq!(
         uninstalled.committed_version_floor.as_deref(),
-        Some("0.4.1")
+        Some(newer.review().manifest.version.as_str())
     );
     let state_bytes = fs::read(installer.root.join(STATE)).unwrap();
     let result = installer.install_with(
@@ -371,7 +381,7 @@ fn previous_installation_schema_is_preserved_without_an_inferred_floor_or_migrat
     let installer = Installer::open(&temporary.path().join("install")).unwrap();
     let original = br#"{"schema":1,"active":null,"generations":{}}"#;
     atomic_write(&installer.root.join(STATE), original).unwrap();
-    let candidate = bundle("0.4.0", 10);
+    let candidate = bundle(CURRENT_VERSION, 10);
     assert!(installer.status().is_err());
     assert!(installer.review_recovery().is_err());
     assert!(installer.recover().is_err());
