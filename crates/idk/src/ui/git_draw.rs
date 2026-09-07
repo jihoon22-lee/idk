@@ -14,7 +14,11 @@ use ratatui::{
 };
 pub(super) fn render(app: &App<'_>, frame: &mut Frame<'_>, area: Rect) {
     let Some(target) = app.git_target() else {
-        super::git_view::empty(frame,area,"No primary Git repository is connected.\nn / g: connect a repository · v: choose a related repository");
+        super::git_view::empty(
+            frame,
+            area,
+            "No primary Git repository is connected.\nn / g: connect a repository · v: choose a related repository",
+        );
         return;
     };
     let Some(repo) = app.git.repos.get(&target) else {
@@ -184,20 +188,40 @@ pub(super) fn render_dialog(
     area: Rect,
 ) {
     match dialog {
+        GitDialog::Reconcile { operation } => {
+            let inner = popup(
+                frame,
+                area,
+                "Acknowledge independently verified Git cleanup",
+            );
+            let text = format!(
+                "Operation {} · {:?} · {:?}\nProject {}\nRepository {}\n\nF2 confirms that you independently verified the old process tree is gone. This releases only this operation's source blocker. It does not terminate a process, replay Git or change the Unknown result.\n\nEsc cancels.",
+                operation.id,
+                operation.kind,
+                operation.state,
+                operation.project_id,
+                operation.repository.root.display()
+            );
+            frame.render_widget(
+                Paragraph::new(visible_text(&text)).wrap(Wrap { trim: false }),
+                inner,
+            );
+        }
         GitDialog::Operations { entries, selected } => {
             let inner = popup(
                 frame,
                 area,
-                "All Git operations · Enter Open · F5 Refresh · Esc Close",
+                "All Git operations · Enter Open · u Reconcile Unknown · F5 Refresh · Esc Close",
             );
             let items: Vec<ListItem<'static>> = entries
                 .iter()
                 .map(|operation| {
                     ListItem::new(vec![
                         Line::from(format!(
-                            "{} · {:?}",
+                            "{} · {:?} · cleanup acknowledged {}",
                             kind_label(operation.kind),
-                            operation.state
+                            operation.state,
+                            operation.cleanup_acknowledged
                         )),
                         Line::from(visible_text(&operation.repository.root.to_string_lossy())),
                     ])

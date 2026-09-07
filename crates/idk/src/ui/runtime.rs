@@ -33,6 +33,10 @@ pub(super) enum Tag {
     GitSnapshot(String),
     GitOperations,
     GitUpdated,
+    RunSubmit(u64),
+    RunJob(u64),
+    RunAttached(u64),
+    RunAttachInfo(u64),
 }
 #[derive(Clone, PartialEq, Eq)]
 enum InputTarget {
@@ -63,6 +67,7 @@ pub(super) struct Runtime {
     pub host: Option<HostInfo>,
     pub client_id: Option<String>,
     pub online: bool,
+    pub input_read_only: bool,
     pub sessions: Vec<SessionInfo>,
     pub active: Option<SessionInfo>,
     pub screen: Option<TerminalSnapshot>,
@@ -101,7 +106,7 @@ impl Runtime {
                         } else { client = Some(Client::connect_with_launcher(&store,&launcher)?); }
                         failed = false;
                     }
-                    let starts = matches!(job.request,Some(Request::Start{..}|Request::StartTransient{..}|Request::StartDefaults{..}|Request::GitSubmit{task:crate::git_wire::GitTask::Open{..}}));
+                    let starts = matches!(job.request,Some(Request::Run{..}|Request::Start{..}|Request::StartTransient{..}|Request::StartDefaults{..}|Request::GitSubmit{task:crate::git_wire::GitTask::Open{..}}));
                     if client.is_none() && starts { client = Some(Client::ensure_host(&store,&launcher)?); failed = false; }
                     let client = client.as_mut().context("Host is unavailable. Open a terminal to start a host, or refresh to reconnect.")?;
                     client.set_timeout(Duration::from_secs(2))?;
@@ -115,7 +120,7 @@ impl Runtime {
                             let operation:crate::git_wire::GitOperationInfo=serde_json::from_value(value.clone())?;
                             git_owned.insert(operation.id,operation.input_epoch);
                         }
-                        if job.tag == Tag::Attached {
+                        if matches!(job.tag, Tag::Attached | Tag::RunAttached(_)) {
                             let session: SessionInfo = serde_json::from_value(value.clone())?;
                             owned.insert(session.session_id,session.input_epoch);
                         }
@@ -144,6 +149,7 @@ impl Runtime {
             host: None,
             client_id: None,
             online: false,
+            input_read_only: false,
             sessions: Vec::new(),
             active: None,
             screen: None,
@@ -201,6 +207,9 @@ impl Runtime {
         replies
     }
     pub fn can_input(&self) -> bool {
+        !self.input_read_only && self.can_control()
+    }
+    pub fn can_control(&self) -> bool {
         self.online
             && self
                 .screen
@@ -330,7 +339,7 @@ impl Runtime {
             }
             self.last_screen = Instant::now();
         }
-        if self.can_input() {
+        if self.can_control() {
             let active = self.active.as_ref().unwrap();
             let (rows, cols) = self.dimensions;
             let target = (active.session_id.clone(), active.input_epoch, rows, cols);

@@ -160,6 +160,10 @@ fn projects(app: &App<'_>, frame: &mut Frame<'_>, area: Rect) {
 }
 
 fn content(app: &App<'_>, frame: &mut Frame<'_>, area: Rect) {
+    if app.tab == 3 {
+        super::run_draw::render(app, frame, area);
+        return;
+    }
     let Some(project) = app.current_project() else {
         frame.render_widget(Paragraph::new("n  Connect a project\n\nUse an existing folder, your csh/tcsh, and the initialization scripts you already use.")
             .wrap(Wrap { trim: false }).block(panel("Start here", true)), area);
@@ -387,11 +391,7 @@ fn content(app: &App<'_>, frame: &mut Frame<'_>, area: Rect) {
             frame.render_widget(Paragraph::new("n / g  Connect repository · Enter  Review selected target\nTerminal cd never changes this target.\n\nGit operations are not available in this build.")
                 .wrap(Wrap { trim: false }), parts[1]);
         }
-        2 | 3 => {
-            let title = if app.tab == 2 { "Tasks" } else { "Results" };
-            frame.render_widget(Paragraph::new(format!("{title} are not available in this build.\n\nNo work was started and no result has been recorded.\n\n1  Return to terminal definitions\np  Choose a project"))
-                .wrap(Wrap { trim: false }).block(panel(title, app.focus == Focus::Content)), area);
-        }
+        2 => super::run_draw::render(app, frame, area),
         _ => {}
     }
 }
@@ -555,6 +555,7 @@ fn dialog_view(app: &App<'_>, dialog: &mut Dialog, frame: &mut Frame<'_>, area: 
                 "F2 Approve temporary scripts · Esc Cancel · ↑↓ Scroll",
             );
         }
+        Dialog::Run(dialog) => super::run_draw::render_dialog(app, dialog, frame, area),
         Dialog::Git(dialog) => super::git_draw::render_dialog(app, dialog, frame, area),
         Dialog::Live(dialog) => live_dialog(app, dialog, frame, area),
         Dialog::Help { scroll } => {
@@ -582,6 +583,15 @@ fn dialog_view(app: &App<'_>, dialog: &mut Dialog, frame: &mut Frame<'_>, area: 
                 "  F6 All Git operations, including removed project connections",
                 "  Git operation terminal: Ctrl+g Controls, then z Back or k Cancel",
                 "  Message drafts survive failure, cancellation and changing screens.",
+                "",
+                "Tasks: 3 · n New · e Edit · Enter Review / approve / start",
+                "  F2 saves a draft without running; F6 adds a source; F7 adds a step.",
+                "  Reviewed task: F2 Approve, then review again + F2 Start; F3 parallel.",
+                "Results: 4 · F9 All projects · Enter Details · a Attach Run terminal",
+                "  l Raw log · f Follow/pause · / Search · p Problems · Enter Review editor",
+                "  k Cancel · K Force cancellation · u Reconcile Unknown · z Runs",
+                "  E Editor settings · x Cancel pending reads · q closes only the UI",
+                "  F6 Git operations: u reviews exact Unknown cleanup acknowledgment.",
                 "",
                 "t reviews the current shell/startup/scripts before approval.",
                 "F5 refreshes definition and folder availability.",
@@ -875,10 +885,9 @@ fn live_screen(app: &mut App<'_>, frame: &mut Frame<'_>, area: Rect) {
         super::screen::render(frame, app.viewport, screen, writable);
     } else {
         frame.render_widget(
-            Paragraph::new(empty_screen_message(
-                active.map(|session| session.state),
-                runtime.online,
-            ))
+            Paragraph::new(if app.runs.attached.is_some() {
+                "The dedicated Run/editor screen is unavailable or has ended.\nCtrl+g opens controls; 4 shows recorded Run results.\nA new task launch requires an explicit review."
+            } else { empty_screen_message(active.map(|session| session.state),runtime.online) })
             .wrap(Wrap { trim: false }),
             app.viewport,
         );
@@ -892,6 +901,11 @@ fn live_screen(app: &mut App<'_>, frame: &mut Frame<'_>, area: Rect) {
         (
             format!("PTY error: {error} · Ctrl+g Controls"),
             Color::LightRed,
+        )
+    } else if runtime.input_read_only {
+        (
+            format!("Captured Run is READ ONLY · Ctrl+g Controls · k Cancel Run · {notice}"),
+            Color::LightYellow,
         )
     } else if limited {
         (

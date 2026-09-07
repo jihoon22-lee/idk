@@ -66,6 +66,7 @@ impl App<'_> {
             });
             if changed_host {
                 self.git_host_changed();
+                self.run_host_changed();
             }
             let runtime = self.runtime.as_mut().unwrap();
             if let Some((host, client_id)) = reply.identity {
@@ -89,6 +90,7 @@ impl App<'_> {
             match reply.result {
                 Err(error) => {
                     self.git_rpc_error(&reply.tag, &error.to_string());
+                    self.run_rpc_error(&reply.tag);
                     let runtime = self.runtime.as_mut().unwrap();
                     runtime.online = false;
                     runtime.clear_input();
@@ -109,6 +111,7 @@ impl App<'_> {
             }
         }
         self.tick_git();
+        self.tick_runs();
         if let Some(runtime) = &mut self.runtime {
             if let Err(error) = runtime.poll() {
                 runtime.online = false;
@@ -129,6 +132,12 @@ impl App<'_> {
                 | Tag::GitUpdated
         ) {
             return self.accept_git_reply(tag, value);
+        }
+        if matches!(
+            tag,
+            Tag::RunSubmit(_) | Tag::RunJob(_) | Tag::RunAttached(_) | Tag::RunAttachInfo(_)
+        ) {
+            return self.accept_run_reply(tag, value);
         }
         let refresh_definition = matches!(tag, Tag::Definition(_));
         let runtime = self.runtime.as_mut().unwrap();
@@ -174,6 +183,8 @@ impl App<'_> {
                 self.review_attach(session)?;
             }
             Tag::Attached => {
+                self.runs.attached = None;
+                runtime.input_read_only = false;
                 self.git.focused = false;
                 let session: SessionInfo = serde_json::from_value(value)?;
                 let id = session.session_id.clone();
@@ -231,7 +242,13 @@ impl App<'_> {
                 let changed = runtime.batch.as_ref().is_none_or(|old| {
                     old.state != batch.state || old.waiting_session != batch.waiting_session
                 });
-                let message=format!("Default launch {:?}: {} started, {} remaining, {} failed. F8: continue unknown initialization · O: cancel remaining.",batch.state,batch.sessions.len(),batch.remaining.len(),batch.failures.len());
+                let message = format!(
+                    "Default launch {:?}: {} started, {} remaining, {} failed. F8: continue unknown initialization · O: cancel remaining.",
+                    batch.state,
+                    batch.sessions.len(),
+                    batch.remaining.len(),
+                    batch.failures.len()
+                );
                 runtime.batch = Some(batch);
                 if changed {
                     self.info(message);
@@ -245,9 +262,9 @@ impl App<'_> {
                     .map(|session| session.session_id.clone())
                     .collect();
                 let title = if preview.project.is_some() {
-                    "Close all project shells"
+                    "Close project terminals and Runs"
                 } else {
-                    "Close all shells and stop host"
+                    "Close all terminals and stop host"
                 };
                 let request = match preview.project {
                     Some(project) => Request::CloseProject {
@@ -277,6 +294,13 @@ impl App<'_> {
                             .as_ref()
                             .map(|owner| owner.client_id.as_str())
                             .unwrap_or("none")
+                    )
+                }));
+                lines.extend(preview.run_relations.iter().map(|relation| {
+                    format!(
+                        "Terminal {} · registered Run {}",
+                        relation.session_id,
+                        relation.run_id.as_deref().unwrap_or("pending registration")
                     )
                 }));
                 self.dialog = Some(Dialog::Live(LiveDialog::Confirm {
@@ -324,6 +348,15 @@ impl App<'_> {
         Ok(())
     }
     pub(super) fn refresh_live_definition(&mut self) {
+        if self.runs.attached.as_ref().is_some_and(|id| {
+            self.runtime
+                .as_ref()
+                .and_then(|runtime| runtime.active.as_ref())
+                .is_some_and(|active| &active.session_id == id)
+        }) {
+            return;
+        }
+
         let Some(active) = self
             .runtime
             .as_ref()
@@ -385,7 +418,7 @@ impl App<'_> {
         }
     }
     pub(super) fn live_menu_key(&mut self, key: KeyEvent) -> bool {
-        if self.tab == 1 && self.focus == super::Focus::Content {
+        if matches!(self.tab, 1..=3) && self.focus == super::Focus::Content {
             return false;
         }
         if self.runtime.is_none() {
@@ -579,7 +612,10 @@ impl App<'_> {
     }
     fn active_owner(&self) -> Result<(String, u64)> {
         let runtime = self.runtime.as_ref().context("No runtime")?;
-        ensure!(runtime.can_input(),"Terminal is read-only or disconnected. Ctrl+g opens controls; refresh and attach explicitly.");
+        ensure!(
+            runtime.can_control(),
+            "Terminal is read-only or disconnected. Ctrl+g opens controls; refresh and attach explicitly."
+        );
         let active = runtime.active.as_ref().unwrap();
         Ok((active.session_id.clone(), active.input_epoch))
     }
@@ -610,6 +646,7 @@ impl App<'_> {
                 bytes,
             );
         }
+        ensure!(self.runtime.as_ref().is_some_and(|runtime|runtime.can_input()), "Captured Run input is disabled or the terminal is disconnected. Ctrl+g opens controls; k cancels the Run.");
         let (session, epoch) = self.active_owner()?;
         self.runtime
             .as_mut()

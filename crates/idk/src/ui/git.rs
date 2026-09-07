@@ -71,6 +71,9 @@ struct Intent {
 }
 #[derive(Clone, Debug)]
 pub(super) enum GitDialog {
+    Reconcile {
+        operation: Box<GitOperationInfo>,
+    },
     Operations {
         entries: Vec<GitOperationInfo>,
         selected: usize,
@@ -1139,7 +1142,36 @@ impl App<'_> {
         }
         let result = (|| -> Result<bool> {
             match &mut dialog {
+                GitDialog::Reconcile { operation } => {
+                    if key.code == KeyCode::F(2) {
+                        self.runtime.as_mut().unwrap().submit(
+                            Some(Request::GitOperationReconcile {
+                                operation: operation.id.clone(),
+                                repository: operation.repository.clone(),
+                            }),
+                            Tag::GitUpdated,
+                        )?;
+                        self.info("Cleanup acknowledgment submitted. The operation result remains Unknown.");
+                        return Ok(true);
+                    }
+                }
                 GitDialog::Operations { entries, selected } => match key.code {
+                    KeyCode::Char('u') => {
+                        let operation = entries
+                            .get(*selected)
+                            .context("Select an Unknown Git operation")?
+                            .clone();
+                        ensure!(
+                            operation.state == GitOperationState::Unknown
+                                && !operation.cleanup_acknowledged,
+                            "Only unacknowledged Unknown Git operations need reconciliation"
+                        );
+                        self.dialog = Some(Dialog::Git(Box::new(GitDialog::Reconcile {
+                            operation: Box::new(operation),
+                        })));
+                        return Ok(true);
+                    }
+
                     KeyCode::Up => *selected = selected.saturating_sub(1),
                     KeyCode::Down => {
                         *selected = selected
