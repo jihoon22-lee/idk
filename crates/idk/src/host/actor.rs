@@ -1,6 +1,7 @@
 use super::children;
+use super::git_bridge;
 use super::launch::{self, Completed, Job, Runtime};
-use crate::model::{new_id, valid_id, TerminalDefinition, MAX_PROJECTS, MAX_TERMINALS};
+use crate::model::{new_id, valid_id, SourceGate, TerminalDefinition, MAX_PROJECTS, MAX_TERMINALS};
 use crate::protocol::*;
 use crate::shell::InitializationState;
 use crate::store::{ensure_private_dir, Store};
@@ -141,6 +142,10 @@ struct Batch {
     waiting_since: Option<Instant>,
 }
 pub(super) struct Actor {
+    // B05's recovered RunRegistry receives this same gate. Git does not mark
+    // an unavailable run provider idle merely because no run UI is attached.
+    source_gate: SourceGate,
+    git: git_bridge::Bridge,
     store: Store,
     info: HostInfo,
     slots: BTreeMap<String, Slot>,
@@ -195,7 +200,10 @@ impl Actor {
         ensure_private_dir(&resources)?;
         let (jobs, results) = launch::worker(store.clone(), launcher, resources)?;
         let (child_scans, child_reports) = children::worker()?;
+        let git = git_bridge::Bridge::new(store.clone(), &info.host_instance)?;
         let actor = Self {
+            source_gate: SourceGate::default(),
+            git,
             store,
             info,
             slots,
@@ -229,6 +237,7 @@ impl Actor {
     }
     pub fn finished(&self) -> bool {
         self.quiescing
+            && self.git.idle()
             && self
                 .slots
                 .values()
@@ -258,6 +267,7 @@ impl Actor {
                         .as_ref()
                         .is_some_and(|owner| &owner.client_id == id)
                 })
+                || self.git.client_owns_input(id)
         });
         if let Some(client) = self.clients.get_mut(&envelope.client_id) {
             ensure!(
@@ -340,6 +350,25 @@ impl Actor {
             Ok(serde_json::to_value(data)?)
         }
         match request {
+            Request::GitSubmit { .. }
+            | Request::GitJob { .. }
+            | Request::GitExecute { .. }
+            | Request::GitOperations { .. }
+            | Request::GitOperationAttach { .. }
+            | Request::GitOperationDetach { .. }
+            | Request::GitOperationSnapshot { .. }
+            | Request::GitOperationInput { .. }
+            | Request::GitOperationResize { .. }
+            | Request::GitOperationCancel { .. } => {
+                let shells = self
+                    .slots
+                    .values()
+                    .filter(|slot| slot.info.state.is_live())
+                    .count();
+                self.git
+                    .request(client, request, shells, self.quiescing, &self.source_gate)?
+                    .context("Git request dispatch is unavailable")
+            }
             Request::Hello => value(&self.info),
             Request::List { project } => value(
                 self.slots
@@ -549,10 +578,13 @@ impl Actor {
                 }
                 value(&self.slot(session)?.info)
             }
-            Request::PreviewClose { project } => value(ClosePreview {
-                project: project.clone(),
-                targets: self.targets(project.as_deref()),
-            }),
+            Request::PreviewClose { project } => {
+                self.git.check_close(project.as_deref())?;
+                value(ClosePreview {
+                    project: project.clone(),
+                    targets: self.targets(project.as_deref()),
+                })
+            }
             Request::CloseProject {
                 project,
                 sessions,
@@ -644,6 +676,7 @@ impl Actor {
                 .values()
                 .filter(|slot| slot.info.state.is_live())
                 .count()
+                + self.git.occupied()
                 < MAX_TERMINALS,
             "host live terminal limit reached"
         );
@@ -758,6 +791,7 @@ impl Actor {
         sessions: &[String],
         force: bool,
     ) -> Result<CloseReply> {
+        self.git.check_close(project)?;
         let mut expected: Vec<_> = self
             .targets(project)
             .into_iter()
@@ -972,6 +1006,7 @@ impl Actor {
             }
         };
         self.scan_inflight = false;
+        self.git.inventory(&report);
         let host_pid = std::process::id() as libc::pid_t;
         for anchor in report.anchors {
             let Some(slot) = self.slots.get_mut(&anchor.session) else {
@@ -1056,7 +1091,7 @@ impl Actor {
         if self.scan_inflight || self.last_scan.elapsed() < Duration::from_millis(100) {
             return;
         }
-        let anchors: Vec<_> = self
+        let mut anchors: Vec<_> = self
             .slots
             .values()
             .filter(|slot| slot.info.exit.is_some() && !slot.cleanup.done)
@@ -1071,6 +1106,7 @@ impl Actor {
                     })
             })
             .collect();
+        anchors.extend(self.git.anchors());
         if anchors.is_empty() {
             return;
         }
@@ -1095,6 +1131,7 @@ impl Actor {
             };
             self.accept_prepared(completed);
         }
+        self.git.tick(&self.source_gate);
         self.poll_child_inventory();
         let mut changed = false;
         for slot in self.slots.values_mut() {
