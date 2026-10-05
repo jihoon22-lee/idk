@@ -548,3 +548,62 @@ fn grammar() -> &'static Grammar {
         uic_file:Regex::new(r"^File '(?P<file>.+)' is not valid$").unwrap(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+    }
+    #[test]
+    fn escape_consumer_never_panics_and_never_leaks_escape_bytes() {
+        let mut rng = Rng(0x9e3779b97f4a7c15);
+        for _ in 0..50_000 {
+            let mut controls = Controls::default();
+            let len = (rng.next() % 256) as usize;
+            for _ in 0..len {
+                let byte = (rng.next() & 0xff) as u8;
+                if let Some(out) = controls.consume(byte) {
+                    assert_ne!(out, 0x1b, "escape byte leaked to visible text");
+                }
+            }
+        }
+    }
+    #[test]
+    fn safe_utf8_respects_byte_bound_and_filters_forbidden_characters() {
+        let mut rng = Rng(0x243f6a8885a308d3);
+        for _ in 0..20_000 {
+            let len = (rng.next() % 512) as usize;
+            let bytes: Vec<u8> = (0..len).map(|_| (rng.next() & 0xff) as u8).collect();
+            let maximum = (rng.next() % 128) as usize;
+            let text = safe_utf8(&bytes, maximum);
+            assert!(text.len() <= maximum);
+            assert!(text.chars().all(|c| !forbidden_character(c)));
+        }
+    }
+    #[test]
+    fn unquote_and_position_never_panic() {
+        let mut rng = Rng(0x452821e638d01377);
+        for _ in 0..20_000 {
+            let len = (rng.next() % 64) as usize;
+            let bytes: Vec<u8> = (0..len).map(|_| (rng.next() & 0xff) as u8).collect();
+            let text = String::from_utf8_lossy(&bytes);
+            let _ = unquote(&text);
+            let _ = position(&text);
+            let _ = position_number(&text);
+        }
+        // Quoted and numeric boundaries.
+        assert_eq!(unquote("\"file.c\""), "file.c");
+        assert_eq!(unquote("\"unterminated"), "\"unterminated");
+        assert_eq!(position("0"), None);
+        assert_eq!(position("1"), Some(1));
+        assert_eq!(position("4294967296"), None);
+        assert_eq!(position("-1"), None);
+    }
+}

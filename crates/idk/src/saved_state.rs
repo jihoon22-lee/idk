@@ -90,6 +90,45 @@ impl HostLedger {
         Ok(())
     }
 }
+/// The last owned host's lifecycle record. The host writes it with
+/// `stopped_at_ms: None` once it owns the socket and rewrites it on every
+/// bounded exit path — so a crash leaves a "still running" record with a dead
+/// pid instead of stale good news. A missing or preserved-corrupt file carries
+/// no claim either way.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HostExit {
+    pub schema: u32,
+    pub host_instance: String,
+    pub pid: u32,
+    pub started_at_ms: u64,
+    #[serde(default)]
+    pub stopped_at_ms: Option<u64>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+impl HostExit {
+    pub(crate) fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema == 1 && self.pid > 1,
+            "unsupported host exit record; preserved"
+        );
+        valid_id(&self.host_instance)?;
+        if let Some(stopped) = self.stopped_at_ms {
+            ensure!(
+                stopped >= self.started_at_ms,
+                "host exit precedes its own start; record preserved"
+            );
+        }
+        if let Some(error) = &self.error {
+            ensure!(
+                error.len() <= 1024 && !error.chars().any(char::is_control),
+                "invalid host exit detail; preserved"
+            );
+        }
+        Ok(())
+    }
+}
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RunLedger {

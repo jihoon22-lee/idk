@@ -191,6 +191,85 @@ pub struct RunRegistry {
     active: BTreeMap<String, Active>,
     logs: PathBuf,
     published: RefCell<HashSet<PathBuf>>,
+    /// Reserved starts whose source observation is still off-thread. They hold
+    /// source leases, so dedup and output-conflict checks must see them.
+    pending_starts: Vec<PendingStart>,
+}
+/// A reserved but unpersisted run start, deduplicated like a live run.
+struct PendingStart {
+    run_id: String,
+    project_id: String,
+    task_id: String,
+    operation_id: String,
+    build_outputs: Vec<PathBuf>,
+}
+/// Inputs needed to observe a repository off the registry worker.
+pub struct SourceProbe {
+    repository: Option<crate::git::Repository>,
+    gate: SourceGate,
+}
+impl SourceProbe {
+    pub(crate) fn from_parts(repository: Option<crate::git::Repository>, gate: SourceGate) -> Self {
+        Self { repository, gate }
+    }
+    pub fn into_parts(self) -> (Option<crate::git::Repository>, SourceGate) {
+        (self.repository, self.gate)
+    }
+    /// The observed repository identity, when the run owns a repository.
+    pub fn identity(&self) -> Option<PathBuf> {
+        self.repository
+            .as_ref()
+            .map(|repository| repository.identity().into())
+    }
+    /// Synchronous fallback when the observation cannot be dispatched.
+    pub fn observe_now(self) -> SourceObservation {
+        let (repository, gate) = self.into_parts();
+        observe_source(repository.as_ref(), &gate)
+    }
+}
+pub enum BeginReservation {
+    /// An identical or non-parallel execution already exists; no lease held.
+    Existing(RunStartReply),
+    /// Lease reserved; commit once the source observation arrives.
+    Fresh(BeginTicket),
+}
+/// A reserved start whose observation is in flight. Dropping it releases the
+/// source lease; the registry's pending record is removed by commit/abandon.
+pub struct BeginTicket {
+    run_id: String,
+    plan: TaskLaunchPlan,
+    operation_id: String,
+    outputs: Vec<PathBuf>,
+    lease: Option<GateLease>,
+}
+impl BeginTicket {
+    pub fn probe(&self, gate: &SourceGate) -> SourceProbe {
+        SourceProbe {
+            repository: self.plan.repository.clone(),
+            gate: gate.clone(),
+        }
+    }
+    pub fn probe_identity(&self) -> Option<PathBuf> {
+        self.plan
+            .repository
+            .as_ref()
+            .map(|repository| repository.identity().into())
+    }
+    pub fn project_id(&self) -> &str {
+        &self.plan.project_id
+    }
+    pub fn task_id(&self) -> &str {
+        &self.plan.task.id
+    }
+    pub fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+    /// Whether a second request refers to the same execution intent.
+    pub fn same_intent(&self, plan: &TaskLaunchPlan) -> bool {
+        self.plan.project_id == plan.project_id
+            && self.plan.task.id == plan.task.id
+            && self.plan.launch_digest == plan.launch_digest
+    }
 }
 impl RunRegistry {
     pub fn open(store: Store, gate: SourceGate) -> Result<Self> {
@@ -247,9 +326,13 @@ impl RunRegistry {
             active: BTreeMap::new(),
             logs,
             published: RefCell::new(HashSet::new()),
+            pending_starts: Vec::new(),
         };
         result.persist()?;
         Ok(result)
+    }
+    pub fn gate(&self) -> &SourceGate {
+        &self.gate
     }
     /// Unknown recovered work is a restriction, never idle. Host calls after recovery.
     pub fn publish_source(&self, identity: &Path) -> Result<()> {
@@ -276,12 +359,31 @@ impl RunRegistry {
         }
         Ok(())
     }
+    /// Synchronous begin for callers that cannot defer the source observation.
     pub fn begin(
         &mut self,
         plan: TaskLaunchPlan,
         operation_id: &str,
         parallel: bool,
     ) -> Result<RunStartReply> {
+        match self.begin_reserve(plan, operation_id, parallel)? {
+            BeginReservation::Existing(reply) => Ok(reply),
+            BeginReservation::Fresh(ticket) => {
+                let source_start = observe_source(ticket.plan.repository.as_ref(), &self.gate);
+                self.begin_commit(ticket, source_start)
+            }
+        }
+    }
+    /// Validates the intent, deduplicates against live and in-flight starts
+    /// and reserves the source lease. The observation may then run off this
+    /// thread while the lease stays held; finish with `begin_commit` or
+    /// `begin_abandon`.
+    pub fn begin_reserve(
+        &mut self,
+        plan: TaskLaunchPlan,
+        operation_id: &str,
+        parallel: bool,
+    ) -> Result<BeginReservation> {
         valid_id(operation_id)?;
         if let Some(run) = self
             .runs
@@ -294,21 +396,37 @@ impl RunRegistry {
                     && run.launch_digest == plan.launch_digest,
                 "operation ID already refers to a different execution intent"
             );
-            return Ok(RunStartReply {
+            return Ok(BeginReservation::Existing(RunStartReply {
                 run: self.info(&run.run_id)?,
                 existing: true,
-            });
+            }));
         }
+        ensure!(
+            !self
+                .pending_starts
+                .iter()
+                .any(|pending| pending.operation_id == operation_id),
+            "this execution is already being prepared; await its result"
+        );
         if let Some(run) = self.runs.iter().rev().find(|run| {
             run.project_id == plan.project_id && run.task_id == plan.task.id && run.state.is_live()
         }) {
             if !parallel {
-                return Ok(RunStartReply {
+                return Ok(BeginReservation::Existing(RunStartReply {
                     run: self.info(&run.run_id)?,
                     existing: true,
-                });
+                }));
             }
         }
+        ensure!(
+            !self
+                .pending_starts
+                .iter()
+                .any(|pending| pending.project_id == plan.project_id
+                    && pending.task_id == plan.task.id
+                    && !parallel),
+            "a start of this task is already being prepared; await its result"
+        );
         ensure!(
             !self.runs.iter().any(|run| run.project_id == plan.project_id
                 && run.task_id == plan.task.id
@@ -326,6 +444,9 @@ impl RunRegistry {
             run.state.is_live() || (run.state == RunState::Unknown && !run.cleanup_confirmed)
         }) {
             ensure!(!outputs.iter().any(|path| active.build_outputs.iter().any(|other| path.starts_with(other) || other.starts_with(path))), "build output conflicts with active or unknown run; wait or register distinct output locations");
+        }
+        for pending in &self.pending_starts {
+            ensure!(!outputs.iter().any(|path| pending.build_outputs.iter().any(|other| path.starts_with(other) || other.starts_with(path))), "build output conflicts with a start still being prepared; wait or register distinct output locations");
         }
         while self.runs.len() >= HISTORY_LIMIT {
             let index = self
@@ -358,7 +479,42 @@ impl RunRegistry {
         } else {
             None
         };
-        let source_start = observe_source(plan.repository.as_ref(), &self.gate);
+        self.pending_starts.push(PendingStart {
+            run_id: run_id.clone(),
+            project_id: plan.project_id.clone(),
+            task_id: plan.task.id.clone(),
+            operation_id: operation_id.into(),
+            build_outputs: outputs.clone(),
+        });
+        Ok(BeginReservation::Fresh(BeginTicket {
+            run_id,
+            plan,
+            operation_id: operation_id.into(),
+            outputs,
+            lease,
+        }))
+    }
+    /// Releases a reserved start that will never commit (cancelled or failed
+    /// before observation completed). The lease is dropped with the ticket.
+    pub fn begin_abandon(&mut self, ticket: BeginTicket) {
+        self.pending_starts
+            .retain(|pending| pending.run_id != ticket.run_id);
+    }
+    /// Persists a reserved start after its source observation arrived.
+    pub fn begin_commit(
+        &mut self,
+        ticket: BeginTicket,
+        source_start: SourceObservation,
+    ) -> Result<RunStartReply> {
+        self.pending_starts
+            .retain(|pending| pending.run_id != ticket.run_id);
+        let BeginTicket {
+            run_id,
+            plan,
+            operation_id,
+            outputs,
+            lease,
+        } = ticket;
         let directory = self.store.runtime_dir.join(format!("run-{run_id}"));
         ensure_private_dir(&directory)?;
         let mut pending = PendingResources {
@@ -397,7 +553,7 @@ impl RunRegistry {
         });
         let run = RunInfo {
             run_id: run_id.clone(),
-            operation_id: operation_id.into(),
+            operation_id,
             project_id: plan.project_id.clone(),
             task_id: plan.task.id.clone(),
             name: plan.task.name.clone(),
@@ -554,6 +710,18 @@ impl RunRegistry {
             .map(|run| run.run_id.clone())
             .collect()
     }
+    /// Source inputs for a finish observation, while the lease is still held.
+    /// The observation may run off this thread before `finish_observed`.
+    pub fn finish_probe(&self, run_id: &str) -> Result<SourceProbe> {
+        let active = self
+            .active
+            .get(run_id)
+            .context("run not owned by this host")?;
+        Ok(SourceProbe {
+            repository: active.plan.repository.clone(),
+            gate: self.gate.clone(),
+        })
+    }
     pub fn finish(
         &mut self,
         run_id: &str,
@@ -561,11 +729,25 @@ impl RunRegistry {
         cleanup_confirmed: bool,
         error: Option<String>,
     ) -> Result<RunInfo> {
+        let probe = self.finish_probe(run_id)?;
+        let (repository, gate) = probe.into_parts();
+        let source_end = observe_source(repository.as_ref(), &gate);
+        self.finish_observed(run_id, exit, cleanup_confirmed, error, source_end)
+    }
+    /// Completes a run once its end observation arrived. The lease is still
+    /// held at probe time, so the observation cannot race a source mutation.
+    pub fn finish_observed(
+        &mut self,
+        run_id: &str,
+        exit: Option<TerminalExit>,
+        cleanup_confirmed: bool,
+        error: Option<String>,
+        source_end: SourceObservation,
+    ) -> Result<RunInfo> {
         let active = self
             .active
             .get(run_id)
             .context("run not owned by this host")?;
-        let source_end = observe_source(active.plan.repository.as_ref(), &self.gate);
         let results = read_steps(&active.directory, &steps(&active.plan.task));
         active.sink.finish();
         let log = active.sink.descriptor();
@@ -897,7 +1079,7 @@ pub fn safe_text(bytes: &[u8]) -> String {
         })
         .collect()
 }
-fn observe_source(
+pub(crate) fn observe_source(
     repository: Option<&crate::git::Repository>,
     gate: &SourceGate,
 ) -> SourceObservation {
@@ -967,6 +1149,29 @@ fn read_log_bytes(path: &Path, identity: Option<(u64, u64)>) -> Result<Vec<u8>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+    }
+    #[test]
+    fn safe_text_never_panics_and_emits_no_forbidden_controls() {
+        let mut rng = Rng(0xd1b54a32d192ed03);
+        for _ in 0..20_000 {
+            let len = (rng.next() % 512) as usize;
+            let bytes: Vec<u8> = (0..len).map(|_| (rng.next() & 0xff) as u8).collect();
+            let text = safe_text(&bytes);
+            assert!(
+                text.chars()
+                    .all(|c| !c.is_control() || c == '\n' || c == '\t'),
+                "safe_text leaked a control character"
+            );
+        }
+    }
     #[test]
     fn actual_enospc_stops_log_writes_without_inventing_a_process_result() {
         let sink = RunOutputSink::with_file(

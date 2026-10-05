@@ -260,7 +260,7 @@ pub fn task(store: &Store, command: TaskCommand) -> Result<()> {
             ensure!(file.is_absolute(), "task file path must be absolute");
             let input = OpenOptions::new()
                 .read(true)
-                .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
+                .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC | libc::O_NOFOLLOW)
                 .open(&file)?;
             ensure!(
                 input.metadata()?.is_file(),
@@ -268,7 +268,7 @@ pub fn task(store: &Store, command: TaskCommand) -> Result<()> {
             );
             let mut text = String::new();
             input.take(256 * 1024 + 1).read_to_string(&mut text)?;
-            ensure!(text.len() <= 256 * 1024, "task definition exceeds256KiB");
+            ensure!(text.len() <= 256 * 1024, "task definition exceeds 256KiB");
             let definition: TaskDefinition =
                 toml::from_str(&text).context("invalid task definition; original preserved")?;
             output(&service.save(store.load()?.revision, &id, definition)?)

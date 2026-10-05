@@ -6,7 +6,7 @@ use anyhow::{ensure, Context, Result};
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 pub(super) enum Task {
@@ -103,6 +103,19 @@ pub(super) struct Workers {
     pub reads: mpsc::SyncSender<ReadWork>,
     pub executions: mpsc::SyncSender<ExecuteWork>,
     pub events: mpsc::Receiver<Event>,
+    /// Live worker counts cover partial pool death, which the shared events
+    /// channel cannot report while another pool still holds its sender.
+    pub read_alive: Arc<AtomicUsize>,
+    pub execute_alive: Arc<AtomicUsize>,
+}
+/// Any exit — return, channel close, or panic unwind — decrements the pool's
+/// live count so the bridge stops crediting dead capacity. The count is
+/// credited before spawn, so a live pool never reads as dead.
+struct PoolGuard(Arc<AtomicUsize>);
+impl Drop for PoolGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 pub(super) fn workers() -> Result<Workers> {
@@ -110,55 +123,72 @@ pub(super) fn workers() -> Result<Workers> {
     let (execute_tx, execute_rx) = mpsc::sync_channel::<ExecuteWork>(4);
     let (events_tx, events_rx) = mpsc::sync_channel::<Event>(16);
     let reads = Arc::new(Mutex::new(read_rx));
+    let read_alive = Arc::new(AtomicUsize::new(0));
     for number in 0..2 {
         let incoming = reads.clone();
         let outgoing = events_tx.clone();
-        std::thread::Builder::new()
+        read_alive.fetch_add(1, Ordering::AcqRel);
+        let alive = read_alive.clone();
+        let spawned = std::thread::Builder::new()
             .name(format!("idk-git-read-{number}"))
-            .spawn(move || loop {
-                let work = match incoming.lock() {
-                    Ok(receiver) => receiver.recv(),
-                    Err(_) => return,
-                };
-                let Ok(work) = work else {
-                    return;
-                };
-                let mut service = work.service;
-                let result = (|| {
-                    if service.is_none() {
-                        service = Some(new_service(work.binding, work.environment)?);
+            .spawn(move || {
+                let _guard = PoolGuard(alive);
+                loop {
+                    let work = match incoming.lock() {
+                        Ok(receiver) => receiver.recv(),
+                        Err(_) => return,
+                    };
+                    let Ok(work) = work else {
+                        return;
+                    };
+                    let mut service = work.service;
+                    let result = (|| {
+                        if service.is_none() {
+                            service = Some(new_service(work.binding, work.environment)?);
+                        }
+                        perform(service.as_ref().unwrap(), work.task)
+                    })();
+                    if outgoing
+                        .send(Event::Read {
+                            id: work.id,
+                            service,
+                            result: Box::new(result),
+                        })
+                        .is_err()
+                    {
+                        return;
                     }
-                    perform(service.as_ref().unwrap(), work.task)
-                })();
-                if outgoing
-                    .send(Event::Read {
-                        id: work.id,
-                        service,
-                        result: Box::new(result),
-                    })
-                    .is_err()
-                {
-                    return;
                 }
-            })?;
+            });
+        if let Err(error) = spawned {
+            read_alive.fetch_sub(1, Ordering::AcqRel);
+            return Err(error.into());
+        }
     }
     let executions = Arc::new(Mutex::new(execute_rx));
+    let execute_alive = Arc::new(AtomicUsize::new(0));
     for number in 0..4 {
         let incoming = executions.clone();
         let outgoing = events_tx.clone();
-        std::thread::Builder::new()
+        execute_alive.fetch_add(1, Ordering::AcqRel);
+        let alive = execute_alive.clone();
+        let spawned = std::thread::Builder::new()
             .name(format!("idk-git-operation-{number}"))
-            .spawn(move || loop {
-                let work = match incoming.lock() {
-                    Ok(receiver) => receiver.recv(),
-                    Err(_) => return,
-                };
-                let Ok(work) = work else {
-                    return;
-                };
-                let result =
-                    work.service
-                        .execute_with(&work.plan, &work.gate, &work.resources, |command| {
+            .spawn(move || {
+                let _guard = PoolGuard(alive);
+                loop {
+                    let work = match incoming.lock() {
+                        Ok(receiver) => receiver.recv(),
+                        Err(_) => return,
+                    };
+                    let Ok(work) = work else {
+                        return;
+                    };
+                    let result = work.service.execute_with(
+                        &work.plan,
+                        &work.gate,
+                        &work.resources,
+                        |command| {
                             if work.cancelled.load(Ordering::Acquire) {
                                 return Ok(git::CommandOutcome {
                                     exit_code: None,
@@ -182,22 +212,30 @@ pub(super) fn workers() -> Result<Workers> {
                             // No timeout or optimistic cancellation result releases the
                             // service's source lease while the owned child is still alive.
                             outcome.recv().context("host operation outcome is unknown")
-                        });
-                if outgoing
-                    .send(Event::Executed {
-                        id: work.id,
-                        result: Box::new(result),
-                    })
-                    .is_err()
-                {
-                    return;
+                        },
+                    );
+                    if outgoing
+                        .send(Event::Executed {
+                            id: work.id,
+                            result: Box::new(result),
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
                 }
-            })?;
+            });
+        if let Err(error) = spawned {
+            execute_alive.fetch_sub(1, Ordering::AcqRel);
+            return Err(error.into());
+        }
     }
     Ok(Workers {
         reads: read_tx,
         executions: execute_tx,
         events: events_rx,
+        read_alive,
+        execute_alive,
     })
 }
 fn new_service(binding: Repository, environment: BTreeMap<String, String>) -> Result<GitService> {
@@ -257,4 +295,34 @@ fn perform(service: &GitService, task: Task) -> Result<Payload> {
             revision,
         } => Payload::Plan(service.plan_push(&remote, &branch, &revision)?),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn dead_worker_pools_drop_their_live_counts() {
+        let workers = workers().unwrap();
+        assert_eq!(workers.read_alive.load(Ordering::Acquire), 2);
+        assert_eq!(workers.execute_alive.load(Ordering::Acquire), 4);
+        let Workers {
+            reads,
+            executions,
+            read_alive,
+            execute_alive,
+            ..
+        } = workers;
+        drop(reads);
+        drop(executions);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline
+            && (read_alive.load(Ordering::Acquire) > 0 || execute_alive.load(Ordering::Acquire) > 0)
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(read_alive.load(Ordering::Acquire), 0);
+        assert_eq!(execute_alive.load(Ordering::Acquire), 0);
+    }
 }

@@ -45,6 +45,14 @@ impl Operation {
     pub fn active(&self) -> bool {
         self.finished_at.is_none()
     }
+    /// The executor never reached its callback: no owned process exists.
+    pub fn unspawned(&self) -> bool {
+        self.active() && !self.executed
+    }
+    /// The owned process is already reaped; only the executor's report is owed.
+    pub fn reaped(&self) -> bool {
+        self.executed && self.terminal.is_none()
+    }
     pub fn install(
         &mut self,
         terminal: TerminalSession,
@@ -304,7 +312,20 @@ impl Operation {
                         self.terminal.take();
                         self.signalled.clear();
                         if let Some(completion) = self.completion.take() {
-                            let _ = completion.try_send(outcome);
+                            if let Err(mpsc::TrySendError::Disconnected(_)) =
+                                completion.try_send(outcome)
+                            {
+                                // The executor thread is gone; its result can
+                                // never arrive. The process is reaped locally
+                                // but the service outcome stays unknown.
+                                self.finished_at = Some(Instant::now());
+                                self.info.owner = None;
+                                self.info.state = GitOperationState::Unknown;
+                                self.info.error = Some(
+                                    "Git executor exited before reporting an outcome; the owned process was reaped"
+                                        .into(),
+                                );
+                            }
                         }
                     }
                     Err(error) => {

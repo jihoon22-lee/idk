@@ -13,6 +13,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 const LEDGER: &str = "git-operations.json";
@@ -84,6 +85,8 @@ pub(super) struct Bridge {
     operations: BTreeMap<String, Operation>,
     workers: jobs::Workers,
     reading: usize,
+    reads_dead: bool,
+    executions_dead: bool,
 }
 
 fn wire<T: DeserializeOwned>(value: &impl Serialize) -> Result<T> {
@@ -122,6 +125,8 @@ impl Bridge {
             operations: BTreeMap::new(),
             workers: jobs::workers()?,
             reading: 0,
+            reads_dead: false,
+            executions_dead: false,
         };
         if let Some(ledger) = bridge.store.read_state::<Ledger>(LEDGER)? {
             ledger.validate()?;
@@ -290,6 +295,10 @@ impl Bridge {
         match request {
             Request::GitSubmit { task } => {
                 ensure!(!quiescing, "host shutdown is in progress");
+                ensure!(
+                    !self.reads_dead,
+                    "Git read workers exited; restart the host for new Git requests"
+                );
                 value(self.submit(client, task.clone(), gate)?)
             }
             Request::GitJob { job } => {
@@ -302,6 +311,10 @@ impl Bridge {
             }
             Request::GitExecute { plan, rows, cols } => {
                 ensure!(!quiescing, "host shutdown is in progress");
+                ensure!(
+                    !self.executions_dead,
+                    "Git execution workers exited; restart the host for new Git operations"
+                );
                 value(self.execute(client, plan, *rows, *cols, shell_count, gate)?)
             }
             Request::GitOperations { project } => value(
@@ -1122,6 +1135,63 @@ impl Bridge {
                         self.operations.get_mut(&id).unwrap().info.error = Some("Git outcome observed, but durable history save failed; restart may report unknown".into());
                     }
                 }
+            }
+        }
+        // Pool death is checked after draining events: results a dying worker
+        // already queued still land, and only work that can never report fails.
+        if !self.reads_dead && self.workers.read_alive.load(Ordering::Acquire) == 0 {
+            self.reads_dead = true;
+            for job in self.jobs.values_mut() {
+                if matches!(job.info.state, GitJobState::Pending | GitJobState::Running) {
+                    job.info.state = GitJobState::Failed;
+                    job.info.error =
+                        Some("Git read workers exited; the request did not complete".into());
+                }
+            }
+            for repo in self.repos.values_mut() {
+                if repo
+                    .busy
+                    .as_ref()
+                    .is_some_and(|id| self.jobs.contains_key(id))
+                {
+                    repo.busy = None;
+                }
+            }
+            self.queue.clear();
+            self.reading = 0;
+        }
+        if !self.executions_dead && self.workers.execute_alive.load(Ordering::Acquire) == 0 {
+            self.executions_dead = true;
+            let mut changed = false;
+            for operation in self.operations.values_mut() {
+                if !operation.active() {
+                    continue;
+                }
+                if operation.unspawned() {
+                    operation.finish(Err(anyhow::anyhow!(
+                        "Git execution workers exited before its process started"
+                    )));
+                    changed = true;
+                } else if operation.reaped() {
+                    operation.finish(Err(anyhow::anyhow!(
+                        "Git execution workers exited before reporting an outcome"
+                    )));
+                    changed = true;
+                }
+                // A live operation terminal keeps reaping on the actor; its
+                // completion channel detects the dead executor at that point.
+            }
+            for repo in self.repos.values_mut() {
+                if repo
+                    .busy
+                    .as_ref()
+                    .is_some_and(|id| self.operations.get(id).is_some_and(|op| !op.active()))
+                {
+                    repo.busy = None;
+                }
+            }
+            if changed {
+                let _ = self.persist();
             }
         }
         for operation in self.operations.values_mut() {

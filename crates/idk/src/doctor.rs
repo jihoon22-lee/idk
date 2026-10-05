@@ -162,6 +162,58 @@ fn inspect_runtime(store: &Store, findings: &mut Vec<Finding>) {
         Err(error) => findings.push(Finding { area: "host".into(), status: "warning".into(),
             detail: format!("{error:#}; keep existing host and use its original generation binary when builds differ") }),
     }
+    match store.read_state::<crate::saved_state::HostExit>("host-exit.json") {
+        Ok(Some(exit)) if exit.validate().is_ok() => {
+            match (exit.stopped_at_ms, exit.error) {
+                (None, _) => {
+                    // A running record with a dead pid is a crash: no exit
+                    // path ran to record an outcome.
+                    let alive = unsafe { libc::kill(exit.pid as libc::pid_t, 0) } == 0
+                        || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+                    if alive {
+                        findings.push(Finding {
+                            area: "host-exit".into(),
+                            status: "ok".into(),
+                            detail: format!(
+                                "host is running (instance {}, pid {})",
+                                exit.host_instance, exit.pid
+                            ),
+                        });
+                    } else {
+                        findings.push(Finding {
+                            area: "host-exit".into(),
+                            status: "warning".into(),
+                            detail: format!(
+                                "host instance {} (pid {}) exited without recording an outcome; its ledgers reconcile on the next host",
+                                exit.host_instance, exit.pid
+                            ),
+                        });
+                    }
+                }
+                (Some(_), None) => findings.push(Finding {
+                    area: "host-exit".into(),
+                    status: "ok".into(),
+                    detail: "previous host recorded a clean shutdown".into(),
+                }),
+                (Some(_), Some(error)) => findings.push(Finding {
+                    area: "host-exit".into(),
+                    status: "warning".into(),
+                    detail: format!("previous host exited without a clean shutdown: {error}"),
+                }),
+            }
+        }
+        Ok(Some(_)) => findings.push(Finding {
+            area: "host-exit".into(),
+            status: "warning".into(),
+            detail: "previous host exit record is unsupported; file preserved".into(),
+        }),
+        Err(error) => findings.push(Finding {
+            area: "host-exit".into(),
+            status: "warning".into(),
+            detail: format!("previous host exit record is unreadable; preserved: {error:#}"),
+        }),
+        Ok(None) => {}
+    }
 }
 
 fn inspect_installation(findings: &mut Vec<Finding>) {
