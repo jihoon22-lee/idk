@@ -154,6 +154,8 @@ pub(super) struct Actor {
     batches: BTreeMap<String, Batch>,
     jobs: mpsc::SyncSender<Job>,
     results: mpsc::Receiver<Completed>,
+    runs_dead: bool,
+    launch_dead: bool,
     quiescing: bool,
     last_batch_tick: Instant,
     child_scans: mpsc::SyncSender<Vec<children::Anchor>>,
@@ -227,6 +229,8 @@ impl Actor {
             batches: BTreeMap::new(),
             jobs,
             results,
+            runs_dead: false,
+            launch_dead: false,
             quiescing: false,
             last_batch_tick: Instant::now(),
             child_scans,
@@ -249,7 +253,7 @@ impl Actor {
     pub fn finished(&self) -> bool {
         self.quiescing
             && self.git.idle()
-            && self.runs.idle()
+            && self.runs.idle_or_dead()
             && self.slots.values().all(|slot| {
                 !slot.info.state.is_live()
                     && !slot.preparing
@@ -896,6 +900,10 @@ impl Actor {
             !self.quiescing,
             "host shutdown is in progress; no new terminals accepted"
         );
+        ensure!(
+            !self.launch_dead,
+            "shell preparation worker exited; restart the host for new terminals"
+        );
         crate::model::valid_name(&terminal.name)?;
         crate::model::absolute_path(&terminal.cwd)?;
         crate::model::validate_sources(&terminal.sources)?;
@@ -1025,6 +1033,7 @@ impl Actor {
         let run_to_cancel = match &self.slot(session)?.purpose {
             SlotPurpose::Run { run_id: Some(id) }
                 if !self.slot(session)?.run_cancel_durable
+                    && !self.runs_dead
                     && self.slot(session)?.info.state.is_live() =>
             {
                 Some(id.clone())
@@ -1320,9 +1329,14 @@ impl Actor {
                         result
                     }
                     Ok(children::ChildState::Running) => {
+                        // The run ledger's cancel record gates descendant
+                        // signals. With its worker dead the durable intent is
+                        // this host ledger's own Closing record; the run entry
+                        // reconciles as unknown on the next host.
                         if slot.cleanup.requested
                             && (!matches!(slot.purpose, SlotPurpose::Run { .. })
-                                || slot.run_cancel_durable)
+                                || slot.run_cancel_durable
+                                || self.runs_dead)
                             && slot.cleanup.signalled.get(&process.pid).copied()
                                 != Some(slot.cleanup.force)
                         {
@@ -1410,6 +1424,9 @@ impl Actor {
             };
             self.accept_run_event(event);
         }
+        if self.runs.dead() {
+            self.mark_runs_dead();
+        }
         let retry_cancel: Vec<_> = self
             .slots
             .values()
@@ -1417,6 +1434,7 @@ impl Actor {
                 slot.cleanup.requested
                     && !slot.run_cancel_durable
                     && !slot.run_cancel_pending
+                    && !self.runs_dead
                     && slot.info.state.is_live()
                     && slot.run_retry_after.is_none_or(|at| Instant::now() >= at)
             })
@@ -1435,10 +1453,14 @@ impl Actor {
             }
         }
         for _ in 0..8 {
-            let Ok(completed) = self.results.try_recv() else {
-                break;
-            };
-            self.accept_prepared(completed);
+            match self.results.try_recv() {
+                Ok(completed) => self.accept_prepared(completed),
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.fail_pending_prepares();
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+            }
         }
         self.git.tick(&self.source_gate);
         self.poll_child_inventory();
@@ -1687,6 +1709,88 @@ impl Actor {
         if !self.quiescing && self.last_batch_tick.elapsed() >= Duration::from_millis(100) {
             self.last_batch_tick = Instant::now();
             self.tick_batches();
+        }
+    }
+    /// The single run-registry worker is gone: its ledger stays live on disk,
+    /// so no outcome is rewritten here. Live run sessions keep their terminals;
+    /// their records reconcile as unknown when the next host opens the ledger.
+    fn mark_runs_dead(&mut self) {
+        if self.runs_dead {
+            return;
+        }
+        self.runs_dead = true;
+        for slot in self.slots.values_mut() {
+            match &slot.purpose {
+                SlotPurpose::Run { run_id: Some(_) } => {
+                    if slot.info.state.is_live() {
+                        slot.info.error = Some(
+                            "run registry worker exited; the run ledger records this execution as unknown on restart"
+                                .into(),
+                        );
+                        slot.run_cancel_pending = false;
+                        slot.run_retry_after = None;
+                    }
+                    // No finish or cancel event can arrive regardless of the
+                    // slot's own state; a pending Finish work item is lost with
+                    // the worker and must not keep shutdown waiting.
+                    slot.run_finalized = true;
+                }
+                SlotPurpose::Run { run_id: None } if slot.preparing => {
+                    slot.preparing = false;
+                    slot.info.state = SessionState::Failed;
+                    slot.info.initialization = Some(InitializationState::Failed);
+                    slot.info.owner = None;
+                    slot.info.child_pid = None;
+                    slot.info.error =
+                        Some("run registry worker exited before the task was prepared".into());
+                    slot.exited_at = Some(Instant::now());
+                    slot.run_finalized = true;
+                }
+                // Editor launches run on the same registry worker; a lost
+                // event would wedge the slot in Preparing forever.
+                SlotPurpose::Editor if slot.preparing => {
+                    slot.preparing = false;
+                    slot.info.state = SessionState::Failed;
+                    slot.info.initialization = Some(InitializationState::Failed);
+                    slot.info.owner = None;
+                    slot.info.child_pid = None;
+                    slot.info.error =
+                        Some("run registry worker exited before the editor was prepared".into());
+                    slot.exited_at = Some(Instant::now());
+                    slot.run_finalized = true;
+                }
+                _ => {}
+            }
+        }
+        let _ = self.persist();
+    }
+    /// The shell-preparation worker is gone; a consumed job may have spawned a
+    /// PTY that was dropped without ownership transfer, so those slots fail.
+    fn fail_pending_prepares(&mut self) {
+        if self.launch_dead {
+            return;
+        }
+        self.launch_dead = true;
+        let mut changed = false;
+        for slot in self.slots.values_mut() {
+            if !slot.preparing {
+                continue;
+            }
+            slot.preparing = false;
+            slot.info.state = SessionState::Failed;
+            slot.info.initialization = Some(InitializationState::Failed);
+            slot.info.owner = None;
+            slot.info.child_pid = None;
+            slot.info.error =
+                Some("shell preparation worker exited; no reviewed launch ran".into());
+            slot.exited_at = Some(Instant::now());
+            if slot.info.persistent {
+                slot.purpose = SlotPurpose::Terminal(None);
+            }
+            changed = true;
+        }
+        if changed {
+            let _ = self.persist();
         }
     }
     fn accept_prepared(&mut self, completed: Completed) {

@@ -18,7 +18,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 struct Work {
     envelope: Envelope,
@@ -52,6 +52,14 @@ impl Drop for SocketGuard {
         }
     }
 }
+/// An IPC worker that exited for any reason decrements this counter. Panic
+/// unwinds the guard the same way a channel close does.
+struct LiveWorker(Arc<AtomicUsize>);
+impl Drop for LiveWorker {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 pub fn serve(store: Store, launcher: PathBuf) -> Result<()> {
     children::enable_subreaper()?;
@@ -75,8 +83,69 @@ pub fn serve(store: Store, launcher: PathBuf) -> Result<()> {
         max_sessions: MAX_TERMINALS,
         max_cells: crate::terminal::MAX_TERMINAL_CELLS,
     };
+    let started_at_ms = now_ms();
+    // A host that owns an identity records its own exit; null stdio means this
+    // durable note is the only diagnosis after a crash or wedged worker. A
+    // panic is recorded the same way before the unwind continues.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        serve_owned(&store, launcher, &info, started_at_ms)
+    }));
+    match outcome {
+        Ok(outcome) => {
+            record_exit(&store, &info, started_at_ms, &outcome);
+            outcome
+        }
+        Err(payload) => {
+            record_exit(
+                &store,
+                &info,
+                started_at_ms,
+                &Err(anyhow::anyhow!("host serve loop panicked")),
+            );
+            std::panic::resume_unwind(payload)
+        }
+    }
+}
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+/// Once the socket is bound the host owns its identity: mark it running so a
+/// later crash is distinguishable from a recorded shutdown.
+fn record_running(store: &Store, info: &HostInfo, started_at_ms: u64) {
+    let record = crate::saved_state::HostExit {
+        schema: 1,
+        host_instance: info.host_instance.clone(),
+        pid: info.pid,
+        started_at_ms,
+        stopped_at_ms: None,
+        error: None,
+    };
+    let _ = store.write_state("host-exit.json", &record);
+}
+fn record_exit(store: &Store, info: &HostInfo, started_at_ms: u64, outcome: &Result<()>) {
+    let record = crate::saved_state::HostExit {
+        schema: 1,
+        host_instance: info.host_instance.clone(),
+        pid: info.pid,
+        started_at_ms,
+        stopped_at_ms: Some(now_ms()),
+        error: outcome.as_ref().err().map(protocol::safe_error),
+    };
+    let _ = store.write_state("host-exit.json", &record);
+}
+
+fn serve_owned(
+    store: &Store,
+    launcher: PathBuf,
+    info: &HostInfo,
+    started_at_ms: u64,
+) -> Result<()> {
     // Validate the durable ledger before advertising a replacement host.
-    let mut actor = actor::Actor::new(store.clone(), launcher, info.clone())?;
+    let mut actor = actor::Actor::new(store.clone(), launcher.clone(), info.clone())?;
     let path = store.socket_path();
     match fs::symlink_metadata(&path) {
         Ok(metadata) => {
@@ -110,19 +179,24 @@ pub fn serve(store: Store, launcher: PathBuf) -> Result<()> {
     };
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
+    record_running(store, info, started_at_ms);
     let (accepted_tx, accepted_rx) = mpsc::sync_channel::<Accepted>(16);
     let accepted_rx = Arc::new(Mutex::new(accepted_rx));
     let (request_tx, request_rx) = mpsc::sync_channel::<Work>(64);
     let inflight = Arc::new(AtomicUsize::new(0));
+    let workers_alive = Arc::new(AtomicUsize::new(0));
     let mut workers = Vec::new();
     for number in 0..4 {
         let incoming = accepted_rx.clone();
         let outgoing = request_tx.clone();
         let instance = info.host_instance.clone();
-        workers.push(
-            std::thread::Builder::new()
-                .name(format!("idk-ipc-{number}"))
-                .spawn(move || loop {
+        workers_alive.fetch_add(1, Ordering::AcqRel);
+        let alive = workers_alive.clone();
+        match std::thread::Builder::new()
+            .name(format!("idk-ipc-{number}"))
+            .spawn(move || {
+                let _alive = LiveWorker(alive);
+                loop {
                     let item = match incoming.lock() {
                         Ok(receiver) => receiver.recv(),
                         Err(_) => return,
@@ -131,11 +205,23 @@ pub fn serve(store: Store, launcher: PathBuf) -> Result<()> {
                         return;
                     };
                     let _ = handle_connection(&mut item, &outgoing, &instance);
-                })?,
-        );
+                }
+            }) {
+            Ok(worker) => workers.push(worker),
+            Err(error) => {
+                workers_alive.fetch_sub(1, Ordering::AcqRel);
+                return Err(error).context("start host IPC worker");
+            }
+        }
     }
     drop(request_tx);
     loop {
+        // A dead IPC pool can never serve another request; exiting lets a
+        // client-spawned host recover through the durable ledgers.
+        ensure!(
+            workers_alive.load(Ordering::Acquire) > 0,
+            "all host IPC workers exited"
+        );
         if !actor.finished() {
             for _ in 0..16 {
                 match listener.accept() {

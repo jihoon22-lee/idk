@@ -1758,3 +1758,35 @@ fn redact_endpoint(value: &str) -> (String, bool, bool) {
     }
     (value.into(), false, false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+    }
+    #[test]
+    fn version_parser_never_panics_on_arbitrary_output() {
+        let mut rng = Rng(0xdeadbeefcafef00d);
+        for _ in 0..20_000 {
+            let len = (rng.next() % 128) as usize;
+            let mut bytes = b"git version ".to_vec();
+            bytes.extend((0..len).map(|_| (rng.next() & 0xff) as u8));
+            let _ = parse_version(&bytes);
+            let raw: Vec<u8> = (0..len).map(|_| (rng.next() & 0xff) as u8).collect();
+            let _ = parse_version(&raw);
+        }
+        assert_eq!(parse_version(b"git version 2.39.2").unwrap(), (2, 39));
+        assert_eq!(parse_version(b"git version 2.39").unwrap(), (2, 39));
+        assert!(parse_version(b"git version 2").is_err());
+        assert!(parse_version(b"git version").is_err());
+        assert!(parse_version(b"not git").is_err());
+        assert!(parse_version(b"git version x.y").is_err());
+    }
+}

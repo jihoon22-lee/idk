@@ -5,7 +5,7 @@ use crate::model::{new_id, SourceGate};
 use crate::problems::{ProblemParser, ProblemSet};
 use crate::project::LaunchEnvironment;
 use crate::protocol::safe_error;
-use crate::run::RunRegistry;
+use crate::run::{observe_source, BeginReservation, BeginTicket, RunRegistry, SourceProbe};
 use crate::run_wire::*;
 use crate::store::{ensure_private_dir, Store};
 use crate::task::TaskService;
@@ -18,7 +18,76 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 const LIMIT_JOBS: usize = 128;
 const LIMIT_CACHE: usize = 16 * 1024 * 1024;
+const LIMIT_DEFERRED: usize = 8;
 const TTL: Duration = Duration::from_secs(300);
+/// Source observations (bounded git subprocesses) run on a dedicated worker so
+/// the registry worker never blocks on git. Results carry a sequence tag.
+struct Prober {
+    jobs: mpsc::Sender<(u64, Option<crate::git::Repository>, SourceGate)>,
+    results: mpsc::Receiver<(u64, SourceObservation)>,
+    seq: u64,
+}
+impl Prober {
+    fn new() -> Option<Self> {
+        let (jobs, incoming) = mpsc::channel::<(u64, Option<crate::git::Repository>, SourceGate)>();
+        let (results, outgoing) = mpsc::channel::<(u64, SourceObservation)>();
+        std::thread::Builder::new()
+            .name("idk-run-probe".into())
+            .spawn(move || {
+                while let Ok((seq, repository, gate)) = incoming.recv() {
+                    let _ = results.send((seq, observe_source(repository.as_ref(), &gate)));
+                }
+            })
+            .ok()?;
+        Some(Self {
+            jobs,
+            results: outgoing,
+            seq: 0,
+        })
+    }
+    /// Queues an observation. A dead probe worker hands the probe back so the
+    /// caller can observe synchronously instead of losing the work.
+    fn dispatch(&mut self, probe: SourceProbe) -> std::result::Result<u64, SourceProbe> {
+        let (repository, gate) = probe.into_parts();
+        self.seq += 1;
+        self.jobs
+            .send((self.seq, repository.clone(), gate.clone()))
+            .map_err(|_| SourceProbe::from_parts(repository, gate))?;
+        Ok(self.seq)
+    }
+}
+/// A work item waiting on an off-thread source observation. Registry access
+/// still happens only on the worker, after the observation arrives.
+enum Deferred {
+    Start {
+        seq: u64,
+        job_id: String,
+        session: String,
+        rows: u16,
+        cols: u16,
+        cancel: Arc<AtomicBool>,
+        ticket: Box<BeginTicket>,
+        /// Same-intent/non-parallel requests attached while observing; each
+        /// resolves to Started(existing: true) when the begin commits.
+        waiters: Vec<(String, Option<String>, Arc<AtomicBool>)>,
+    },
+    Finish {
+        seq: u64,
+        run_id: String,
+        exit: Option<TerminalExit>,
+        error: Option<String>,
+        /// Repository identity captured at dispatch for the error record if
+        /// the observation can never arrive.
+        identity: Option<PathBuf>,
+    },
+}
+impl Deferred {
+    fn seq(&self) -> u64 {
+        match self {
+            Self::Start { seq, .. } | Self::Finish { seq, .. } => *seq,
+        }
+    }
+}
 struct JobRecord {
     owner: String,
     info: RunJob,
@@ -36,7 +105,9 @@ pub(super) enum Work {
     },
     Cancel {
         run_id: String,
-        force: bool,
+        /// Propagates to the actor's descendant signal level through the
+        /// event; it is unrelated to `RunRegistry::cancel`'s timeout flag.
+        signal_level: bool,
     },
     Finish {
         run_id: String,
@@ -59,6 +130,7 @@ pub(super) struct Bridge {
     receiver: mpsc::Receiver<Event>,
     jobs: HashMap<String, JobRecord>,
     pending: usize,
+    dead: bool,
 }
 impl Bridge {
     pub fn new(
@@ -76,7 +148,65 @@ impl Bridge {
             .spawn(move || {
                 let mut reviews: HashMap<String, (String, EditorPlan, Instant)> = HashMap::new();
                 let mut registration_refresh = Instant::now();
-                loop {
+                let mut prober = Prober::new();
+                let mut deferred: Vec<Deferred> = Vec::new();
+                'outer: loop {
+                    // Completed observations drain first: a produced result must
+                    // not wait behind newer work.
+                    let mut completed = Vec::new();
+                    let mut prober_dead = false;
+                    if let Some(probe) = &prober {
+                        loop {
+                            match probe.results.try_recv() {
+                                Ok(done) => completed.push(done),
+                                Err(mpsc::TryRecvError::Empty) => break,
+                                Err(mpsc::TryRecvError::Disconnected) => {
+                                    prober_dead = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if prober_dead {
+                        prober = None;
+                    }
+                    for (seq, observation) in completed {
+                        let Some(index) = deferred.iter().position(|entry| entry.seq() == seq)
+                        else {
+                            continue;
+                        };
+                        for event in complete_deferred(
+                            &launcher,
+                            &resources,
+                            &mut registry,
+                            deferred.remove(index),
+                            observation,
+                        ) {
+                            if outgoing.send(event).is_err() {
+                                break 'outer;
+                            }
+                        }
+                    }
+                    if prober.is_none() && !deferred.is_empty() {
+                        // The observation worker is gone: resolve reserved
+                        // starts/finishes with an explicit unconfirmed-source
+                        // record instead of wedging their leases.
+                        let entries = std::mem::take(&mut deferred);
+                        for entry in entries {
+                            let observation = lost_observation(&entry);
+                            for event in complete_deferred(
+                                &launcher,
+                                &resources,
+                                &mut registry,
+                                entry,
+                                observation,
+                            ) {
+                                if outgoing.send(event).is_err() {
+                                    break 'outer;
+                                }
+                            }
+                        }
+                    }
                     if registration_refresh.elapsed() >= Duration::from_secs(1) {
                         let _ = registry.publish_registered_sources();
                         registration_refresh = Instant::now();
@@ -88,40 +218,34 @@ impl Bridge {
                         Err(_) => break,
                     };
                     if let Some(work) = work {
-                        let event = match work {
+                        let events = match work {
                             Work::Request {
                                 id,
                                 client,
                                 request,
                                 session,
                                 cancel,
+                            } => request_events(
+                                &store,
+                                &launcher,
+                                &resources,
+                                &mut registry,
+                                &mut reviews,
+                                &mut prober,
+                                &mut deferred,
+                                id,
+                                client,
+                                *request,
+                                session,
+                                &cancel,
+                            ),
+                            Work::Cancel {
+                                run_id,
+                                signal_level,
                             } => {
-                                let mut event = Event {
-                                    job_id: Some(id),
-                                    session_id: session.clone(),
-                                    runtime: None,
-                                    run: None,
-                                    result: Ok(RunResult::Approved),
-                                    cancel: None,
-                                    work_done: true,
-                                };
-                                event.result = execute(
-                                    &store,
-                                    &launcher,
-                                    &resources,
-                                    &mut registry,
-                                    &mut reviews,
-                                    &client,
-                                    *request,
-                                    session,
-                                    &cancel,
-                                    &mut event.runtime,
-                                    &mut event.run,
-                                    &mut event.cancel,
-                                );
-                                event
-                            }
-                            Work::Cancel { run_id, force } => {
+                                // `false` is the automatic-timeout flag, not
+                                // the signal level: user cancellation intent is
+                                // durable regardless of descendant signalling.
                                 let result = registry.cancel(&run_id, false);
                                 let run = result
                                     .as_ref()
@@ -129,46 +253,35 @@ impl Bridge {
                                     .cloned()
                                     .or_else(|| registry.info(&run_id).ok());
                                 let session = run.as_ref().and_then(|run| run.session_id.clone());
-                                Event {
+                                vec![Event {
                                     job_id: None,
                                     session_id: session,
                                     runtime: None,
                                     run,
                                     result: result.map(RunResult::Run),
-                                    cancel: Some((run_id, force)),
+                                    cancel: Some((run_id, signal_level)),
                                     work_done: true,
-                                }
+                                }]
                             }
                             Work::Finish {
                                 run_id,
                                 exit,
                                 error,
                                 partial,
-                            } => {
-                                if partial {
-                                    if let Ok(sink) = registry.output_sink(&run_id) {
-                                        sink.mark_partial();
-                                    }
-                                }
-                                let result = registry.finish(&run_id, exit, true, error);
-                                let run = result
-                                    .as_ref()
-                                    .ok()
-                                    .cloned()
-                                    .or_else(|| registry.info(&run_id).ok());
-                                Event {
-                                    job_id: None,
-                                    session_id: run.as_ref().and_then(|run| run.session_id.clone()),
-                                    runtime: None,
-                                    run,
-                                    result: result.map(RunResult::Run),
-                                    cancel: None,
-                                    work_done: true,
-                                }
-                            }
+                            } => finish_events(
+                                &mut registry,
+                                &mut prober,
+                                &mut deferred,
+                                run_id,
+                                exit,
+                                error,
+                                partial,
+                            ),
                         };
-                        if outgoing.send(event).is_err() {
-                            break;
+                        for event in events {
+                            if outgoing.send(event).is_err() {
+                                break 'outer;
+                            }
                         }
                     }
                     for run_id in registry.timed_out() {
@@ -198,7 +311,35 @@ impl Bridge {
             receiver,
             jobs: HashMap::new(),
             pending: 0,
+            dead: false,
         })
+    }
+    fn ensure_live(&self) -> Result<()> {
+        ensure!(
+            !self.dead,
+            "run worker exited; restart the host so its ledger reconciles outstanding runs"
+        );
+        Ok(())
+    }
+    /// The single registry worker is gone: in-flight work can never report.
+    /// Pending client-visible jobs fail explicitly instead of polling forever.
+    fn mark_dead(&mut self) {
+        if self.dead {
+            return;
+        }
+        self.dead = true;
+        for job in self.jobs.values_mut() {
+            if job.info.state == RunJobState::Pending {
+                job.info.state = RunJobState::Failed;
+                job.info.error = Some("run worker exited before producing a result".into());
+            }
+        }
+    }
+    pub fn dead(&self) -> bool {
+        self.dead
+    }
+    pub fn idle_or_dead(&self) -> bool {
+        self.pending == 0 || self.dead
     }
     pub fn submit(
         &mut self,
@@ -207,6 +348,7 @@ impl Bridge {
         session: Option<String>,
         cancel: Arc<AtomicBool>,
     ) -> Result<RunJob> {
+        self.ensure_live()?;
         self.jobs
             .retain(|_, job| job.info.state == RunJobState::Pending || job.created.elapsed() < TTL);
         while self.jobs.len() >= LIMIT_JOBS
@@ -267,10 +409,11 @@ impl Bridge {
         Ok(job.info.clone())
     }
     pub fn cancel_run(&mut self, id: &str, force: bool) -> Result<()> {
+        self.ensure_live()?;
         self.sender
             .try_send(Work::Cancel {
                 run_id: id.into(),
-                force,
+                signal_level: force,
             })
             .map_err(|_| anyhow::anyhow!("run cancellation queue full; no process signalled"))?;
         self.pending += 1;
@@ -283,6 +426,7 @@ impl Bridge {
         error: Option<String>,
         partial: bool,
     ) -> Result<()> {
+        self.ensure_live()?;
         self.sender
             .try_send(Work::Finish {
                 run_id: id.into(),
@@ -295,7 +439,16 @@ impl Bridge {
         Ok(())
     }
     pub fn poll(&mut self) -> Option<Event> {
-        let event = self.receiver.try_recv().ok()?;
+        let event = match self.receiver.try_recv() {
+            Ok(event) => event,
+            // A dead registry worker cannot be confused with an empty queue:
+            // live runs keep their ledger records and the actor marks them.
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.mark_dead();
+                return None;
+            }
+            Err(mpsc::TryRecvError::Empty) => return None,
+        };
         if event.work_done {
             self.pending = self.pending.saturating_sub(1);
         }
@@ -346,9 +499,6 @@ impl Bridge {
                 _ => None,
             })
             .context("editor review expired or belongs to another client")
-    }
-    pub fn idle(&self) -> bool {
-        self.pending == 0
     }
 }
 #[allow(clippy::too_many_arguments)]
@@ -444,70 +594,10 @@ fn execute(
             if started.existing {
                 return Ok(RunResult::Started(started));
             }
-            let id = started.run.run_id.clone();
-            let result = (|| -> Result<Runtime> {
-                ensure!(
-                    !cancel.load(Ordering::Acquire),
-                    "task cancelled before shell preparation"
-                );
-                let shell = registry.shell_plan(&id)?;
-                let prepared = shell.prepare(resources, launcher)?;
-                if cancel.load(Ordering::Acquire) {
-                    let _ = std::fs::remove_dir_all(&prepared.resource_dir);
-                    bail!("task cancelled before shell creation");
-                }
-                let output = registry.output_sink(&id)?;
-                let mut terminal = match TerminalSession::spawn_with_output(
-                    prepared.command,
-                    rows,
-                    cols,
-                    2000,
-                    Some(output.clone()),
-                ) {
-                    Ok(terminal) => terminal,
-                    Err(error) => {
-                        let _ = std::fs::remove_dir_all(&prepared.resource_dir);
-                        return Err(error);
-                    }
-                };
-                terminal.defer_reaping();
-                Ok(Runtime {
-                    terminal,
-                    state_path: prepared.state_path,
-                    resource_dir: prepared.resource_dir,
-                    bootstrap: prepared.bootstrap_bytes,
-                    revision: started.run.definition_revision,
-                    digest: started.run.launch_digest.clone(),
-                    output: Some(output),
-                })
-            })();
-            match result {
-                Ok(created) => {
-                    *runtime = Some(created);
-                    if let Err(error) = registry.mark_running(&id, &session) {
-                        cancel.store(true, Ordering::Release);
-                        *run_out = Some(registry.info(&id)?);
-                        return Err(error);
-                    }
-                    if cancel.load(Ordering::Acquire) {
-                        registry.cancel(&id, false)?;
-                        *cancel_out = Some((id.clone(), false));
-                    }
-                    let run = registry.info(&id)?;
-                    *run_out = Some(run.clone());
-                    Ok(RunResult::Started(RunStartReply {
-                        run,
-                        existing: false,
-                    }))
-                }
-                Err(error) => {
-                    if cancel.load(Ordering::Acquire) {
-                        let _ = registry.cancel(&id, false);
-                    }
-                    *run_out = Some(registry.finish(&id, None, true, Some(safe_error(&error)))?);
-                    Err(error)
-                }
-            }
+            spawn_start(
+                launcher, resources, registry, &session, rows, cols, started, cancel, runtime,
+                run_out, cancel_out,
+            )
         }
         RunRequest::Info { run_id } => {
             let run = registry.info(&run_id)?;
@@ -635,20 +725,514 @@ fn problems(registry: &RunRegistry, id: &str, cancel: &AtomicBool) -> Result<Pro
     parser.finish(&registry.info(id)?.log)
 }
 
+/// The post-reservation half of a Start request: prepare and spawn the
+/// runtime, then mark the run running. Shared by the synchronous execute()
+/// path and deferred source-observation completions.
+#[allow(clippy::too_many_arguments)]
+fn spawn_start(
+    launcher: &std::path::Path,
+    resources: &std::path::Path,
+    registry: &mut RunRegistry,
+    session: &str,
+    rows: u16,
+    cols: u16,
+    started: RunStartReply,
+    cancel: &AtomicBool,
+    runtime: &mut Option<Runtime>,
+    run_out: &mut Option<RunInfo>,
+    cancel_out: &mut Option<(String, bool)>,
+) -> Result<RunResult> {
+    let id = started.run.run_id.clone();
+    let result = (|| -> Result<Runtime> {
+        ensure!(
+            !cancel.load(Ordering::Acquire),
+            "task cancelled before shell preparation"
+        );
+        let shell = registry.shell_plan(&id)?;
+        let prepared = shell.prepare(resources, launcher)?;
+        if cancel.load(Ordering::Acquire) {
+            let _ = std::fs::remove_dir_all(&prepared.resource_dir);
+            bail!("task cancelled before shell creation");
+        }
+        let output = registry.output_sink(&id)?;
+        let mut terminal = match TerminalSession::spawn_with_output(
+            prepared.command,
+            rows,
+            cols,
+            2000,
+            Some(output.clone()),
+        ) {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                let _ = std::fs::remove_dir_all(&prepared.resource_dir);
+                return Err(error);
+            }
+        };
+        terminal.defer_reaping();
+        Ok(Runtime {
+            terminal,
+            state_path: prepared.state_path,
+            resource_dir: prepared.resource_dir,
+            bootstrap: prepared.bootstrap_bytes,
+            revision: started.run.definition_revision,
+            digest: started.run.launch_digest.clone(),
+            output: Some(output),
+        })
+    })();
+    match result {
+        Ok(created) => {
+            *runtime = Some(created);
+            if let Err(error) = registry.mark_running(&id, session) {
+                cancel.store(true, Ordering::Release);
+                *run_out = Some(registry.info(&id)?);
+                return Err(error);
+            }
+            if cancel.load(Ordering::Acquire) {
+                registry.cancel(&id, false)?;
+                *cancel_out = Some((id.clone(), false));
+            }
+            let run = registry.info(&id)?;
+            *run_out = Some(run.clone());
+            Ok(RunResult::Started(RunStartReply {
+                run,
+                existing: false,
+            }))
+        }
+        Err(error) => {
+            if cancel.load(Ordering::Acquire) {
+                let _ = registry.cancel(&id, false);
+            }
+            *run_out = Some(registry.finish(&id, None, true, Some(safe_error(&error)))?);
+            Err(error)
+        }
+    }
+}
+/// Commits a reserved start once its source observation arrives. A cancel
+/// during observation abandons the reservation so its lease is released and
+/// no pending record is left behind.
+#[allow(clippy::too_many_arguments)]
+fn complete_start(
+    launcher: &std::path::Path,
+    resources: &std::path::Path,
+    registry: &mut RunRegistry,
+    session: &str,
+    rows: u16,
+    cols: u16,
+    ticket: BeginTicket,
+    source_start: SourceObservation,
+    cancel: &AtomicBool,
+    runtime: &mut Option<Runtime>,
+    run_out: &mut Option<RunInfo>,
+    cancel_out: &mut Option<(String, bool)>,
+) -> Result<RunResult> {
+    if cancel.load(Ordering::Acquire) {
+        registry.begin_abandon(ticket);
+        bail!("task preparation cancelled");
+    }
+    let started = registry.begin_commit(ticket, source_start)?;
+    *run_out = Some(started.run.clone());
+    spawn_start(
+        launcher, resources, registry, session, rows, cols, started, cancel, runtime, run_out,
+        cancel_out,
+    )
+}
+/// An observation that can never arrive. Recorded as an explicit error so a
+/// dead probe worker never looks like confirmed source state.
+fn lost_observation(entry: &Deferred) -> SourceObservation {
+    let identity = match entry {
+        Deferred::Start { ticket, .. } => ticket.probe_identity(),
+        Deferred::Finish { identity, .. } => identity.clone(),
+    };
+    SourceObservation {
+        identity,
+        generation: None,
+        git_head: None,
+        dirty: None,
+        status_digest: None,
+        error: Some(
+            "source observation worker exited before reporting; source state unconfirmed".into(),
+        ),
+    }
+}
+/// Resolves a deferred work item once its observation (or an explicit error
+/// observation) exists. Registry access stays on this thread.
+fn complete_deferred(
+    launcher: &std::path::Path,
+    resources: &std::path::Path,
+    registry: &mut RunRegistry,
+    entry: Deferred,
+    observation: SourceObservation,
+) -> Vec<Event> {
+    match entry {
+        Deferred::Start {
+            job_id,
+            session,
+            rows,
+            cols,
+            cancel,
+            ticket,
+            waiters,
+            ..
+        } => {
+            let mut runtime = None;
+            let mut run_out = None;
+            let mut cancel_out = None;
+            let result = complete_start(
+                launcher,
+                resources,
+                registry,
+                &session,
+                rows,
+                cols,
+                *ticket,
+                observation,
+                &cancel,
+                &mut runtime,
+                &mut run_out,
+                &mut cancel_out,
+            );
+            // Attached waiters share the start's outcome as existing:true, or
+            // its explicit error when the commit failed before a run existed.
+            let waiter_events: Vec<Event> = waiters
+                .into_iter()
+                .map(|(waiter_id, waiter_session, waiter_cancel)| {
+                    let (run, result) = if waiter_cancel.load(Ordering::Acquire) {
+                        (
+                            run_out.clone(),
+                            Err(anyhow::anyhow!("run job cancelled before execution")),
+                        )
+                    } else {
+                        match &result {
+                            Ok(RunResult::Started(reply)) => (
+                                run_out.clone(),
+                                Ok(RunResult::Started(RunStartReply {
+                                    run: reply.run.clone(),
+                                    existing: true,
+                                })),
+                            ),
+                            Ok(other) => (run_out.clone(), Ok(other.clone())),
+                            Err(error) => {
+                                (run_out.clone(), Err(anyhow::anyhow!(error.to_string())))
+                            }
+                        }
+                    };
+                    Event {
+                        job_id: Some(waiter_id),
+                        session_id: waiter_session,
+                        runtime: None,
+                        run,
+                        result,
+                        cancel: None,
+                        work_done: true,
+                    }
+                })
+                .collect();
+            let mut events = vec![Event {
+                job_id: Some(job_id),
+                session_id: Some(session),
+                runtime,
+                run: run_out,
+                result,
+                cancel: cancel_out,
+                work_done: true,
+            }];
+            events.extend(waiter_events);
+            events
+        }
+        Deferred::Finish {
+            run_id,
+            exit,
+            error,
+            ..
+        } => {
+            let result = registry.finish_observed(&run_id, exit, true, error, observation);
+            let run = result
+                .as_ref()
+                .ok()
+                .cloned()
+                .or_else(|| registry.info(&run_id).ok());
+            vec![Event {
+                job_id: None,
+                session_id: run.as_ref().and_then(|run| run.session_id.clone()),
+                runtime: None,
+                run,
+                result: result.map(RunResult::Run),
+                cancel: None,
+                work_done: true,
+            }]
+        }
+    }
+}
+/// Routes a client request: attaches duplicate starts to an in-flight
+/// deferred begin, defers new source observations to the probe worker, and
+/// runs everything else synchronously on the registry worker.
+#[allow(clippy::too_many_arguments)]
+fn request_events(
+    store: &Store,
+    launcher: &std::path::Path,
+    resources: &std::path::Path,
+    registry: &mut RunRegistry,
+    reviews: &mut HashMap<String, (String, EditorPlan, Instant)>,
+    prober: &mut Option<Prober>,
+    deferred: &mut Vec<Deferred>,
+    id: String,
+    client: String,
+    request: RunRequest,
+    session: Option<String>,
+    cancel: &Arc<AtomicBool>,
+) -> Vec<Event> {
+    if let RunRequest::Start {
+        project_id,
+        task_id,
+        operation_id,
+        environment,
+        parallel,
+        rows,
+        cols,
+    } = &request
+    {
+        // A start matching an in-flight begin attaches to its outcome instead
+        // of racing a second reservation for the same intent or task.
+        for entry in deferred.iter_mut() {
+            let Deferred::Start {
+                ticket, waiters, ..
+            } = entry
+            else {
+                continue;
+            };
+            let same_operation = ticket.operation_id() == operation_id;
+            let same_task = ticket.project_id() == project_id && ticket.task_id() == task_id;
+            if !same_operation && !(same_task && !parallel) {
+                continue;
+            }
+            if same_operation {
+                let tasks = TaskService { store };
+                let intent = LaunchEnvironment::from_variables(environment.clone())
+                    .and_then(|env| tasks.launch_plan(project_id, task_id, env))
+                    .map(|plan| ticket.same_intent(&plan));
+                match intent {
+                    Ok(true) => {}
+                    Ok(false) | Err(_) => {
+                        let error = intent.err().unwrap_or_else(|| {
+                            anyhow::anyhow!(
+                                "operation ID already refers to a different execution intent"
+                            )
+                        });
+                        return vec![Event {
+                            job_id: Some(id),
+                            session_id: session,
+                            runtime: None,
+                            run: None,
+                            result: Err(error),
+                            cancel: None,
+                            work_done: true,
+                        }];
+                    }
+                }
+            }
+            waiters.push((id, session, cancel.clone()));
+            return Vec::new();
+        }
+        // New starts defer their git observation when the probe worker and
+        // the deferred bound allow it; anything else stays synchronous.
+        if session.is_some() && !cancel.load(Ordering::Acquire) && deferred.len() < LIMIT_DEFERRED {
+            let tasks = TaskService { store };
+            let dispatch = LaunchEnvironment::from_variables(environment.clone())
+                .and_then(|env| tasks.launch_plan(project_id, task_id, env))
+                .and_then(|plan| registry.begin_reserve(plan, operation_id, *parallel));
+            match dispatch {
+                Ok(BeginReservation::Existing(reply)) => {
+                    return vec![Event {
+                        job_id: Some(id),
+                        session_id: session,
+                        runtime: None,
+                        run: Some(reply.run.clone()),
+                        result: Ok(RunResult::Started(reply)),
+                        cancel: None,
+                        work_done: true,
+                    }];
+                }
+                Ok(BeginReservation::Fresh(ticket)) => {
+                    let probe = ticket.probe(registry.gate());
+                    let dispatched = match prober.as_mut() {
+                        Some(worker) => worker.dispatch(probe),
+                        None => Err(probe),
+                    };
+                    match dispatched {
+                        Ok(seq) => {
+                            deferred.push(Deferred::Start {
+                                seq,
+                                job_id: id,
+                                session: session.clone().expect("task session was not reserved"),
+                                rows: *rows,
+                                cols: *cols,
+                                cancel: cancel.clone(),
+                                ticket: Box::new(ticket),
+                                waiters: Vec::new(),
+                            });
+                            return Vec::new();
+                        }
+                        Err(probe) => {
+                            let observation = probe.observe_now();
+                            let mut runtime = None;
+                            let mut run_out = None;
+                            let mut cancel_out = None;
+                            let result = complete_start(
+                                launcher,
+                                resources,
+                                registry,
+                                session.as_deref().expect("task session was not reserved"),
+                                *rows,
+                                *cols,
+                                ticket,
+                                observation,
+                                cancel,
+                                &mut runtime,
+                                &mut run_out,
+                                &mut cancel_out,
+                            );
+                            return vec![Event {
+                                job_id: Some(id),
+                                session_id: session,
+                                runtime,
+                                run: run_out,
+                                result,
+                                cancel: cancel_out,
+                                work_done: true,
+                            }];
+                        }
+                    }
+                }
+                Err(error) => {
+                    return vec![Event {
+                        job_id: Some(id),
+                        session_id: session,
+                        runtime: None,
+                        run: None,
+                        result: Err(error),
+                        cancel: None,
+                        work_done: true,
+                    }];
+                }
+            }
+        }
+    }
+    let mut event = Event {
+        job_id: Some(id),
+        session_id: session.clone(),
+        runtime: None,
+        run: None,
+        result: Ok(RunResult::Approved),
+        cancel: None,
+        work_done: true,
+    };
+    event.result = execute(
+        store,
+        launcher,
+        resources,
+        registry,
+        reviews,
+        &client,
+        request,
+        session,
+        cancel,
+        &mut event.runtime,
+        &mut event.run,
+        &mut event.cancel,
+    );
+    vec![event]
+}
+/// Finishes a run: the source observation is deferred to the probe worker
+/// when the run owns a repository; without one the observation is trivial
+/// and the finish stays synchronous.
+fn finish_events(
+    registry: &mut RunRegistry,
+    prober: &mut Option<Prober>,
+    deferred: &mut Vec<Deferred>,
+    run_id: String,
+    exit: Option<TerminalExit>,
+    error: Option<String>,
+    partial: bool,
+) -> Vec<Event> {
+    if partial {
+        if let Ok(sink) = registry.output_sink(&run_id) {
+            sink.mark_partial();
+        }
+    }
+    if deferred.len() < LIMIT_DEFERRED {
+        if let Ok(probe) = registry.finish_probe(&run_id) {
+            if probe.identity().is_some() {
+                let identity = probe.identity();
+                let dispatched = match prober.as_mut() {
+                    Some(worker) => worker.dispatch(probe),
+                    None => Err(probe),
+                };
+                match dispatched {
+                    Ok(seq) => {
+                        deferred.push(Deferred::Finish {
+                            seq,
+                            run_id,
+                            exit,
+                            error,
+                            identity,
+                        });
+                        return Vec::new();
+                    }
+                    Err(probe) => {
+                        let observation = probe.observe_now();
+                        let result =
+                            registry.finish_observed(&run_id, exit, true, error, observation);
+                        let run = result
+                            .as_ref()
+                            .ok()
+                            .cloned()
+                            .or_else(|| registry.info(&run_id).ok());
+                        return vec![Event {
+                            job_id: None,
+                            session_id: run.as_ref().and_then(|run| run.session_id.clone()),
+                            runtime: None,
+                            run,
+                            result: result.map(RunResult::Run),
+                            cancel: None,
+                            work_done: true,
+                        }];
+                    }
+                }
+            }
+        }
+    }
+    let result = registry.finish(&run_id, exit, true, error);
+    let run = result
+        .as_ref()
+        .ok()
+        .cloned()
+        .or_else(|| registry.info(&run_id).ok());
+    vec![Event {
+        job_id: None,
+        session_id: run.as_ref().and_then(|run| run.session_id.clone()),
+        runtime: None,
+        run,
+        result: result.map(RunResult::Run),
+        cancel: None,
+        work_done: true,
+    }]
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn fixture() -> (Bridge, mpsc::Receiver<Work>) {
+    fn fixture() -> (Bridge, mpsc::Receiver<Work>, mpsc::SyncSender<Event>) {
         let (sender, incoming) = mpsc::sync_channel(32);
-        let (_outgoing, receiver) = mpsc::sync_channel(32);
+        let (outgoing, receiver) = mpsc::sync_channel(32);
         (
             Bridge {
                 sender,
                 receiver,
                 jobs: HashMap::new(),
                 pending: 0,
+                dead: false,
             },
             incoming,
+            outgoing,
         )
     }
     fn record(state: RunJobState) -> JobRecord {
@@ -667,8 +1251,48 @@ mod tests {
         }
     }
     #[test]
+    fn dead_registry_worker_fails_pending_jobs_and_rejects_work() {
+        let (mut bridge, _incoming, outgoing) = fixture();
+        let job = record(RunJobState::Pending);
+        let id = job.info.job_id.clone();
+        bridge.jobs.insert(id.clone(), job);
+        bridge.pending = 1;
+        // The only Event sender lives in the worker; dropping it is its death.
+        drop(outgoing);
+        assert!(bridge.poll().is_none());
+        assert!(bridge.dead());
+        assert!(bridge.idle_or_dead());
+        let job = bridge.job("client", &id).unwrap();
+        assert_eq!(job.state, RunJobState::Failed);
+        assert!(job.error.unwrap().contains("run worker exited"));
+        assert!(bridge
+            .submit(
+                "client",
+                RunRequest::List { project_id: None },
+                None,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .is_err());
+        assert!(bridge.cancel_run(&new_id(), false).is_err());
+        assert!(bridge.finish(&new_id(), None, None, false).is_err());
+    }
+    #[test]
+    fn live_worker_empty_poll_is_not_death() {
+        let (mut bridge, _incoming, _outgoing) = fixture();
+        assert!(bridge.poll().is_none());
+        assert!(!bridge.dead());
+        assert!(bridge
+            .submit(
+                "client",
+                RunRequest::List { project_id: None },
+                None,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .is_ok());
+    }
+    #[test]
     fn repeated_follow_requests_evict_completed_jobs_but_preserve_pending_work() {
-        let (mut bridge, incoming) = fixture();
+        let (mut bridge, incoming, _outgoing) = fixture();
         for _ in 0..LIMIT_JOBS {
             let job = record(RunJobState::Complete);
             bridge.jobs.insert(job.info.job_id.clone(), job);
@@ -702,7 +1326,7 @@ mod tests {
     }
     #[test]
     fn pending_large_results_cannot_exceed_aggregate_cache_limit() {
-        let (mut bridge, _incoming) = fixture();
+        let (mut bridge, _incoming, _outgoing) = fixture();
         let log = RunResult::Log(LogChunk {
             descriptor: LogDescriptor {
                 run_id: new_id(),

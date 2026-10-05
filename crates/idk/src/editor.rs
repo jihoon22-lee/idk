@@ -186,7 +186,7 @@ impl EditorService<'_> {
 pub fn validate_config(config: &EditorConfig) -> Result<()> {
     ensure!(
         config.executable.is_absolute() && config.args.len() <= 64,
-        "editor needs an absolute executable and at most64 arguments"
+        "editor needs an absolute executable and at most 64 arguments"
     );
     let delimiter = config
         .args

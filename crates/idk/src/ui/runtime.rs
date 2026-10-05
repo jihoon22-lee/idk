@@ -81,6 +81,8 @@ pub(super) struct Runtime {
     last_input: Instant,
     last_list: Instant,
     last_screen: Instant,
+    /// The bounded RPC worker exited for any reason; no reply can ever arrive.
+    rpc_dead: bool,
     pub dimensions: (u16, u16),
     pub resized: Option<(String, u64, u16, u16)>,
     pub definition_notice: Option<String>,
@@ -163,6 +165,7 @@ impl Runtime {
             last_input: Instant::now(),
             last_list: Instant::now() - Duration::from_secs(2),
             last_screen: Instant::now(),
+            rpc_dead: false,
             dimensions: (22, 80),
             resized: None,
             definition_notice: None,
@@ -174,6 +177,10 @@ impl Runtime {
         self.submit(None, Tag::Connect)
     }
     pub fn submit(&mut self, request: Option<Request>, tag: Tag) -> Result<()> {
+        ensure!(
+            !self.rpc_dead,
+            "The UI's internal request worker exited; restart idk to recover."
+        );
         ensure!(
             self.pending.len() < 16,
             "Host input queue is full. This input was not sent."
@@ -195,14 +202,25 @@ impl Runtime {
     }
     pub fn drain(&mut self) -> Vec<Reply> {
         let mut replies = Vec::new();
-        while let Ok(reply) = self.receiver.try_recv() {
-            if reply.tag == Tag::Input {
-                self.inflight_input.pop_front();
+        loop {
+            match self.receiver.try_recv() {
+                Ok(reply) => {
+                    if reply.tag == Tag::Input {
+                        self.inflight_input.pop_front();
+                    }
+                    if let Some(index) = self.pending.iter().position(|tag| tag == &reply.tag) {
+                        self.pending.remove(index);
+                    }
+                    replies.push(reply);
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                // A dead RPC worker is not an empty queue: mark it so poll()
+                // reports the real cause instead of a misleading queue error.
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.rpc_dead = true;
+                    break;
+                }
             }
-            if let Some(index) = self.pending.iter().position(|tag| tag == &reply.tag) {
-                self.pending.remove(index);
-            }
-            replies.push(reply);
         }
         replies
     }
@@ -275,36 +293,48 @@ impl Runtime {
         if self.last_input.elapsed() < Duration::from_millis(15) || self.pending.len() >= 4 {
             return Ok(());
         }
-        let Some(input) = self.input.pop_front() else {
+        let Some(input) = self.input.front() else {
             return Ok(());
         };
-        let count = input.data.len();
-        self.input_bytes -= count;
-        ensure!(
-            self.host
-                .as_ref()
-                .is_some_and(|host| host.host_instance == input.host),
-            "Host changed; buffered input was discarded."
-        );
-        let data = base64::engine::general_purpose::STANDARD.encode(input.data);
-        let request = match input.target {
+        let stale = !self
+            .host
+            .as_ref()
+            .is_some_and(|host| host.host_instance == input.host);
+        let data = base64::engine::general_purpose::STANDARD.encode(&input.data);
+        let request = match &input.target {
             InputTarget::Shell(session) => Request::Input {
-                session,
+                session: session.clone(),
                 epoch: input.epoch,
                 data,
             },
             InputTarget::Git(operation) => Request::GitOperationInput {
-                operation,
+                operation: operation.clone(),
                 epoch: input.epoch,
                 data,
             },
         };
+        if stale {
+            // Bytes aimed at a previous host can never arrive; drop them
+            // deliberately instead of crediting them to a new host session.
+            self.input_bytes -= input.data.len();
+            self.input.pop_front();
+            anyhow::bail!("Host changed; buffered input was discarded.");
+        }
+        // Submit before dequeuing so a failed send leaves the bytes queued for
+        // the next flush rather than silently dropping mid-burst input.
         self.submit(Some(request), Tag::Input)?;
-        self.inflight_input.push_back(count);
+        if let Some(input) = self.input.pop_front() {
+            self.input_bytes -= input.data.len();
+            self.inflight_input.push_back(input.data.len());
+        }
         self.last_input = Instant::now();
         Ok(())
     }
     pub fn poll(&mut self) -> Result<()> {
+        ensure!(
+            !self.rpc_dead,
+            "The UI's internal request worker exited; restart idk to recover."
+        );
         if self.online {
             self.flush_input()?;
         }
@@ -363,5 +393,70 @@ impl Drop for Runtime {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         let _ = self.finished.recv_timeout(Duration::from_millis(300));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> (Runtime, Receiver<Job>, SyncSender<Reply>) {
+        let (sender, jobs) = mpsc::sync_channel(16);
+        let (events, receiver) = mpsc::sync_channel(16);
+        let stop = Arc::new(AtomicBool::new(false));
+        let (done, finished) = mpsc::sync_channel(1);
+        // Drop::finished waits at most 300ms; a missing worker side returns now.
+        drop(done);
+        (
+            Runtime {
+                sender,
+                receiver,
+                stop,
+                finished,
+                host: None,
+                client_id: None,
+                online: false,
+                input_read_only: false,
+                sessions: Vec::new(),
+                active: None,
+                screen: None,
+                batch: None,
+                seen: HashMap::new(),
+                definitions: HashMap::new(),
+                pending: Vec::new(),
+                input: VecDeque::new(),
+                input_bytes: 0,
+                inflight_input: VecDeque::new(),
+                last_input: Instant::now(),
+                last_list: Instant::now(),
+                last_screen: Instant::now(),
+                rpc_dead: false,
+                dimensions: (22, 80),
+                resized: None,
+                definition_notice: None,
+            },
+            jobs,
+            events,
+        )
+    }
+
+    #[test]
+    fn dead_rpc_worker_is_reported_not_mistaken_for_idle() {
+        let (mut runtime, _jobs, events) = fixture();
+        drop(events);
+        assert!(runtime.drain().is_empty());
+        assert!(runtime.rpc_dead);
+        assert!(runtime.poll().is_err());
+        assert!(runtime.submit(None, Tag::Connect).is_err());
+    }
+
+    #[test]
+    fn live_worker_empty_drain_accepts_work() {
+        let (mut runtime, jobs, _events) = fixture();
+        assert!(runtime.drain().is_empty());
+        assert!(!runtime.rpc_dead);
+        assert!(runtime.submit(None, Tag::Connect).is_ok());
+        assert_eq!(runtime.pending.len(), 1);
+        assert!(jobs.try_recv().is_ok());
     }
 }

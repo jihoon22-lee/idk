@@ -961,3 +961,45 @@ mod tests {
         assert!(start.elapsed() < Duration::from_millis(200));
     }
 }
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+    }
+    #[test]
+    fn frame_size_accepts_only_the_advertised_bound_without_panic() {
+        let mut rng = Rng(0x2545f4914f6cdd1d);
+        for _ in 0..20_000 {
+            let header: [u8; 4] = (rng.next() as u32).to_be_bytes();
+            match frame_size(header) {
+                Ok(size) => assert!(size > 0 && size <= MAX_MESSAGE),
+                Err(_) => assert!(
+                    u32::from_be_bytes(header) as usize > MAX_MESSAGE
+                        || u32::from_be_bytes(header) == 0
+                ),
+            }
+        }
+        for boundary in [
+            0u32,
+            1,
+            MAX_MESSAGE as u32 - 1,
+            MAX_MESSAGE as u32,
+            MAX_MESSAGE as u32 + 1,
+            u32::MAX,
+        ] {
+            let result = frame_size(boundary.to_be_bytes());
+            assert_eq!(
+                result.is_ok(),
+                boundary > 0 && boundary as usize <= MAX_MESSAGE
+            );
+        }
+    }
+}

@@ -288,3 +288,39 @@ pub(super) fn text(bytes: &[u8]) -> Result<String> {
         _ => bail!("Git returned an unsupported text field"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+    }
+    #[test]
+    fn object_id_accepts_exactly_hex_digest_lengths() {
+        let mut rng = Rng(0xa5a5a5a5a5a5a5a5);
+        for _ in 0..20_000 {
+            let len = (rng.next() % 80) as usize;
+            let text: String = (0..len).map(|_| (rng.next() % 128) as u8 as char).collect();
+            match ObjectId::parse(&text) {
+                Ok(id) => {
+                    assert!(matches!(text.len(), 40 | 64));
+                    assert!(text.bytes().all(|b| b.is_ascii_hexdigit()));
+                    assert_eq!(id.as_str(), text.to_ascii_lowercase());
+                }
+                Err(_) => assert!(
+                    !matches!(text.len(), 40 | 64) || !text.bytes().all(|b| b.is_ascii_hexdigit())
+                ),
+            }
+        }
+        let good: String = "a".repeat(64);
+        assert!(ObjectId::parse(&good).is_ok());
+        assert!(ObjectId::parse(&good[..39]).is_err());
+        assert!(ObjectId::parse(&format!("{good}g")).is_err());
+    }
+}

@@ -253,6 +253,75 @@ fn duplicate_cancel_and_crash_preserve_intent_without_restart() {
     );
 }
 #[test]
+fn deferred_begin_reservation_commits_and_blocks_duplicates() {
+    use idk_workspace::run::BeginReservation;
+    let f = Fixture::new(&["echo command"], FailurePolicy::Stop);
+    let mut registry = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
+    let plan = (TaskService { store: &f.store })
+        .launch_plan(&f.project, &f.task, f.env.clone())
+        .unwrap();
+    let operation = new_id();
+    let BeginReservation::Fresh(ticket) = registry
+        .begin_reserve(plan.clone(), &operation, false)
+        .unwrap()
+    else {
+        panic!("first reserve must be fresh");
+    };
+    // A pending reservation blocks the same operation and a non-parallel
+    // second start of the same task exactly like a live run would.
+    assert!(registry
+        .begin_reserve(plan.clone(), &operation, false)
+        .is_err());
+    assert!(registry
+        .begin_reserve(plan.clone(), &new_id(), false)
+        .is_err());
+    // Parallel intent still reserves a second ticket.
+    let BeginReservation::Fresh(other) = registry.begin_reserve(plan, &new_id(), true).unwrap()
+    else {
+        panic!("parallel reserve must be fresh");
+    };
+    let probe = ticket.probe(registry.gate());
+    let observation = probe.observe_now();
+    let reply = registry.begin_commit(ticket, observation).unwrap();
+    assert!(!reply.existing);
+    assert_eq!(reply.run.state, RunState::Preparing);
+    let probe = other.probe(registry.gate());
+    let reply = registry.begin_commit(other, probe.observe_now()).unwrap();
+    assert!(!reply.existing);
+    assert_eq!(registry.list(None).len(), 2);
+}
+#[test]
+fn abandoned_reservation_releases_task_and_lease() {
+    use idk_workspace::run::BeginReservation;
+    let f = Fixture::new(&["echo command"], FailurePolicy::Stop);
+    let mut registry = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
+    let plan = (TaskService { store: &f.store })
+        .launch_plan(&f.project, &f.task, f.env.clone())
+        .unwrap();
+    let BeginReservation::Fresh(ticket) = registry.begin_reserve(plan, &new_id(), false).unwrap()
+    else {
+        panic!("first reserve must be fresh");
+    };
+    registry.begin_abandon(ticket);
+    // After abandonment the task is free again and no run was recorded.
+    let run = f.begin(&mut registry, &new_id(), false).run;
+    assert_eq!(registry.list(None).len(), 1);
+    registry.finish(&run.run_id, None, true, None).unwrap();
+}
+#[test]
+fn finish_probe_then_observed_matches_synchronous_finish() {
+    let f = Fixture::new(&["echo command"], FailurePolicy::Stop);
+    let mut registry = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
+    let run = f.begin(&mut registry, &new_id(), false).run;
+    let probe = registry.finish_probe(&run.run_id).unwrap();
+    let observation = probe.observe_now();
+    let finished = registry
+        .finish_observed(&run.run_id, None, true, None, observation)
+        .unwrap();
+    assert_eq!(finished.state, RunState::Unknown);
+    assert!(finished.source_end.is_some());
+}
+#[test]
 fn logging_is_bounded_and_search_keeps_byte_positions_and_sanitizes_controls() {
     let f = Fixture::new(&["echo ignored"], FailurePolicy::Stop);
     let mut registry = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
