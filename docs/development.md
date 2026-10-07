@@ -87,7 +87,7 @@ python3 scripts/test-native-storage.py --candidate dist/idk-linux-x86_64 --shell
 
 저장 실패 검사는 실제 후보에서 ENOLCK·atomic rename·statfs 오류를 주입해 원본 보존을 확인한다.
 NFS state/runtime 거부는 지원 경계이며 오류 주입이나 UBI 결과를 실제 NFS/RHEL 실기로 바꾸지 않는다.
-공개 후 사용자 실기는 [후속 #53](https://github.com/jihoon22-lee/idk/issues/53)에서 따로 추적한다.
+공개 후 사용자 실기는 [후속 #53](https://github.com/jihoon22-lee/idk/issues/53)(closed, 미실행 기록 보존)에 따로 기록한다.
 
 main push에서만 exact-main provenance가 부여된다. 공개는 [릴리스 프로토콜](native-release.md)에
 따라 그 성공한 CI artifact를 재빌드 없이 게시하고 다시 다운로드해 비교한다. 대상 RHEL/폐쇄망

@@ -8,7 +8,7 @@ WSL/Linux에서 개발하며 RHEL 8.10 폐쇄망 사용을 목표로 한다. 정
 검증 정보·라이선스가 든 오프라인 번들로 배포한다. 제품 실행에 Python·Rust compiler·사외
 서비스·root 권한이 필요하지 않다. 기존 csh/tcsh와 Git은 해당 환경에 준비되어 있어야 한다.
 대상 RHEL·폐쇄망 정책 실기는 공개 후 사용자가 수행하며
-[후속 #53](https://github.com/jihoon22-lee/idk/issues/53)에 미실행으로 추적한다.
+[후속 #53](https://github.com/jihoon22-lee/idk/issues/53)(closed)에 미실행으로 추적한다.
 
 **host state/runtime은 NFS를 지원하지 않는다.** NFS home을 사용하는 경우 정책상 허용된 로컬
 `XDG_STATE_HOME`·`XDG_RUNTIME_DIR` 또는 명시적 `--data-dir`를 선택한다. 소스·설정·기존 상태를
