@@ -36,7 +36,8 @@ fn connect_and_manage_six_paths_without_running_scripts_or_changing_legacy_data(
     std::fs::write(legacy.join("ws.toml"), "legacy = 'preserved'\n").unwrap();
     let script = source.join("setup.csh");
     std::fs::write(&script, "echo MUST_NOT_RUN > unexpected-output\n").unwrap();
-    let shell = std::env::var("IDK_TEST_SHELL").unwrap_or_else(|_| "/usr/bin/tcsh".into());
+    let shell = launcher::test_shell();
+    let shell = shell.to_str().unwrap();
     let project = invoke(
         &data,
         &home,
@@ -46,7 +47,7 @@ fn connect_and_manage_six_paths_without_running_scripts_or_changing_legacy_data(
             "한글 project",
             source.to_str().unwrap(),
             "--shell",
-            &shell,
+            shell,
             "--source",
             script.to_str().unwrap(),
         ],

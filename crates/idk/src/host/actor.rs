@@ -1504,7 +1504,12 @@ impl Actor {
                         changed = true;
                         cleanup_notice(slot, "shell exited; checking same-session descendants");
                     }
-                    let runtime = slot.runtime.as_mut().unwrap();
+                    // cleanup_notice needs the whole slot, so the runtime
+                    // borrow is re-acquired after it; a missing runtime skips
+                    // this slot instead of panicking.
+                    let Some(runtime) = slot.runtime.as_mut() else {
+                        continue;
+                    };
                     if slot.frozen.is_none()
                         && (runtime
                             .terminal
@@ -1831,8 +1836,21 @@ impl Actor {
                 slot.runtime = Some(runtime);
                 // Persist the accepted runtime BEFORE the sole bootstrap write.
                 let persistence = self.persist();
-                let slot = self.slots.get_mut(&completed.session).unwrap();
-                let runtime = slot.runtime.as_mut().unwrap();
+                let Some(slot) = self.slots.get_mut(&completed.session) else {
+                    return;
+                };
+                let Some(runtime) = slot.runtime.as_mut() else {
+                    // The runtime was stored above; if the slot lost it anyway,
+                    // fail the session instead of panicking inside the host.
+                    slot.info.state = SessionState::Failed;
+                    slot.info.error = Some(
+                        "terminal runtime missing after its record was saved; nothing was initialized"
+                            .into(),
+                    );
+                    slot.exited_at = Some(Instant::now());
+                    let _ = self.persist();
+                    return;
+                };
                 if cancelled || persistence.is_err() {
                     slot.info.state = SessionState::Closing;
                     slot.cleanup.requested = true;

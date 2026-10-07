@@ -9,6 +9,18 @@
 
 ## [Unreleased]
 
+### Fixed
+- 등록 Run의 지연된 source 관측이 프로브 워커 정체·사망 시 예약/리스를 무기한
+  잡아두던 것을 dispatch→완료 end-to-end 예산으로 경계화한다. 프로브 큐를
+  bounded로 교체하고, 만료·유실된 관측은 "source state unconfirmed" 명시
+  오류로 완결돼 확인된 상태로 오인되지 않는다.
+- 세션 준비 완료 경로가 저장 후 슬롯·runtime을 재획득할 때 unwrap 대신
+  명시 `Failed` 기록으로 응답한다.
+- 프로브 큐 포화·워커 사망·만료 스윕과 미확인 관측 레코드를 단위 검사하고,
+  TTL 경로를 시계 주입 가능한 `expired`/`timed_out_at`로 통일한다.
+- `IDK_TEST_SHELL` 미설정 시 통합 테스트가 승인 경로 내부 오류 대신
+  "install tcsh or set IDK_TEST_SHELL"로 즉시 명시 실패한다.
+
 ## [0.4.1] - 2026-09-07
 
 ### Fixed

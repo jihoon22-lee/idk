@@ -1,3 +1,5 @@
+#[path = "common/launcher.rs"]
+mod launcher;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use idk_workspace::{
     client::Client,
@@ -84,10 +86,7 @@ impl Fixture {
             ("TERM".into(), "xterm-256color".into()),
         ]))
         .unwrap();
-        let shell = std::env::var_os("IDK_TEST_SHELL")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| "/usr/bin/tcsh".into());
-        assert!(shell.is_file());
+        let shell = launcher::test_shell();
         let init = root.join("init.csh");
         fs::write(&init, "echo initialized >> init-count\n").unwrap();
         let task = TaskDefinition {

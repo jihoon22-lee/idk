@@ -1,3 +1,5 @@
+#[path = "common/launcher.rs"]
+mod launcher;
 use base64::Engine;
 use idk_workspace::model::*;
 use idk_workspace::project::{LaunchEnvironment, ProjectService};
@@ -66,9 +68,7 @@ impl Fixture {
             related_repositories: vec![],
             default_terminal: None,
             shell: ShellConfig {
-                executable: std::env::var_os("IDK_TEST_SHELL")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("/usr/bin/tcsh")),
+                executable: launcher::test_shell(),
                 login: false,
                 init_cwd: root,
                 sources: vec![source.into()],
