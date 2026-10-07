@@ -121,20 +121,26 @@ clean tree stash로 회귀가 아님을 확인. 승인 스코프 digest가
 "install tcsh or set IDK_TEST_SHELL"로 즉시 명시 실패한다(그래도 FAIL).
 폐쇄망 실기 수용은 #53에 미실행으로 남는다.
 
-## 결정 기록
+## 계획과 다른 점
 
-- **동기 `observe_now` 폴백 유지**: 프로브 사망·포화 시 워커에서 직렬
-  실행 — 호출당 최대 ~3개 git 서브프로세스 × READ_TIMEOUT(10s) ≈ 30s로
-  이미 bounded. 즉시 실패로 바꾸면 transient 워커 사고에 run 시작 자체를
-  포기하게 돼 기능 저하가 크다. deferred 측 wedging은 만료 스윕으로 이미
-  경계화됐으므로 폴백은 저하 경로로 유지. 프로브 재기동은 다른 풀의
-  사망-명시-실패 규약(`reads_dead`/`runs_dead`)과 불일치하므로 도입 않음.
-- **crate 모듈 분할 보류**: 33k LOC의 host/ui/git 경계 재편은 컴파일·리뷰
-  표면 이득만 있고 행동 이득이 없으며 대규모 diff churn과 PR 묶음 확장을
-  동반한다. 경계 강제 필요성이 실제로 생기면 재평가.
+- **슬롯 FSM 추출 보류**(계획 Stage 1 후보였음): host 모듈 unwrap 전수
+  감사에서 활성 panic 경로가 발견되지 않았다. `git_bridge`의 17곳은 전부
+  밀폐 맵 불변식(`persist(&self)`가 맵을 비울 수 없고 eviction은 insert
+  전 비활성만 제거). `info.state`+cleanup 플래그에 분산된 전이의 타입
+  추출은 활성 결함 없이 대규모 리팩터링이 되므로 근거 부족으로 보류한다.
+- **`actor.rs` 셸-종료 경로는 재차입이 필요했다**: `cleanup_notice(slot)`가
+  `&mut Slot` 전체를 빌리므로 루프 선두의 `&mut slot.runtime` 부분 차입과
+  충돌 — 단순 삭제는 컴파일 불가. `let-else`+`continue`로만 강화했다.
+- **동기 `observe_now` 폴백 유지**(계획 Stage 2 검토 항목): 프로브 사망·
+  포화 시 워커 직렬 실행은 호출당 ~3 git 서브프로세스 × READ_TIMEOUT(10s)
+  ≈ 30s로 이미 bounded. 즉시 실패 전환은 transient 사고에 run 시작 자체를
+  포기시킨다. 프로브 재기동은 `reads_dead`/`runs_dead`의 사망-명시-실패
+  규약과 불일치해 도입하지 않는다.
+- **crate 모듈 분할 보류**(계획 Stage 3 선택 항목): 33k LOC의 경계 재편은
+  행동 이득 없이 diff churn과 PR 묶음 확장만 동반한다.
 - **`dispatched`는 `Instant`(프로세스 수명 시계)**: deferred는 durable
-  복원 대상이 아니므로 현재 정확하다. 향후 deferred를 durable하게 만들면
-  벽시계 epoch 필드가 필요하다 — 설계 메모로 계획 파일에 기록.
+  복원 대상이 아니므로 현재 정확하다. durable화 시 벽시계 epoch 전환
+  필요 — 계획 파일에 설계 메모로 남김.
 
 ## 후속/미결
 
