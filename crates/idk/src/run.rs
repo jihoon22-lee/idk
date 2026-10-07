@@ -697,13 +697,19 @@ impl RunRegistry {
         self.info(run_id)
     }
     pub fn timed_out(&self) -> Vec<String> {
+        self.timed_out_at(Instant::now())
+    }
+    /// `timed_out` against an explicit clock so the boundary is testable
+    /// without sleeping; a `started` in the future never counts as expired.
+    pub fn timed_out_at(&self, now: Instant) -> Vec<String> {
         self.runs
             .iter()
             .filter(|run| {
                 matches!(run.state, RunState::Preparing | RunState::Running)
                     && run.timeout_seconds.is_some_and(|seconds| {
                         self.active.get(&run.run_id).is_some_and(|active| {
-                            active.started.elapsed() >= Duration::from_secs(seconds)
+                            now.saturating_duration_since(active.started)
+                                >= Duration::from_secs(seconds)
                         })
                     })
             })

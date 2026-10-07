@@ -6,7 +6,7 @@ use idk_workspace::{client::Client, model::new_id, store::Store};
 use serde_json::Value;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 struct OwnedHost(Child);
@@ -55,9 +55,7 @@ fn cli_definitions_do_not_execute_and_actual_failed_run_links_log_problem_editor
         "set cli_run_local = retained\necho init >> init-count\n",
     )
     .unwrap();
-    let shell = std::env::var_os("IDK_TEST_SHELL")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| "/usr/bin/tcsh".into());
+    let shell = launcher::test_shell();
     let project = success(
         &data,
         &home,

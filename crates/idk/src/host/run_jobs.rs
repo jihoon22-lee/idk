@@ -19,23 +19,37 @@ use std::time::{Duration, Instant};
 const LIMIT_JOBS: usize = 128;
 const LIMIT_CACHE: usize = 16 * 1024 * 1024;
 const LIMIT_DEFERRED: usize = 8;
+/// End-to-end budget for one deferred source observation, including queueing
+/// behind earlier probes. Expiry never claims confirmed state: the entry
+/// resolves with an explicit unconfirmed record instead of waiting forever.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 const TTL: Duration = Duration::from_secs(300);
 /// Source observations (bounded git subprocesses) run on a dedicated worker so
 /// the registry worker never blocks on git. Results carry a sequence tag.
 struct Prober {
-    jobs: mpsc::Sender<(u64, Option<crate::git::Repository>, SourceGate)>,
+    jobs: mpsc::SyncSender<(u64, Option<crate::git::Repository>, SourceGate)>,
     results: mpsc::Receiver<(u64, SourceObservation)>,
     seq: u64,
 }
 impl Prober {
     fn new() -> Option<Self> {
-        let (jobs, incoming) = mpsc::channel::<(u64, Option<crate::git::Repository>, SourceGate)>();
-        let (results, outgoing) = mpsc::channel::<(u64, SourceObservation)>();
+        // Bounded like every other worker queue: at most one job per deferred
+        // entry is ever outstanding. Results also cover observations whose
+        // entry already timed out, so the worker never blocks indefinitely.
+        let (jobs, incoming) =
+            mpsc::sync_channel::<(u64, Option<crate::git::Repository>, SourceGate)>(LIMIT_DEFERRED);
+        let (results, outgoing) =
+            mpsc::sync_channel::<(u64, SourceObservation)>(2 * LIMIT_DEFERRED);
         std::thread::Builder::new()
             .name("idk-run-probe".into())
             .spawn(move || {
                 while let Ok((seq, repository, gate)) = incoming.recv() {
-                    let _ = results.send((seq, observe_source(repository.as_ref(), &gate)));
+                    if results
+                        .send((seq, observe_source(repository.as_ref(), &gate)))
+                        .is_err()
+                    {
+                        return;
+                    }
                 }
             })
             .ok()?;
@@ -45,22 +59,37 @@ impl Prober {
             seq: 0,
         })
     }
-    /// Queues an observation. A dead probe worker hands the probe back so the
-    /// caller can observe synchronously instead of losing the work.
+    /// Queues an observation. A dead or saturated probe worker hands the
+    /// probe back so the caller can observe synchronously instead of losing
+    /// the work.
     fn dispatch(&mut self, probe: SourceProbe) -> std::result::Result<u64, SourceProbe> {
         let (repository, gate) = probe.into_parts();
         self.seq += 1;
         self.jobs
-            .send((self.seq, repository.clone(), gate.clone()))
-            .map_err(|_| SourceProbe::from_parts(repository, gate))?;
-        Ok(self.seq)
+            .try_send((self.seq, repository.clone(), gate.clone()))
+            .map(|()| self.seq)
+            .map_err(|_| SourceProbe::from_parts(repository, gate))
     }
 }
 /// A work item waiting on an off-thread source observation. Registry access
 /// still happens only on the worker, after the observation arrives.
+///
+/// Lifecycle — every entry leaves this list by exactly one of:
+///   result   — the probe worker reports a `SourceObservation` whose `seq`
+///              matches; `complete_deferred` runs the normal commit path.
+///   expired  — `now - dispatched >= PROBE_TIMEOUT`; completes with a
+///              `timed_out_observation` (explicit unconfirmed record). A
+///              result that arrives later is dropped by the `seq` miss.
+///   orphaned — the probe worker died (`results` disconnected); completes
+///              with `lost_observation`, the same explicit unconfirmed record.
+/// In all three exits the commit path runs identically, so leases,
+/// pending-start reservations, and attached waiters are always released or
+/// resolved — never silently. There is no durable variant: deferred state
+/// dies with the worker, and recovery treats missing outcomes as unknown.
 enum Deferred {
     Start {
         seq: u64,
+        dispatched: Instant,
         job_id: String,
         session: String,
         rows: u16,
@@ -73,6 +102,7 @@ enum Deferred {
     },
     Finish {
         seq: u64,
+        dispatched: Instant,
         run_id: String,
         exit: Option<TerminalExit>,
         error: Option<String>,
@@ -85,6 +115,11 @@ impl Deferred {
     fn seq(&self) -> u64 {
         match self {
             Self::Start { seq, .. } | Self::Finish { seq, .. } => *seq,
+        }
+    }
+    fn dispatched(&self) -> Instant {
+        match self {
+            Self::Start { dispatched, .. } | Self::Finish { dispatched, .. } => *dispatched,
         }
     }
 }
@@ -207,11 +242,30 @@ impl Bridge {
                             }
                         }
                     }
+                    // A live worker can still stall (wedged read, full result
+                    // queue). Entries past their end-to-end budget resolve
+                    // with the same explicit unconfirmed-source record; a late
+                    // result is dropped by the sequence check when it arrives.
+                    for entry in take_expired(&mut deferred, Instant::now()) {
+                        let observation = timed_out_observation(&entry);
+                        for event in complete_deferred(
+                            &launcher,
+                            &resources,
+                            &mut registry,
+                            entry,
+                            observation,
+                        ) {
+                            if outgoing.send(event).is_err() {
+                                break 'outer;
+                            }
+                        }
+                    }
                     if registration_refresh.elapsed() >= Duration::from_secs(1) {
                         let _ = registry.publish_registered_sources();
                         registration_refresh = Instant::now();
                     }
-                    reviews.retain(|_, (_, _, created)| created.elapsed() < TTL);
+                    let now = Instant::now();
+                    reviews.retain(|_, (_, _, created)| !expired(*created, TTL, now));
                     let work = match incoming.recv_timeout(Duration::from_millis(50)) {
                         Ok(work) => Some(work),
                         Err(mpsc::RecvTimeoutError::Timeout) => None,
@@ -349,8 +403,10 @@ impl Bridge {
         cancel: Arc<AtomicBool>,
     ) -> Result<RunJob> {
         self.ensure_live()?;
-        self.jobs
-            .retain(|_, job| job.info.state == RunJobState::Pending || job.created.elapsed() < TTL);
+        let now = Instant::now();
+        self.jobs.retain(|_, job| {
+            job.info.state == RunJobState::Pending || !expired(job.created, TTL, now)
+        });
         while self.jobs.len() >= LIMIT_JOBS
             || self.jobs.values().map(|job| job.bytes).sum::<usize>() >= LIMIT_CACHE
         {
@@ -488,9 +544,10 @@ impl Bridge {
         }
     }
     pub fn editor_project(&self, client: &str, review_id: &str) -> Result<String> {
+        let now = Instant::now();
         self.jobs
             .values()
-            .filter(|job| job.owner == client && job.created.elapsed() < TTL)
+            .filter(|job| job.owner == client && !expired(job.created, TTL, now))
             .find_map(|job| match &job.info.result {
                 Some(RunResult::EditorReview {
                     review_id: id,
@@ -672,7 +729,7 @@ fn execute(
                 .get(&review_id)
                 .context("editor review expired; review source location again")?;
             ensure!(
-                owner == client && created.elapsed() < TTL,
+                owner == client && !expired(*created, TTL, Instant::now()),
                 "editor review belongs to another client or expired"
             );
             let command = (EditorService { store }).command(plan, environment)?;
@@ -836,9 +893,30 @@ fn complete_start(
         cancel_out,
     )
 }
-/// An observation that can never arrive. Recorded as an explicit error so a
-/// dead probe worker never looks like confirmed source state.
-fn lost_observation(entry: &Deferred) -> SourceObservation {
+/// True when `created` is `ttl` or older as of `now`. Saturating: a `created`
+/// timestamp in the future reads as fresh, never as expired. All TTL/reap
+/// checks in this module go through here so the boundary is testable without
+/// sleeping.
+fn expired(created: Instant, ttl: Duration, now: Instant) -> bool {
+    now.saturating_duration_since(created) >= ttl
+}
+/// Removes entries whose observation exceeded the end-to-end probe budget.
+/// Split from the loop so the bound itself is directly testable.
+fn take_expired(deferred: &mut Vec<Deferred>, now: Instant) -> Vec<Deferred> {
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < deferred.len() {
+        if expired(deferred[index].dispatched(), PROBE_TIMEOUT, now) {
+            out.push(deferred.remove(index));
+        } else {
+            index += 1;
+        }
+    }
+    out
+}
+/// An observation that cannot arrive in time. Recorded as an explicit error
+/// so a dead or stalled probe worker never looks like confirmed source state.
+fn unconfirmed_observation(entry: &Deferred, reason: &str) -> SourceObservation {
     let identity = match entry {
         Deferred::Start { ticket, .. } => ticket.probe_identity(),
         Deferred::Finish { identity, .. } => identity.clone(),
@@ -849,10 +927,20 @@ fn lost_observation(entry: &Deferred) -> SourceObservation {
         git_head: None,
         dirty: None,
         status_digest: None,
-        error: Some(
-            "source observation worker exited before reporting; source state unconfirmed".into(),
-        ),
+        error: Some(reason.into()),
     }
+}
+fn lost_observation(entry: &Deferred) -> SourceObservation {
+    unconfirmed_observation(
+        entry,
+        "source observation worker exited before reporting; source state unconfirmed",
+    )
+}
+fn timed_out_observation(entry: &Deferred) -> SourceObservation {
+    unconfirmed_observation(
+        entry,
+        "source observation exceeded its time budget; source state unconfirmed",
+    )
 }
 /// Resolves a deferred work item once its observation (or an explicit error
 /// observation) exists. Registry access stays on this thread.
@@ -1033,86 +1121,90 @@ fn request_events(
             waiters.push((id, session, cancel.clone()));
             return Vec::new();
         }
-        // New starts defer their git observation when the probe worker and
-        // the deferred bound allow it; anything else stays synchronous.
-        if session.is_some() && !cancel.load(Ordering::Acquire) && deferred.len() < LIMIT_DEFERRED {
-            let tasks = TaskService { store };
-            let dispatch = LaunchEnvironment::from_variables(environment.clone())
-                .and_then(|env| tasks.launch_plan(project_id, task_id, env))
-                .and_then(|plan| registry.begin_reserve(plan, operation_id, *parallel));
-            match dispatch {
-                Ok(BeginReservation::Existing(reply)) => {
-                    return vec![Event {
-                        job_id: Some(id),
-                        session_id: session,
-                        runtime: None,
-                        run: Some(reply.run.clone()),
-                        result: Ok(RunResult::Started(reply)),
-                        cancel: None,
-                        work_done: true,
-                    }];
-                }
-                Ok(BeginReservation::Fresh(ticket)) => {
-                    let probe = ticket.probe(registry.gate());
-                    let dispatched = match prober.as_mut() {
-                        Some(worker) => worker.dispatch(probe),
-                        None => Err(probe),
-                    };
-                    match dispatched {
-                        Ok(seq) => {
-                            deferred.push(Deferred::Start {
-                                seq,
-                                job_id: id,
-                                session: session.clone().expect("task session was not reserved"),
-                                rows: *rows,
-                                cols: *cols,
-                                cancel: cancel.clone(),
-                                ticket: Box::new(ticket),
-                                waiters: Vec::new(),
-                            });
-                            return Vec::new();
-                        }
-                        Err(probe) => {
-                            let observation = probe.observe_now();
-                            let mut runtime = None;
-                            let mut run_out = None;
-                            let mut cancel_out = None;
-                            let result = complete_start(
-                                launcher,
-                                resources,
-                                registry,
-                                session.as_deref().expect("task session was not reserved"),
-                                *rows,
-                                *cols,
-                                ticket,
-                                observation,
-                                cancel,
-                                &mut runtime,
-                                &mut run_out,
-                                &mut cancel_out,
-                            );
-                            return vec![Event {
-                                job_id: Some(id),
-                                session_id: session,
-                                runtime,
-                                run: run_out,
-                                result,
-                                cancel: cancel_out,
-                                work_done: true,
-                            }];
+        // New starts defer their git observation when a session exists, the
+        // caller has not cancelled, and the deferred bound allows it; anything
+        // else stays synchronous.
+        if let Some(session_id) = &session {
+            if !cancel.load(Ordering::Acquire) && deferred.len() < LIMIT_DEFERRED {
+                let tasks = TaskService { store };
+                let dispatch = LaunchEnvironment::from_variables(environment.clone())
+                    .and_then(|env| tasks.launch_plan(project_id, task_id, env))
+                    .and_then(|plan| registry.begin_reserve(plan, operation_id, *parallel));
+                match dispatch {
+                    Ok(BeginReservation::Existing(reply)) => {
+                        return vec![Event {
+                            job_id: Some(id),
+                            session_id: Some(session_id.clone()),
+                            runtime: None,
+                            run: Some(reply.run.clone()),
+                            result: Ok(RunResult::Started(reply)),
+                            cancel: None,
+                            work_done: true,
+                        }];
+                    }
+                    Ok(BeginReservation::Fresh(ticket)) => {
+                        let probe = ticket.probe(registry.gate());
+                        let dispatched = match prober.as_mut() {
+                            Some(worker) => worker.dispatch(probe),
+                            None => Err(probe),
+                        };
+                        match dispatched {
+                            Ok(seq) => {
+                                deferred.push(Deferred::Start {
+                                    seq,
+                                    dispatched: Instant::now(),
+                                    job_id: id,
+                                    session: session_id.clone(),
+                                    rows: *rows,
+                                    cols: *cols,
+                                    cancel: cancel.clone(),
+                                    ticket: Box::new(ticket),
+                                    waiters: Vec::new(),
+                                });
+                                return Vec::new();
+                            }
+                            Err(probe) => {
+                                let observation = probe.observe_now();
+                                let mut runtime = None;
+                                let mut run_out = None;
+                                let mut cancel_out = None;
+                                let result = complete_start(
+                                    launcher,
+                                    resources,
+                                    registry,
+                                    session_id,
+                                    *rows,
+                                    *cols,
+                                    ticket,
+                                    observation,
+                                    cancel,
+                                    &mut runtime,
+                                    &mut run_out,
+                                    &mut cancel_out,
+                                );
+                                return vec![Event {
+                                    job_id: Some(id),
+                                    session_id: Some(session_id.clone()),
+                                    runtime,
+                                    run: run_out,
+                                    result,
+                                    cancel: cancel_out,
+                                    work_done: true,
+                                }];
+                            }
                         }
                     }
-                }
-                Err(error) => {
-                    return vec![Event {
-                        job_id: Some(id),
-                        session_id: session,
-                        runtime: None,
-                        run: None,
-                        result: Err(error),
-                        cancel: None,
-                        work_done: true,
-                    }];
+                    Err(error) => {
+                        return vec![Event {
+                            job_id: Some(id),
+                            session_id: Some(session_id.clone()),
+                            runtime: None,
+                            run: None,
+                            result: Err(error),
+                            cancel: None,
+                            work_done: true,
+                        }];
+                    }
                 }
             }
         }
@@ -1171,6 +1263,7 @@ fn finish_events(
                     Ok(seq) => {
                         deferred.push(Deferred::Finish {
                             seq,
+                            dispatched: Instant::now(),
                             run_id,
                             exit,
                             error,
@@ -1355,5 +1448,103 @@ mod tests {
         }
         assert!(rejected > 0);
         assert!(bridge.jobs.values().map(|job| job.bytes).sum::<usize>() <= LIMIT_CACHE);
+    }
+    #[test]
+    fn prober_queue_is_bounded_and_saturated_dispatch_hands_probe_back() {
+        // Nothing drains the job channel: it fills at LIMIT_DEFERRED and the
+        // next dispatch returns the probe for the synchronous fallback.
+        let (jobs, _incoming) =
+            mpsc::sync_channel::<(u64, Option<crate::git::Repository>, SourceGate)>(LIMIT_DEFERRED);
+        let (_results, outgoing) =
+            mpsc::sync_channel::<(u64, SourceObservation)>(2 * LIMIT_DEFERRED);
+        let mut prober = Prober {
+            jobs,
+            results: outgoing,
+            seq: 0,
+        };
+        for _ in 0..LIMIT_DEFERRED {
+            assert!(prober
+                .dispatch(SourceProbe::from_parts(None, SourceGate::default()))
+                .is_ok());
+        }
+        assert!(prober
+            .dispatch(SourceProbe::from_parts(None, SourceGate::default()))
+            .is_err());
+    }
+    #[test]
+    fn dead_prober_dispatch_hands_probe_back() {
+        let (jobs, incoming) =
+            mpsc::sync_channel::<(u64, Option<crate::git::Repository>, SourceGate)>(LIMIT_DEFERRED);
+        let (_results, outgoing) =
+            mpsc::sync_channel::<(u64, SourceObservation)>(2 * LIMIT_DEFERRED);
+        let mut prober = Prober {
+            jobs,
+            results: outgoing,
+            seq: 0,
+        };
+        drop(incoming);
+        assert!(prober
+            .dispatch(SourceProbe::from_parts(None, SourceGate::default()))
+            .is_err());
+    }
+    #[test]
+    fn expired_respects_ttl_boundary_and_future_timestamps() {
+        let base = Instant::now();
+        assert!(!expired(base, TTL, base));
+        assert!(!expired(base, TTL, base + TTL - Duration::from_millis(1)));
+        assert!(expired(base, TTL, base + TTL));
+        // A `created` in the future saturates to fresh, never to expired.
+        assert!(!expired(base + Duration::from_secs(1), TTL, base));
+    }
+    #[test]
+    fn take_expired_removes_only_overbudget_entries() {
+        let mut deferred = vec![
+            Deferred::Finish {
+                seq: 1,
+                dispatched: Instant::now(),
+                run_id: new_id(),
+                exit: None,
+                error: None,
+                identity: Some(PathBuf::from("/repo")),
+            },
+            Deferred::Finish {
+                seq: 2,
+                dispatched: Instant::now(),
+                run_id: new_id(),
+                exit: None,
+                error: None,
+                identity: None,
+            },
+        ];
+        // Fresh entries stay; an observation time past the budget expires.
+        assert!(take_expired(&mut deferred, Instant::now()).is_empty());
+        assert_eq!(deferred.len(), 2);
+        let expired = take_expired(
+            &mut deferred,
+            Instant::now() + PROBE_TIMEOUT + Duration::from_secs(1),
+        );
+        assert_eq!(expired.len(), 2);
+        assert!(deferred.is_empty());
+    }
+    #[test]
+    fn timed_out_observation_is_explicitly_unconfirmed() {
+        let entry = Deferred::Finish {
+            seq: 7,
+            dispatched: Instant::now(),
+            run_id: new_id(),
+            exit: None,
+            error: None,
+            identity: Some(PathBuf::from("/repo")),
+        };
+        let observation = timed_out_observation(&entry);
+        assert_eq!(observation.identity, Some(PathBuf::from("/repo")));
+        assert!(observation.generation.is_none());
+        assert!(observation.git_head.is_none());
+        assert!(observation.dirty.is_none());
+        assert!(observation.status_digest.is_none());
+        assert!(observation
+            .error
+            .unwrap()
+            .contains("source state unconfirmed"));
     }
 }
