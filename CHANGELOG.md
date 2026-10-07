@@ -9,6 +9,8 @@
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-08
+
 ### Fixed
 - 등록 Run의 지연된 source 관측이 프로브 워커 정체·사망 시 예약/리스를 무기한
   잡아두던 것을 dispatch→완료 end-to-end 예산으로 경계화한다. 프로브 큐를
@@ -20,6 +22,13 @@
   TTL 경로를 시계 주입 가능한 `expired`/`timed_out_at`로 통일한다.
 - `IDK_TEST_SHELL` 미설정 시 통합 테스트가 승인 경로 내부 오류 대신
   "install tcsh or set IDK_TEST_SHELL"로 즉시 명시 실패한다.
+
+### 후속 수용
+- 대상 RHEL·폐쇄망 정책 실기는 미실행이다. [#53](https://github.com/jihoon22-lee/idk/issues/53)은
+  closed 상태이며 공개된 0.4.2 결과물의 실기는 수용 원장과 이후 추적 기록에서 사용자가 수행한다.
+  NFS host state/runtime은 계속 지원하지 않으며 승인된 로컬 XDG 경로나 명시적 `--data-dir`를 사용한다.
+- 업데이트는 실행 중인 구 host를 재시작하지 않는다. 이번 수정은 0.4.2 host에 적용되므로,
+  기존 셸·Run을 마친 뒤 원래 generation으로 host를 정상 종료하고 새 entrypoint로 시작한다.
 
 ## [0.4.1] - 2026-09-07
 
@@ -305,7 +314,8 @@
 [Native release promotion](docs/native-release.md)을 따른다. 공개 전 검사 완료와 대상
 RHEL·폐쇄망 실기는 별도이며 실기는 공개 후 사용자 후속으로 남긴다.
 
-[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/jihoon22-lee/idk/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/jihoon22-lee/idk/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jihoon22-lee/idk/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/jihoon22-lee/idk/compare/v0.3.0...v0.3.1

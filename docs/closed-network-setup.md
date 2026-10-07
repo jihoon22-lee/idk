@@ -1,6 +1,6 @@
 # 폐쇄망 반입과 첫 실행
 
-v0.4 반입물은 `idk-0.4.1-x86_64-unknown-linux-musl.tar.gz`이며 내부에 정적 실행 파일과
+v0.4 반입물은 `idk-0.4.2-x86_64-unknown-linux-musl.tar.gz`이며 내부에 정적 실행 파일과
 manifest·구성요소 checksum·라이선스 inventory/원문이 들어 있다. 기존 csh/tcsh와 Git을
 사용한다. 제품 실행을 위해 Python/compiler, Zellij/xclip vendor, root나 시스템 서비스를
 추가 설치하지 않는다.
@@ -17,8 +17,8 @@ manifest·구성요소 checksum·라이선스 inventory/원문이 들어 있다.
 엄격하게 검증하고 설치하는 최초 진입점이다.
 
 ```text
-./idk-linux-x86_64 package verify /absolute/path/idk-0.4.1-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
-./idk-linux-x86_64 package install /absolute/path/idk-0.4.1-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256> --prefix /absolute/user/path/idk-workspace
+./idk-linux-x86_64 package verify /absolute/path/idk-0.4.2-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
+./idk-linux-x86_64 package install /absolute/path/idk-0.4.2-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256> --prefix /absolute/user/path/idk-workspace
 ```
 
 검토한 설치 명령에 `--yes`를 붙이면 새 generation을 쓰고 검증한 뒤 entrypoint를 활성화한다.
@@ -55,7 +55,7 @@ Run의 로그·결과를 구분한다. `doctor`는 기본 exit 0이며 실패 ga
 
 공개 전 검증은 실제 폐쇄망 환경의 수용과 별개다. 대상 RHEL 8.10의 startup, CA·인증,
 NFS/noexec·로그아웃·장기 프로세스 정책은 사용자가 공개 결과물로 이후 검증하며 현재 미실행이다.
-[수용 원장](acceptance/v0.4.0.md)과 [사용자 실기 #53](https://github.com/jihoon22-lee/idk/issues/53)을 따른다.
+[수용 원장](acceptance/v0.4.0.md)과 [사용자 실기 #53](https://github.com/jihoon22-lee/idk/issues/53)(closed, 미실행 기록 보존)을 따른다.
 
 폐쇄망 원본 증거는 현지에 보관한다. 파일·로그·소스·경로를 외부로 가져오는 절차가 없으며
 `doctor --brief`, 마스킹·요약·hash도 반출 허가를 대신하지 않는다. 정책상 허용된 판정만
