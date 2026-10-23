@@ -346,6 +346,92 @@ fn schema_health_rejects_corruption_without_changing_existing_data() {
 }
 
 #[test]
+fn review_regression_ledgers_block_activation_without_rewriting_original_data() {
+    use crate::model::new_id;
+    use crate::saved_state::{HostLedger, RunLedger, RUN_RECORD_LIMIT};
+
+    let project = new_id();
+    let run = new_id();
+    let session = json!({
+        "session_id": new_id(), "project_id": project, "terminal_id": run,
+        "name": "completed build", "persistent": false, "state": "closed",
+        "definition_revision": 1, "purpose": "run", "run_id": run
+    });
+    let valid_host = json!({"schema": 1, "sessions": [session.clone()]});
+    serde_json::from_value::<HostLedger>(valid_host)
+        .unwrap()
+        .validate()
+        .unwrap();
+    let mut duplicate = session.clone();
+    duplicate["session_id"] = json!(new_id());
+    let duplicate_host = json!({"schema": 1, "sessions": [session, duplicate]});
+
+    let records = (0..=RUN_RECORD_LIMIT)
+        .map(|_| {
+            let id = new_id();
+            json!({
+                "run_id": id, "operation_id": new_id(), "project_id": project,
+                "task_id": new_id(), "name": "completed build", "state": "Succeeded",
+                "definition_revision": 1, "launch_digest": "a".repeat(64),
+                "initialization_digest": "b".repeat(64), "cwd": "/synthetic/source",
+                "source_roots": [], "build_outputs": [], "started_at_ms": 1,
+                "finished_at_ms": 2, "timeout_requested": false, "cleanup_confirmed": true,
+                "exit_code": 0, "steps": [{"index": 0, "name": "build", "exit_code": 0}],
+                "source_start": {}, "artifact": {"verified_bytes": false},
+                "log": {"run_id": id, "generation": 1, "state": "Disabled", "bytes": 0,
+                    "observed_bytes": 0, "limit_bytes": 4194304, "merged_pty": true}
+            })
+        })
+        .collect::<Vec<_>>();
+    let valid_runs = json!({"schema": 1, "runs": &records[..RUN_RECORD_LIMIT]});
+    serde_json::from_value::<RunLedger>(valid_runs)
+        .unwrap()
+        .validate()
+        .unwrap();
+    let oversized_runs = json!({"schema": 1, "runs": records});
+
+    for (name, ledger, expected) in [
+        (
+            "host-sessions.json",
+            duplicate_host,
+            "duplicate session identity",
+        ),
+        ("runs.json", oversized_runs, "oversized run ledger"),
+    ] {
+        let temporary = tempfile::tempdir().unwrap();
+        let store = Store::open(Some(&temporary.path().join("data"))).unwrap();
+        let installer = Installer::open(&temporary.path().join("install")).unwrap();
+        let original = bundle(CURRENT_VERSION, 0);
+        installer
+            .install_with(&original, |_| health(&store).map(|_| ()), |_| Ok(()))
+            .unwrap();
+        let bytes = serde_json::to_vec_pretty(&ledger).unwrap();
+        let path = store.state_dir.join(name);
+        atomic_write(&path, &bytes).unwrap();
+        let log = store.state_dir.join("preserved-log.txt");
+        atomic_write(&log, b"original execution evidence").unwrap();
+        let error = health(&store).unwrap_err();
+        assert!(format!("{error:#}").contains(expected), "{error:#}");
+        let replacement = bundle(&next_version(), 1);
+        assert!(installer
+            .install_with(&replacement, |_| health(&store).map(|_| ()), |_| Ok(()))
+            .is_err());
+        let recovered = installer.recover().unwrap();
+        assert_eq!(
+            recovered.active.as_deref(),
+            Some(original.review().generation.as_str())
+        );
+        assert_eq!(
+            recovered.committed_version_floor.as_deref(),
+            Some(CURRENT_VERSION)
+        );
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read(&log).unwrap(), b"original execution evidence");
+        assert!(!store.config_path().exists());
+    }
+}
+
+#[test]
 fn uninstall_preserves_the_committed_floor_when_an_older_installer_is_used() {
     let temporary = tempfile::tempdir().unwrap();
     let installer = Installer::open(&temporary.path().join("install")).unwrap();
