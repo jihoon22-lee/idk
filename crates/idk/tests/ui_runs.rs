@@ -176,6 +176,24 @@ impl Fixture {
             _ => panic!("wrong list"),
         }
     }
+    fn host_facts(&self) -> String {
+        let mut client = match Client::connect_with_launcher(
+            &self.store,
+            Path::new(env!("CARGO_BIN_EXE_idk")),
+        ) {
+            Ok(client) => client,
+            Err(error) => return format!("Host connection failed: {error:#}"),
+        };
+        let host = client.info().clone();
+        let sessions = client.list(None);
+        let runs = complete_result(
+            &mut client,
+            RunRequest::List {
+                project_id: Some(self.project.clone()),
+            },
+        );
+        format!("Host: {host:?}\nSessions: {sessions:?}\nRuns: {runs:?}")
+    }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
@@ -194,15 +212,25 @@ impl Drop for Fixture {
     }
 }
 fn complete(client: &mut Client, request: RunRequest) -> RunResult {
-    let mut job = client.run(request).unwrap();
+    complete_result(client, request).unwrap()
+}
+fn complete_result(client: &mut Client, request: RunRequest) -> anyhow::Result<RunResult> {
+    let mut job = client.run(request)?;
     let deadline = Instant::now() + Duration::from_secs(20);
     while job.state == RunJobState::Pending {
-        assert!(Instant::now() < deadline);
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "Run job is still pending: {job:?}"
+        );
         std::thread::sleep(Duration::from_millis(20));
-        job = client.run(RunRequest::Job { job_id: job.job_id }).unwrap();
+        job = client.run(RunRequest::Job { job_id: job.job_id })?;
     }
-    assert_eq!(job.state, RunJobState::Complete, "{:?}", job.error);
-    job.result.unwrap()
+    anyhow::ensure!(
+        job.state == RunJobState::Complete,
+        "Run job failed: {job:?}"
+    );
+    job.result
+        .ok_or_else(|| anyhow::anyhow!("completed Run job has no result"))
 }
 fn key(app: &mut App<'_>, code: KeyCode) {
     event(app, Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
@@ -253,6 +281,49 @@ fn wait(app: &mut App<'_>, needle: &str) {
             return;
         }
         assert!(Instant::now() < end, "missing {needle:?}:\n{s}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+fn wait_for_run_input(fixture: &Fixture, app: &mut App<'_>, marker: &str) {
+    let end = Instant::now() + Duration::from_secs(20);
+    loop {
+        app.tick();
+        let s = screen(app);
+        if s.contains(marker) && s.contains("initialization ready") && !s.contains("READ ONLY") {
+            return;
+        }
+        assert!(
+            Instant::now() < end,
+            "Run input is not ready for {marker:?}:\n{s}\n{}",
+            fixture.host_facts()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+fn wait_for_file_contents(
+    fixture: &Fixture,
+    app: &mut App<'_>,
+    path: &Path,
+    expected: &str,
+    timeout: Duration,
+) {
+    let end = Instant::now() + timeout;
+    loop {
+        app.tick();
+        let contents = fs::read_to_string(path);
+        if contents
+            .as_deref()
+            .is_ok_and(|contents| contents == expected)
+        {
+            return;
+        }
+        assert!(
+            Instant::now() < end,
+            "file {} has not reached {expected:?}: {contents:?}\n{}\n{}",
+            path.display(),
+            screen(app),
+            fixture.host_facts()
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 }
@@ -339,15 +410,12 @@ fn task_draft_approval_failed_result_log_search_problem_and_literal_editor() {
     wait(&mut app, "argv[1] = --");
     assert!(!f.root.join("editor-arguments").exists());
     key(&mut app, KeyCode::F(2));
-    let end = Instant::now() + Duration::from_secs(15);
-    while !f.root.join("editor-arguments").exists() {
-        app.tick();
-        assert!(Instant::now() < end, "{}", screen(&mut app));
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert_eq!(
-        fs::read_to_string(f.root.join("editor-arguments")).unwrap(),
-        format!("+1\n--\n{}\n", f.root.join("source.c").display())
+    wait_for_file_contents(
+        &f,
+        &mut app,
+        &f.root.join("editor-arguments"),
+        &format!("+1\n--\n{}\n", f.root.join("source.c").display()),
+        Duration::from_secs(15),
     );
     assert_eq!(
         fs::read_to_string(f.root.join("init-count"))
@@ -373,18 +441,15 @@ fn interactive_run_duplicate_start_ui_detach_reattach_and_explicit_cancel() {
     );
     let mut app = f.app();
     start(&mut app);
-    wait(&mut app, "READY-FOR-RUN");
+    wait_for_run_input(&f, &mut app, "READY-FOR-RUN");
     event(&mut app, Event::Paste("literal run input".into()));
     key(&mut app, KeyCode::Enter);
-    let end = Instant::now() + Duration::from_secs(10);
-    while !f.root.join("answer").exists() {
-        app.tick();
-        assert!(Instant::now() < end);
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert_eq!(
-        fs::read_to_string(f.root.join("answer")).unwrap().trim(),
-        "literal run input"
+    wait_for_file_contents(
+        &f,
+        &mut app,
+        &f.root.join("answer"),
+        "literal run input\n",
+        Duration::from_secs(10),
     );
     controls(&mut app);
     key(&mut app, KeyCode::Char('3'));
