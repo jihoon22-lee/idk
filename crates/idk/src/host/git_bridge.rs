@@ -668,14 +668,18 @@ impl Bridge {
         Ok(&snapshot.value)
     }
     fn resolve_task(&self, context: &str, task: GitTask) -> Result<jobs::Task> {
-        fn selected(snapshot: &git::GitSnapshot, entries: &[usize]) -> Result<Vec<git::GitPath>> {
+        fn selected(
+            snapshot: &git::GitSnapshot,
+            entries: &[usize],
+            target: git::DiffTarget,
+        ) -> Result<Vec<git::GitPath>> {
             let mut paths = std::collections::BTreeSet::new();
             for index in entries {
                 for path in snapshot
                     .entries
                     .get(*index)
                     .context("selected Git entry is not in the reviewed snapshot")?
-                    .paths()
+                    .paths(target)
                 {
                     paths.insert(path);
                 }
@@ -720,7 +724,7 @@ impl Bridge {
             } => {
                 let snapshot = self.snapshot(context, &snapshot)?;
                 jobs::Task::Stage {
-                    paths: selected(snapshot, &entries)?,
+                    paths: selected(snapshot, &entries, git::DiffTarget::Worktree)?,
                     revision: snapshot.revision.clone(),
                 }
             }
@@ -729,7 +733,7 @@ impl Bridge {
             } => {
                 let snapshot = self.snapshot(context, &snapshot)?;
                 jobs::Task::Unstage {
-                    paths: selected(snapshot, &entries)?,
+                    paths: selected(snapshot, &entries, git::DiffTarget::Index)?,
                     revision: snapshot.revision.clone(),
                 }
             }

@@ -1024,8 +1024,8 @@ fn rebind_preview(
         }
         terminal.trusted_digest = None;
     }
-    // Deferred task workflows still keep their existing definitions;
-    // paths moved by reconnect are displayed in the same explicit preview.
+    // Task paths and output reservations move together. External paths stay
+    // outside the reconnect preview and keep their existing identity.
     for task in &mut project.tasks {
         remap_path(
             &mut task.cwd,
@@ -1049,6 +1049,15 @@ fn rebind_preview(
                 &old_root,
                 &root,
                 format!("{} artifact", task.name),
+                &mut changes,
+            );
+        }
+        for (index, output) in task.build_outputs.iter_mut().enumerate() {
+            remap_path(
+                output,
+                &old_root,
+                &root,
+                format!("{} build output {}", task.name, index + 1),
                 &mut changes,
             );
         }

@@ -7,7 +7,9 @@ use idk_workspace::model::{new_id, Project, ShellConfig};
 use idk_workspace::project::{ConnectDraft, LaunchEnvironment, ProjectService, TerminalDraft};
 use idk_workspace::store::Store;
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::fs;
+use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -370,6 +372,128 @@ fn repository_tokens_reject_cross_context_selection_and_refresh_authentication_w
             && !ledger.contains("new-agent-reference")
             && !ledger.contains("SSH_AUTH_SOCK")
     );
+    shutdown(&mut client, &mut host);
+}
+
+#[test]
+fn git_path_rename_stage_preserves_unselected_source_and_unstage_resets_both_paths() {
+    let fixture = Fixture::new();
+    let project = fixture.project("rename-selection");
+    let original = "original source line\n".repeat(8);
+    fs::write(project.root.join("base"), &original).unwrap();
+    fixture.git(&project.root, &["commit", "-am", "longer source"]);
+    let renamed_bytes = b"-renamed-\xff\nfile";
+    let renamed = project
+        .root
+        .join(OsString::from_vec(renamed_bytes.to_vec()));
+    fs::rename(project.root.join("base"), &renamed).unwrap();
+    fixture.git(&project.root, &["add", "--all"]);
+    let edited = format!("{original}selected edit\n");
+    fs::write(&renamed, &edited).unwrap();
+    fs::write(project.root.join("base"), "unselected replacement\n").unwrap();
+
+    let (mut host, mut client) = fixture.host();
+    let context = fixture.open(&mut client, &project, fixture.env.clone());
+    let snapshot = status(&mut client, &context.id);
+    let selected = snapshot
+        .snapshot
+        .entries
+        .iter()
+        .position(|entry| entry.index_status == 'R')
+        .unwrap();
+    assert_eq!(snapshot.snapshot.entries.len(), 2);
+    let stage = plan(
+        &mut client,
+        GitTask::Stage {
+            context: context.id.clone(),
+            snapshot: snapshot.snapshot_id,
+            entries: vec![selected],
+        },
+    );
+    assert_eq!(
+        execute(&mut client, &stage).result.unwrap().outcome,
+        GitOutcome::Succeeded
+    );
+    assert!(
+        fixture
+            .git(&project.root, &["ls-files", "-z", "--", "base"])
+            .stdout
+            .is_empty(),
+        "the separately listed replacement source was not selected"
+    );
+    assert_eq!(stage.paths.len(), 1);
+    assert_eq!(
+        stage.paths[0].bytes_base64,
+        snapshot.snapshot.entries[selected].path.bytes_base64
+    );
+
+    let snapshot = status(&mut client, &context.id);
+    let selected = snapshot
+        .snapshot
+        .entries
+        .iter()
+        .position(|entry| entry.index_status == 'R')
+        .unwrap();
+    let unstage = plan(
+        &mut client,
+        GitTask::Unstage {
+            context: context.id,
+            snapshot: snapshot.snapshot_id,
+            entries: vec![selected],
+        },
+    );
+    assert_eq!(unstage.paths.len(), 2);
+    assert_eq!(
+        execute(&mut client, &unstage).result.unwrap().outcome,
+        GitOutcome::Succeeded
+    );
+    assert!(fixture
+        .git(&project.root, &["diff", "--cached", "--name-only", "-z"])
+        .stdout
+        .is_empty());
+    assert_eq!(fs::read(&renamed).unwrap(), edited.as_bytes());
+    assert_eq!(
+        fs::read(project.root.join("base")).unwrap(),
+        b"unselected replacement\n"
+    );
+    shutdown(&mut client, &mut host);
+}
+
+#[test]
+fn git_path_worktree_rename_stage_includes_the_selected_source_deletion() {
+    let fixture = Fixture::new();
+    let project = fixture.project("worktree-rename");
+    fs::rename(project.root.join("base"), project.root.join("renamed")).unwrap();
+    fixture.git(&project.root, &["add", "--intent-to-add", "--", "renamed"]);
+    let (mut host, mut client) = fixture.host();
+    let context = fixture.open(&mut client, &project, fixture.env.clone());
+    let snapshot = status(&mut client, &context.id);
+    assert_eq!(snapshot.snapshot.entries.len(), 1);
+    assert_eq!(snapshot.snapshot.entries[0].index_status, '.');
+    assert_eq!(snapshot.snapshot.entries[0].worktree_status, 'R');
+    let stage = plan(
+        &mut client,
+        GitTask::Stage {
+            context: context.id,
+            snapshot: snapshot.snapshot_id,
+            entries: vec![0],
+        },
+    );
+    assert_eq!(stage.paths.len(), 2);
+    assert_eq!(
+        execute(&mut client, &stage).result.unwrap().outcome,
+        GitOutcome::Succeeded
+    );
+    assert_eq!(
+        fixture.git(&project.root, &["ls-files", "-z"]).stdout,
+        b"renamed\0"
+    );
+    assert_eq!(
+        fixture.git(&project.root, &["show", ":renamed"]).stdout,
+        b"base\n"
+    );
+    assert!(!project.root.join("base").exists());
+    assert_eq!(fs::read(project.root.join("renamed")).unwrap(), b"base\n");
     shutdown(&mut client, &mut host);
 }
 

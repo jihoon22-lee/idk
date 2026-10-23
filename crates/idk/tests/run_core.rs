@@ -3,7 +3,7 @@ mod launcher;
 use base64::Engine;
 use idk_workspace::model::*;
 use idk_workspace::project::{LaunchEnvironment, ProjectService};
-use idk_workspace::run::RunRegistry;
+use idk_workspace::run::{BeginReservation, RunRegistry};
 use idk_workspace::run_wire::*;
 use idk_workspace::store::Store;
 use idk_workspace::task::TaskService;
@@ -583,6 +583,107 @@ fn real_git_source_lease_blocks_mutations_until_confirmed_cleanup_and_marks_exte
     );
     assert!(recovered.publish_source(repository.identity()).is_err());
 }
+#[test]
+fn reconnected_build_outputs_still_block_collisions_at_the_new_missing_path() {
+    let f = Fixture::new(&["echo task"], FailurePolicy::Stop);
+    let old = f
+        .store
+        .load()
+        .unwrap()
+        .project(&f.project)
+        .unwrap()
+        .root
+        .clone();
+    let old_output = old.join("build/not-created");
+    let external = f.temp.path().join("external/not-created");
+    f.store
+        .update(|workspace| {
+            let task = &mut workspace.project_mut(&f.project)?.tasks[0];
+            task.build_outputs = vec![old_output.clone(), external.clone()];
+            task.artifact = Some(old_output.join("result"));
+            Ok(())
+        })
+        .unwrap();
+    f.approve();
+    let moved = f.temp.path().join("moved 한글");
+    std::fs::rename(&old, &moved).unwrap();
+    let output = moved.join("build/not-created");
+    let projects = ProjectService { store: &f.store };
+    let preview = projects
+        .preview_rebind_root(&f.project, moved.clone())
+        .unwrap();
+    assert!(
+        preview
+            .changes
+            .iter()
+            .any(|change| change.old == old_output && change.new == output),
+        "reconnection must review the moved build-output reservation"
+    );
+    assert!(!preview.changes.iter().any(|change| change.old == external));
+    projects.rebind_root(preview.revision, preview).unwrap();
+    let workspace = f.store.load().unwrap();
+    let task = &workspace.project(&f.project).unwrap().tasks[0];
+    assert_eq!(task.cwd, moved);
+    assert_eq!(task.build_outputs, vec![output.clone(), external]);
+    assert_eq!(task.artifact, Some(output.join("result")));
+    assert!(task.approved_digest.is_none());
+    let tasks = TaskService { store: &f.store };
+    assert!(tasks
+        .launch_plan(&f.project, &f.task, f.env.clone())
+        .is_err());
+    let common = projects.review_initialization(&f.project, &f.env).unwrap();
+    projects
+        .approve_initialization(common.revision, common)
+        .unwrap();
+    f.approve();
+
+    let mut other = task.clone();
+    other.id = new_id();
+    other.name = "another build".into();
+    other.build_outputs = vec![output.clone()];
+    tasks
+        .save(f.store.load().unwrap().revision, &f.project, other.clone())
+        .unwrap();
+    let review = tasks.review(&f.project, &other.id, &f.env).unwrap();
+    tasks
+        .approve(
+            review.revision,
+            &f.project,
+            &other.id,
+            &review.digest,
+            &f.env,
+        )
+        .unwrap();
+    let mut registry = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
+    let plan = tasks
+        .launch_plan(&f.project, &f.task, f.env.clone())
+        .unwrap();
+    let BeginReservation::Fresh(ticket) = registry.begin_reserve(plan, &new_id(), false).unwrap()
+    else {
+        panic!("first build must reserve its outputs");
+    };
+    let conflicting = tasks
+        .launch_plan(&f.project, &other.id, f.env.clone())
+        .unwrap();
+    assert!(!output.exists());
+    let error = registry
+        .begin_reserve(conflicting.clone(), &new_id(), false)
+        .err()
+        .unwrap();
+    assert!(
+        error.to_string().contains("build output conflicts"),
+        "{error}"
+    );
+    registry.begin_abandon(ticket);
+    let BeginReservation::Fresh(ticket) = registry
+        .begin_reserve(conflicting, &new_id(), false)
+        .unwrap()
+    else {
+        panic!("abandoned output reservation must be released");
+    };
+    registry.begin_abandon(ticket);
+}
+
 #[test]
 fn output_collision_and_log_replacement_are_explicit() {
     let f = Fixture::new(&["echo task"], FailurePolicy::Stop);
