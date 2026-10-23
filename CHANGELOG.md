@@ -9,6 +9,8 @@
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-23
+
 ### Fixed
 - 중복 Run 준비 요청의 취소·실패가 원본 실행 identity를 별도 session에 복제해
   host 재시작을 막던 문제를 수정한다. 대기 요청은 실행 결과만 공유하며 소유권을 갖지 않는다.
@@ -20,6 +22,21 @@
   늦은 취소 요청이 확인된 실행 결과를 바꾸지 않으며 source 보호는 최종 저장까지 유지한다.
 - `doctor`는 같은 binary의 host 접속에서 instance와 PID가 모두 일치할 때만 실행 중으로
   판정한다. 재사용된 PID·확인 불가능한 접속은 경고이며 `--strict` 검사에 반영한다.
+- rename 행을 Stage할 때 변경되지 않은 index 쪽 원본 경로를 함께 추가하지 않는다.
+  이름 변경 뒤 원래 위치에 다시 만든 미선택 파일을 보존하며 Unstage의 index 경로도 구분한다.
+- Git status의 untracked nested repository 디렉터리 marker를 처리하여 전체 상태 조회가
+  실패하지 않게 한다. 파일명 bytes와 저장소 경계 검증은 유지한다.
+- 프로젝트 루트 재연결 시 등록 작업의 `build_outputs`도 변경 검토와 경로 재매핑에 포함한다.
+  새 출력 위치에서 Run 간 충돌 검사가 계속 적용된다.
+
+### 후속 수용
+- 기존 불일치 원장은 원래 bytes와 로그를 보존하며 자동 수선하지 않는다.
+  [복구 안내](https://github.com/jihoon22-lee/idk/blob/v0.4.3/docs/offline-workspace.md)를 따른다.
+- 업데이트는 실행 중인 구 host를 재시작하지 않는다. 기존 셸·Run을 마친 뒤 원래 generation으로
+  host를 정상 종료하고 새 entrypoint로 시작해야 이번 host 수정이 적용된다.
+- 대상 RHEL·폐쇄망 정책 실기는 미실행이며 [#53](https://github.com/jihoon22-lee/idk/issues/53)의
+  v0.4.3 인계를 따라 사용자가 수행한다. NFS host state/runtime은 계속 지원하지 않으며
+  승인된 로컬 XDG 경로나 명시적 `--data-dir`를 사용한다.
 
 ## [0.4.2] - 2026-10-08
 
@@ -326,7 +343,8 @@
 [Native release promotion](docs/native-release.md)을 따른다. 공개 전 검사 완료와 대상
 RHEL·폐쇄망 실기는 별도이며 실기는 공개 후 사용자 후속으로 남긴다.
 
-[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/jihoon22-lee/idk/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/jihoon22-lee/idk/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/jihoon22-lee/idk/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jihoon22-lee/idk/compare/v0.3.1...v0.4.0
