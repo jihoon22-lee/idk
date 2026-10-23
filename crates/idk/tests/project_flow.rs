@@ -544,6 +544,71 @@ fn terminal_extra_source_changes_and_static_startup_home_changes_require_review(
 }
 
 #[test]
+fn root_reconnection_preserves_configuration_when_host_or_saved_work_blocks_it() {
+    let fixture = Fixture::new();
+    let project = fixture.create("Move safely", 1);
+    let moved = fixture.tmp.path().join("moved");
+    fs::rename(&fixture.root, &moved).unwrap();
+    let preview = fixture
+        .service()
+        .preview_rebind_root(&project.id, moved.clone())
+        .unwrap();
+    let original = fs::read(fixture.store.config_path()).unwrap();
+
+    // Previous hosts retain an exclusive lifetime lock and do not know about
+    // the new Run/reconnection gate. They must not be treated as idle.
+    let legacy_host =
+        idk_workspace::store::FileLock::acquire(&fixture.store.runtime_dir.join("host.lock"), true)
+            .unwrap();
+    let error = fixture
+        .service()
+        .rebind_root(preview.revision, preview.clone())
+        .unwrap_err();
+    assert!(error.to_string().contains("older host"), "{error:#}");
+    assert_eq!(fs::read(fixture.store.config_path()).unwrap(), original);
+    drop(legacy_host);
+
+    for (name, empty, future) in [
+        (
+            "runs.json",
+            br#"{"schema":1,"runs":[]}"#.as_slice(),
+            br#"{"schema":999,"runs":[]}"#.as_slice(),
+        ),
+        (
+            "git-operations.json",
+            br#"{"schema":1,"operations":[]}"#.as_slice(),
+            br#"{"schema":999,"operations":[]}"#.as_slice(),
+        ),
+    ] {
+        let ledger_path = fixture.store.state_dir.join(name);
+        for bytes in [b"{broken".as_slice(), future] {
+            atomic_write(&ledger_path, bytes).unwrap();
+            assert!(fixture
+                .service()
+                .rebind_root(preview.revision, preview.clone())
+                .is_err());
+            assert_eq!(fs::read(&ledger_path).unwrap(), bytes);
+            assert_eq!(fs::read(fixture.store.config_path()).unwrap(), original);
+        }
+        atomic_write(&ledger_path, empty).unwrap();
+    }
+    fixture
+        .service()
+        .rebind_root(preview.revision, preview)
+        .unwrap();
+    assert_eq!(
+        fixture
+            .store
+            .load()
+            .unwrap()
+            .project(&project.id)
+            .unwrap()
+            .root,
+        moved
+    );
+}
+
+#[test]
 fn moving_root_preserves_ids_external_paths_and_user_files() {
     let fixture = Fixture::new();
     git(&fixture.root, &["init", "-q"]);

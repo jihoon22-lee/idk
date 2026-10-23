@@ -445,7 +445,7 @@ impl GitService {
             paths.iter().all(|path| snapshot
                 .entries
                 .iter()
-                .any(|entry| entry.paths().contains(path))),
+                .any(|entry| entry.paths(DiffTarget::Worktree).contains(path))),
             "selected file is not present in the reviewed status"
         );
         Ok(self.plan(
@@ -469,7 +469,7 @@ impl GitService {
             paths.iter().all(|path| snapshot
                 .entries
                 .iter()
-                .any(|entry| entry.paths().contains(path))),
+                .any(|entry| entry.paths(DiffTarget::Index).contains(path))),
             "selected file is not present in the reviewed status"
         );
         Ok(self.plan(

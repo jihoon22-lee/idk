@@ -4,7 +4,7 @@ use crate::model::{new_id, valid_id, FailurePolicy, GateLease, SourceGate, TaskL
 use crate::run_wire::*;
 use crate::saved_state::RunLedger as Ledger;
 use crate::shell::ShellPlan;
-use crate::store::{ensure_private_dir, read_private, Store};
+use crate::store::{ensure_private_dir, read_private, FileLock, Store};
 use crate::task::{steps, TaskLaunchPlan};
 use crate::terminal::TerminalExit;
 use anyhow::{ensure, Context, Result};
@@ -168,6 +168,7 @@ struct Active {
     shell: ShellPlan,
     sink: RunOutputSink,
     _lease: Option<GateLease>,
+    _run_use: Option<FileLock>,
     directory: PathBuf,
     started: Instant,
     /// The host has reported the execution's end. Source observation and
@@ -244,6 +245,7 @@ pub struct BeginTicket {
     operation_id: String,
     outputs: Vec<PathBuf>,
     lease: Option<GateLease>,
+    run_use: FileLock,
 }
 impl BeginTicket {
     pub fn probe(&self, gate: &SourceGate) -> SourceProbe {
@@ -404,6 +406,22 @@ impl RunRegistry {
                 existing: true,
             }));
         }
+        // Root reconnection takes this same workspace-wide lock exclusively.
+        // Acquire it before trusting a captured plan or recording a pending
+        // reservation: a plan can have been read just before a rebind committed.
+        let run_use = FileLock::acquire_shared(&self.store.runtime_dir.join("run-use.lock"), true)
+            .context("root reconnection is in progress; task was not reserved")?;
+        let fresh = (crate::task::TaskService { store: &self.store }).launch_plan(
+            &plan.project_id,
+            &plan.task.id,
+            crate::project::LaunchEnvironment::from_variables(plan.shell.env.clone())?,
+        )?;
+        ensure!(
+            fresh.launch_digest == plan.launch_digest,
+            "task definition changed before reservation; review the current task"
+        );
+        // Keep the revision and all derived paths from the guarded observation.
+        let plan = fresh;
         ensure!(
             !self
                 .pending_starts
@@ -501,6 +519,7 @@ impl RunRegistry {
             operation_id: operation_id.into(),
             outputs,
             lease,
+            run_use,
         }))
     }
     /// Releases a reserved start that will never commit (cancelled or failed
@@ -523,6 +542,7 @@ impl RunRegistry {
             operation_id,
             outputs,
             lease,
+            run_use,
         } = ticket;
         let directory = self.store.runtime_dir.join(format!("run-{run_id}"));
         ensure_private_dir(&directory)?;
@@ -616,6 +636,7 @@ impl RunRegistry {
                 shell,
                 sink,
                 _lease: lease,
+                _run_use: Some(run_use),
                 directory,
                 started: Instant::now(),
                 finishing: false,
@@ -822,6 +843,7 @@ impl RunRegistry {
             active.finishing = false;
             if cleanup_confirmed {
                 active._lease.take();
+                active._run_use.take();
             }
         }
         self.info(run_id)

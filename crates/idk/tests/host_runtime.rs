@@ -7,10 +7,10 @@ use idk_workspace::model::{new_id, Project, ShellConfig};
 use idk_workspace::project::{ConnectDraft, LaunchEnvironment, ProjectService, TerminalDraft};
 use idk_workspace::protocol::{BatchState, Request, SessionInfo, SessionState};
 use idk_workspace::shell::InitializationState;
-use idk_workspace::store::Store;
+use idk_workspace::store::{FileLock, Store};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -108,21 +108,7 @@ impl Fixture {
             .clone()
     }
     fn host(&self) -> (OwnedChild, Client) {
-        let mut host = OwnedChild(
-            Command::new(binary())
-                .arg("__host")
-                .arg("--config-dir")
-                .arg(&self.store.config_dir)
-                .arg("--state-dir")
-                .arg(&self.store.state_dir)
-                .arg("--runtime-dir")
-                .arg(&self.store.runtime_dir)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::inherit())
-                .spawn()
-                .unwrap(),
-        );
+        let mut host = OwnedChild(self.host_command().spawn().unwrap());
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             if let Ok(client) = Client::connect_with_launcher(&self.store, binary()) {
@@ -135,6 +121,21 @@ impl Fixture {
             assert!(Instant::now() < deadline, "host startup timed out");
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+    fn host_command(&self) -> Command {
+        let mut command = Command::new(binary());
+        command
+            .arg("__host")
+            .arg("--config-dir")
+            .arg(&self.store.config_dir)
+            .arg("--state-dir")
+            .arg(&self.store.state_dir)
+            .arg("--runtime-dir")
+            .arg(&self.store.runtime_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit());
+        command
     }
     fn client(&self) -> Client {
         Client::connect_with_launcher(&self.store, binary()).unwrap()
@@ -207,6 +208,109 @@ fn stop(client: &mut Client, host: &mut OwnedChild) {
         assert!(Instant::now() < deadline, "host shutdown did not finish");
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[test]
+fn legacy_host_and_new_owner_locks_reject_startup_before_ledger_mutation() {
+    let fixture = Fixture::new();
+    for (name, expected) in [
+        ("host.lock", "lifetime lock"),
+        ("host-owner.lock", "host ownership lock"),
+    ] {
+        // The owner-only case models an EX -> SH conversion gap: host.lock is
+        // free, but the new owner's independent lifetime lock still excludes us.
+        let _holder = FileLock::acquire(&fixture.store.runtime_dir.join(name), true).unwrap();
+        let mut child = OwnedChild(
+            fixture
+                .host_command()
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                break status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "competing host unexpectedly started"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(!status.success());
+        let mut error = String::new();
+        child
+            .0
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut error)
+            .unwrap();
+        assert!(error.contains(expected), "{error}");
+        assert!(!fixture.store.socket_path().exists());
+        for ledger in ["host-sessions.json", "runs.json", "host-exit.json"] {
+            assert!(!fixture.store.state_dir.join(ledger).exists());
+        }
+    }
+}
+
+#[test]
+fn compatible_host_keeps_single_ownership_while_rebind_guards_coexist_with_a_terminal() {
+    let fixture = Fixture::new();
+    let project = fixture.project(
+        "shared-lock",
+        &["echo initialized >> rebind-init-count\nset preserved = LIVE_STATE\n"],
+    );
+    let (mut host, mut client) = fixture.host();
+    let created = client
+        .start(
+            &project.id,
+            &project.terminals[0].id,
+            fixture.env.clone(),
+            24,
+            100,
+            false,
+        )
+        .unwrap();
+    let original = ready(&mut client, &created.session_id);
+    assert!(original.child_pid.is_some());
+    let moved = fixture._tmp.path().join("moved-root");
+    fs::rename(&project.root, &moved).unwrap();
+    let service = ProjectService {
+        store: &fixture.store,
+    };
+    let preview = service
+        .preview_rebind_root(&project.id, moved.clone())
+        .unwrap();
+    service.rebind_root(preview.revision, preview).unwrap();
+    assert_eq!(
+        fixture
+            .store
+            .load()
+            .unwrap()
+            .project(&project.id)
+            .unwrap()
+            .root,
+        moved
+    );
+    let _generation =
+        FileLock::acquire_shared(&fixture.store.runtime_dir.join("host.lock"), true).unwrap();
+    let _rebind = FileLock::acquire(&fixture.store.runtime_dir.join("run-use.lock"), true).unwrap();
+    assert!(FileLock::acquire(&fixture.store.runtime_dir.join("host-owner.lock"), true).is_err());
+    assert!(FileLock::acquire(&fixture.store.runtime_dir.join("host.lock"), true).is_err());
+    let owned = client.attach(&created.session_id, false).unwrap();
+    assert_eq!(owned.child_pid, original.child_pid);
+    assert_eq!(owned.generation, original.generation);
+    client
+        .input(&created.session_id, owned.input_epoch, b"echo $preserved\n")
+        .unwrap();
+    screen(&mut client, &created.session_id, "LIVE_STATE");
+    assert_eq!(
+        fs::read_to_string(moved.join("rebind-init-count")).unwrap(),
+        "initialized\n"
+    );
+    stop(&mut client, &mut host);
 }
 
 #[test]

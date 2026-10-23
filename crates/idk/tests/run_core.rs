@@ -3,9 +3,9 @@ mod launcher;
 use base64::Engine;
 use idk_workspace::model::*;
 use idk_workspace::project::{LaunchEnvironment, ProjectService};
-use idk_workspace::run::RunRegistry;
+use idk_workspace::run::{BeginReservation, RunRegistry};
 use idk_workspace::run_wire::*;
-use idk_workspace::store::Store;
+use idk_workspace::store::{FileLock, Store};
 use idk_workspace::task::TaskService;
 use idk_workspace::terminal::{TerminalExit, TerminalSession};
 use std::collections::BTreeMap;
@@ -584,6 +584,316 @@ fn real_git_source_lease_blocks_mutations_until_confirmed_cleanup_and_marks_exte
     assert!(recovered.publish_source(repository.identity()).is_err());
 }
 #[test]
+fn root_rebind_rejects_live_run_output_reservations_after_directory_rename() {
+    let f = Fixture::new(
+        &["echo LIVE-READY\nwhile ( ! -e finish-run )\n/bin/sleep 0.02\nend\n/bin/pwd > actual-cwd\necho first-run > shared-output"],
+        FailurePolicy::Stop,
+    );
+    let old = f
+        .store
+        .load()
+        .unwrap()
+        .project(&f.project)
+        .unwrap()
+        .root
+        .clone();
+    let output = old.join("shared-output");
+    let duplicate = new_id();
+    f.store
+        .update(|workspace| {
+            let project = workspace.project_mut(&f.project)?;
+            project.tasks[0].build_outputs = vec![output.clone()];
+            let mut other = project.clone();
+            other.id = duplicate.clone();
+            other.name = "duplicate root".into();
+            workspace.projects.push(other);
+            Ok(())
+        })
+        .unwrap();
+    f.approve();
+    let mut registry = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
+    let run = f.begin(&mut registry, &new_id(), false).run;
+    let prepared = registry
+        .shell_plan(&run.run_id)
+        .unwrap()
+        .prepare(
+            &f.temp.path().join("resources"),
+            &PathBuf::from(env!("CARGO_BIN_EXE_idk")),
+        )
+        .unwrap();
+    let mut terminal = TerminalSession::spawn_with_output(
+        prepared.command,
+        24,
+        100,
+        100,
+        Some(registry.output_sink(&run.run_id).unwrap()),
+    )
+    .unwrap();
+    terminal.input(&prepared.bootstrap_bytes).unwrap();
+    registry.mark_running(&run.run_id, &new_id()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(12);
+    while !terminal.snapshot().unwrap().text().contains("LIVE-READY") {
+        assert!(
+            Instant::now() < deadline,
+            "{}",
+            terminal.snapshot().unwrap().text()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(terminal.cwd().as_deref(), Some(old.as_path()));
+    let moved = f.temp.path().join("moved source");
+    std::fs::rename(&old, &moved).unwrap();
+    assert_eq!(terminal.cwd().as_deref(), Some(moved.as_path()));
+    assert_eq!(
+        registry.info(&run.run_id).unwrap().build_outputs,
+        vec![output]
+    );
+    let projects = ProjectService { store: &f.store };
+    let config_before = std::fs::read(f.store.config_path()).unwrap();
+    let preview = projects
+        .preview_rebind_root(&f.project, moved.clone())
+        .unwrap();
+    let rebound = projects.rebind_root(preview.revision, preview);
+    let preview = projects
+        .preview_rebind_root(&duplicate, moved.clone())
+        .unwrap();
+    let rebound_duplicate = projects.rebind_root(preview.revision, preview);
+    let config_after = std::fs::read(f.store.config_path()).unwrap();
+
+    // Let the owned shell finish and confirm its actual cwd before asserting
+    // the rejected reconnect, so the regression also cleans up on the old code.
+    std::fs::write(moved.join("finish-run"), b"continue").unwrap();
+    let exit = loop {
+        if let Some(exit) = terminal.try_wait().unwrap() {
+            break exit;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{}",
+            terminal.snapshot().unwrap().text()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    while !terminal.status().unwrap().reader_closed {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let finished = registry
+        .finish(&run.run_id, Some(exit), true, None)
+        .unwrap();
+    assert_eq!(finished.state, RunState::Succeeded);
+    assert!(finished.cleanup_confirmed);
+    assert_eq!(
+        std::fs::read_to_string(moved.join("actual-cwd"))
+            .unwrap()
+            .trim(),
+        moved.to_str().unwrap()
+    );
+    assert_eq!(
+        std::fs::read_to_string(moved.join("shared-output")).unwrap(),
+        "first-run\n"
+    );
+    assert!(
+        rebound.is_err(),
+        "reconnect accepted while the live Run reserved the old output path"
+    );
+    assert!(
+        rebound_duplicate.is_err(),
+        "another project at the same root bypassed the live Run reservation"
+    );
+    assert_eq!(config_after, config_before);
+    for project in [&f.project, &duplicate] {
+        let preview = projects
+            .preview_rebind_root(project, moved.clone())
+            .unwrap();
+        projects.rebind_root(preview.revision, preview).unwrap();
+        assert_eq!(
+            f.store.load().unwrap().project(project).unwrap().root,
+            moved
+        );
+    }
+}
+
+#[test]
+fn root_rebind_rejects_pending_run_output_reservations_after_directory_rename() {
+    let f = Fixture::new(&["echo task"], FailurePolicy::Stop);
+    let old = f
+        .store
+        .load()
+        .unwrap()
+        .project(&f.project)
+        .unwrap()
+        .root
+        .clone();
+    let duplicate = new_id();
+    f.store
+        .update(|workspace| {
+            let project = workspace.project_mut(&f.project)?;
+            project.tasks[0].build_outputs = vec![old.join("shared-output")];
+            let mut other = project.clone();
+            other.id = duplicate.clone();
+            other.name = "duplicate root".into();
+            workspace.projects.push(other);
+            Ok(())
+        })
+        .unwrap();
+    f.approve();
+    let mut registry = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
+    let plan = (TaskService { store: &f.store })
+        .launch_plan(&f.project, &f.task, f.env.clone())
+        .unwrap();
+    let BeginReservation::Fresh(ticket) = registry.begin_reserve(plan, &new_id(), false).unwrap()
+    else {
+        panic!("first build must reserve its outputs");
+    };
+    let moved = f.temp.path().join("moved source");
+    std::fs::rename(&old, &moved).unwrap();
+    let projects = ProjectService { store: &f.store };
+    let config_before = std::fs::read(f.store.config_path()).unwrap();
+    let preview = projects
+        .preview_rebind_root(&f.project, moved.clone())
+        .unwrap();
+    let rebound = projects.rebind_root(preview.revision, preview);
+    let preview = projects
+        .preview_rebind_root(&duplicate, moved.clone())
+        .unwrap();
+    let rebound_duplicate = projects.rebind_root(preview.revision, preview);
+    let config_after = std::fs::read(f.store.config_path()).unwrap();
+    registry.begin_abandon(ticket);
+    assert!(
+        rebound.is_err(),
+        "reconnect accepted while a pending start reserved the old output path"
+    );
+    assert!(
+        rebound_duplicate.is_err(),
+        "another project at the same root bypassed the pending Run reservation"
+    );
+    assert_eq!(config_after, config_before);
+    for project in [&f.project, &duplicate] {
+        let preview = projects
+            .preview_rebind_root(project, moved.clone())
+            .unwrap();
+        projects.rebind_root(preview.revision, preview).unwrap();
+        assert_eq!(
+            f.store.load().unwrap().project(project).unwrap().root,
+            moved
+        );
+    }
+}
+
+#[test]
+fn reconnected_build_outputs_still_block_collisions_at_the_new_missing_path() {
+    let f = Fixture::new(&["echo task"], FailurePolicy::Stop);
+    let old = f
+        .store
+        .load()
+        .unwrap()
+        .project(&f.project)
+        .unwrap()
+        .root
+        .clone();
+    let old_output = old.join("build/not-created");
+    let external = f.temp.path().join("external/not-created");
+    f.store
+        .update(|workspace| {
+            let task = &mut workspace.project_mut(&f.project)?.tasks[0];
+            task.build_outputs = vec![old_output.clone(), external.clone()];
+            task.artifact = Some(old_output.join("result"));
+            Ok(())
+        })
+        .unwrap();
+    f.approve();
+    let tasks = TaskService { store: &f.store };
+    let captured = tasks
+        .launch_plan(&f.project, &f.task, f.env.clone())
+        .unwrap();
+    let mut registry = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
+    let moved = f.temp.path().join("moved 한글");
+    std::fs::rename(&old, &moved).unwrap();
+    let output = moved.join("build/not-created");
+    let projects = ProjectService { store: &f.store };
+    let preview = projects
+        .preview_rebind_root(&f.project, moved.clone())
+        .unwrap();
+    assert!(
+        preview
+            .changes
+            .iter()
+            .any(|change| change.old == old_output && change.new == output),
+        "reconnection must review the moved build-output reservation"
+    );
+    assert!(!preview.changes.iter().any(|change| change.old == external));
+    projects.rebind_root(preview.revision, preview).unwrap();
+    let workspace = f.store.load().unwrap();
+    let task = &workspace.project(&f.project).unwrap().tasks[0];
+    assert_eq!(task.cwd, moved);
+    assert_eq!(task.build_outputs, vec![output.clone(), external]);
+    assert_eq!(task.artifact, Some(output.join("result")));
+    assert!(task.approved_digest.is_none());
+    assert!(tasks
+        .launch_plan(&f.project, &f.task, f.env.clone())
+        .is_err());
+    let common = projects.review_initialization(&f.project, &f.env).unwrap();
+    projects
+        .approve_initialization(common.revision, common)
+        .unwrap();
+    f.approve();
+    // Recreating the old source path must not make a plan captured before the
+    // reconnect valid again, even when its initialization bytes still match.
+    std::fs::create_dir(&old).unwrap();
+    std::fs::copy(moved.join("init.csh"), old.join("init.csh")).unwrap();
+    assert!(
+        registry.begin_reserve(captured, &new_id(), false).is_err(),
+        "a captured launch plan reserved the old paths after reconnection"
+    );
+
+    let mut other = task.clone();
+    other.id = new_id();
+    other.name = "another build".into();
+    other.build_outputs = vec![output.clone()];
+    tasks
+        .save(f.store.load().unwrap().revision, &f.project, other.clone())
+        .unwrap();
+    let review = tasks.review(&f.project, &other.id, &f.env).unwrap();
+    tasks
+        .approve(
+            review.revision,
+            &f.project,
+            &other.id,
+            &review.digest,
+            &f.env,
+        )
+        .unwrap();
+    let plan = tasks
+        .launch_plan(&f.project, &f.task, f.env.clone())
+        .unwrap();
+    let BeginReservation::Fresh(ticket) = registry.begin_reserve(plan, &new_id(), false).unwrap()
+    else {
+        panic!("first build must reserve its outputs");
+    };
+    let conflicting = tasks
+        .launch_plan(&f.project, &other.id, f.env.clone())
+        .unwrap();
+    assert!(!output.exists());
+    let error = registry
+        .begin_reserve(conflicting.clone(), &new_id(), false)
+        .err()
+        .unwrap();
+    assert!(
+        error.to_string().contains("build output conflicts"),
+        "{error}"
+    );
+    registry.begin_abandon(ticket);
+    let BeginReservation::Fresh(ticket) = registry
+        .begin_reserve(conflicting, &new_id(), false)
+        .unwrap()
+    else {
+        panic!("abandoned output reservation must be released");
+    };
+    registry.begin_abandon(ticket);
+}
+
+#[test]
 fn output_collision_and_log_replacement_are_explicit() {
     let f = Fixture::new(&["echo task"], FailurePolicy::Stop);
     let output = f.temp.path().join("build");
@@ -878,6 +1188,8 @@ fn retention_preserves_finalization_retry_and_source_lease_after_a_storage_failu
         .unwrap();
     let oldest = registry.begin(plan.clone(), &new_id(), true).unwrap().run;
     registry.mark_running(&oldest.run_id, &new_id()).unwrap();
+    let run_use = f.store.runtime_dir.join("run-use.lock");
+    assert!(FileLock::acquire(&run_use, true).is_err());
     let observed = oldest.source_start.clone();
     let exit = TerminalExit {
         code: 0,
@@ -926,6 +1238,10 @@ fn retention_preserves_finalization_retry_and_source_lease_after_a_storage_failu
         .unwrap()
         .runs
         .contains_key(&oldest.operation_id));
+    assert!(
+        FileLock::acquire(&run_use, true).is_err(),
+        "a failed final save released the Run's workspace reservation"
+    );
     std::fs::remove_dir(&ledger).unwrap();
     std::fs::rename(&backup, &ledger).unwrap();
     // Storage recovered, but no finish retry has saved the oldest outcome yet.
@@ -941,6 +1257,10 @@ fn retention_preserves_finalization_retry_and_source_lease_after_a_storage_failu
         "retention discarded an execution still awaiting durable finalization"
     );
     assert!(log.is_file() && directory.is_dir());
+    assert!(
+        FileLock::acquire(&run_use, true).is_err(),
+        "storage recovery released the reservation before finalization was durable"
+    );
     assert!(gate
         .reserve_mutation(repository.identity(), &new_id())
         .is_err());
@@ -954,6 +1274,11 @@ fn retention_preserves_finalization_retry_and_source_lease_after_a_storage_failu
         )
         .unwrap();
     assert_eq!(finished.state, RunState::Succeeded);
+    assert!(finished.cleanup_confirmed);
+    assert!(
+        FileLock::acquire(&run_use, true).is_ok(),
+        "durably confirmed cleanup did not release the workspace reservation"
+    );
     assert!(gate
         .reserve_mutation(repository.identity(), &new_id())
         .is_ok());
@@ -1046,15 +1371,48 @@ fn cancellation_remains_requested_through_partial_cleanup_and_then_final_confirm
 #[test]
 fn explicit_unknown_cleanup_reconciliation_preserves_unknown_exit_outcome() {
     let f = Fixture::new(&["echo task"], FailurePolicy::Stop);
+    let old = f
+        .store
+        .load()
+        .unwrap()
+        .project(&f.project)
+        .unwrap()
+        .root
+        .clone();
     let mut registry = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
     let run = f.begin(&mut registry, &new_id(), false).run;
     assert!(registry.acknowledge_unknown_cleanup(&run.run_id).is_err());
     drop(registry);
     let mut registry = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
+    assert_eq!(registry.info(&run.run_id).unwrap().state, RunState::Unknown);
+    assert!(
+        FileLock::acquire(&f.store.runtime_dir.join("run-use.lock"), true).is_ok(),
+        "this recovery case must have no surviving in-memory Run lease"
+    );
+    let moved = f.temp.path().join("moved source");
+    std::fs::rename(&old, &moved).unwrap();
+    let projects = ProjectService { store: &f.store };
+    let preview = projects
+        .preview_rebind_root(&f.project, moved.clone())
+        .unwrap();
+    let config_before = std::fs::read(f.store.config_path()).unwrap();
+    assert!(
+        projects
+            .rebind_root(preview.revision, preview.clone())
+            .is_err(),
+        "recovered Unknown work allowed reconnect after its in-memory lease was lost"
+    );
+    assert_eq!(std::fs::read(f.store.config_path()).unwrap(), config_before);
     let unknown = registry.acknowledge_unknown_cleanup(&run.run_id).unwrap();
     assert_eq!(unknown.state, RunState::Unknown);
     assert!(unknown.cleanup_confirmed);
     assert_eq!(unknown.exit_code, None);
+    projects.rebind_root(preview.revision, preview).unwrap();
+    let common = projects.review_initialization(&f.project, &f.env).unwrap();
+    projects
+        .approve_initialization(common.revision, common)
+        .unwrap();
+    f.approve();
     assert!(!f.begin(&mut registry, &new_id(), false).existing);
 }
 

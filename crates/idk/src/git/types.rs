@@ -110,10 +110,19 @@ impl GitChange {
     pub fn staged(&self) -> bool {
         !matches!(self.index_status, '.' | ' ' | '?') && !self.untracked
     }
-    pub fn paths(&self) -> Vec<GitPath> {
+    /// A rename changes both paths only on the side where it occurred. Staging
+    /// later edits to an index rename must not add a recreated source file;
+    /// copies never change their source path.
+    pub fn paths(&self, target: DiffTarget) -> Vec<GitPath> {
         let mut paths = vec![self.path.clone()];
-        if let Some(original) = &self.original_path {
-            paths.push(original.clone());
+        let status = match target {
+            DiffTarget::Index => self.index_status,
+            DiffTarget::Worktree => self.worktree_status,
+        };
+        if status == 'R' {
+            if let Some(original) = &self.original_path {
+                paths.push(original.clone());
+            }
         }
         paths
     }

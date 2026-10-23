@@ -46,8 +46,14 @@ pub(super) fn status(bytes: &[u8]) -> Result<Porcelain> {
             continue; // Git explicitly permits unknown optional headers.
         }
         if record.starts_with(b"? ") || record.starts_with(b"! ") {
+            // Porcelain marks untracked directories (including nested
+            // repositories, even with --untracked-files=all) with one trailing
+            // slash. It is a directory marker, not part of the filename. Keep
+            // all name bytes and the ordinary GitPath validation unchanged.
+            let path = &record[2..];
+            let path = path.strip_suffix(b"/").unwrap_or(path);
             parsed.entries.push(GitChange {
-                path: GitPath::from_bytes(record[2..].to_vec())?,
+                path: GitPath::from_bytes(path.to_vec())?,
                 original_path: None,
                 index_status: '?',
                 worktree_status: '?',
@@ -156,4 +162,27 @@ pub(super) fn history(bytes: &[u8]) -> Result<Vec<CommitSummary>> {
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_path_directory_marker_preserves_name_bytes_without_relaxing_path_validation() {
+        let parsed = status(b"? nested-\xff\ncheckout/\0! ignored/\0").unwrap();
+        assert_eq!(parsed.entries[0].path.bytes(), b"nested-\xff\ncheckout");
+        assert_eq!(parsed.entries[1].path.bytes(), b"ignored");
+        for invalid in [
+            b"? /\0".as_slice(),
+            b"? ../\0",
+            b"? ./\0",
+            b"? nested//\0",
+            b"? nested/../\0",
+            b"? /absolute/\0",
+        ] {
+            assert!(status(invalid).is_err(), "{invalid:?}");
+        }
+        assert!(GitPath::from_bytes(b"nested/".to_vec()).is_err());
+    }
 }

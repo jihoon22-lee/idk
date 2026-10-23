@@ -193,6 +193,45 @@ fn index_changes_reject_stale_review_and_unstage_preserves_unstaged_edits() {
 }
 
 #[test]
+fn git_path_untracked_nested_repository_keeps_outer_status_and_commit_available() {
+    let f = Fixture::new();
+    f.initial();
+    let nested_name = b"nested-\xff\ncheckout";
+    let nested = f.root.join(OsString::from_vec(nested_name.to_vec()));
+    fs::create_dir(&nested).unwrap();
+    git(&nested, &["init", "-b", "main"]);
+    fs::write(nested.join("source"), "nested source\n").unwrap();
+    git(&nested, &["add", "source"]);
+    let nested_head = fs::read(nested.join(".git/HEAD")).unwrap();
+    let nested_index = fs::read(nested.join(".git/index")).unwrap();
+    f.write("outer", "outer change\n");
+
+    let snapshot = f.service.refresh().unwrap();
+    let entry = snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.path.bytes() == nested_name)
+        .expect("untracked nested repository remains visible");
+    assert!(entry.untracked);
+    assert_eq!(entry.path.display(), "nested-\\xff\\ncheckout");
+    assert!(!snapshot.clean());
+    assert_eq!(f.stage(&["outer"]).outcome, GitOutcome::Succeeded);
+    let review = f.service.commit_preview().unwrap();
+    assert_eq!(review.staged.len(), 1);
+    assert_eq!(review.staged[0].path.bytes(), b"outer");
+    let plan = f.service.plan_commit(&review, "outer change only").unwrap();
+    assert_eq!(f.execute(&plan).outcome, GitOutcome::Succeeded);
+
+    assert_eq!(fs::read(nested.join(".git/HEAD")).unwrap(), nested_head);
+    assert_eq!(fs::read(nested.join(".git/index")).unwrap(), nested_index);
+    assert_eq!(fs::read(nested.join("source")).unwrap(), b"nested source\n");
+    let snapshot = f.service.refresh().unwrap();
+    assert_eq!(snapshot.entries.len(), 1);
+    assert_eq!(snapshot.entries[0].path.bytes(), nested_name);
+    assert!(snapshot.entries[0].untracked);
+}
+
+#[test]
 fn hooks_are_not_bypassed_and_modified_commit_is_reported() {
     let f = Fixture::new();
     f.initial();

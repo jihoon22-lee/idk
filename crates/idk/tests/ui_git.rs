@@ -295,6 +295,42 @@ fn git_ui_keeps_primary_target_stages_literal_names_and_commits_entire_actual_in
 }
 
 #[test]
+fn git_path_ui_stages_only_selected_rename_and_unstages_without_changing_files() {
+    let fixture = Fixture::new();
+    let original = "original source line\n".repeat(8);
+    fs::write(fixture.root.join("base"), &original).unwrap();
+    git(&fixture.root, &["commit", "-am", "longer source"]);
+    git(&fixture.root, &["mv", "base", "renamed"]);
+    let edited = format!("{original}selected edit\n");
+    fs::write(fixture.root.join("renamed"), &edited).unwrap();
+    fs::write(fixture.root.join("base"), "unselected replacement\n").unwrap();
+    let mut app = fixture.app();
+    let text = screen(&mut app);
+    assert!(text.contains("RM"));
+    assert!(text.contains("renamed ← base"));
+    assert!(text.contains("untracked"));
+
+    key(&mut app, KeyCode::Home);
+    key(&mut app, KeyCode::Char('s'));
+    done(&mut app, "Stage");
+    assert!(git(&fixture.root, &["ls-files", "-z", "--", "base"]).is_empty());
+    assert_eq!(git(&fixture.root, &["show", ":renamed"]), edited);
+    assert!(screen(&mut app).contains("renamed ← base"));
+    key(&mut app, KeyCode::Home);
+    key(&mut app, KeyCode::Char('u'));
+    done(&mut app, "Unstage");
+    assert!(git(&fixture.root, &["diff", "--cached", "--name-only", "-z"]).is_empty());
+    assert_eq!(
+        fs::read(fixture.root.join("renamed")).unwrap(),
+        edited.as_bytes()
+    );
+    assert_eq!(
+        fs::read(fixture.root.join("base")).unwrap(),
+        b"unselected replacement\n"
+    );
+}
+
+#[test]
 fn changed_index_invalidates_commit_review_without_losing_multiline_draft() {
     let fixture = Fixture::new();
     fs::write(fixture.root.join("base"), "reviewed\n").unwrap();

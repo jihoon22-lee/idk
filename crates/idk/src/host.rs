@@ -66,8 +66,16 @@ pub fn serve(store: Store, launcher: PathBuf) -> Result<()> {
     for directory in [&store.config_dir, &store.state_dir, &store.runtime_dir] {
         ensure_private_dir(directory)?;
     }
-    let _lock = FileLock::acquire(&store.runtime_dir.join("host.lock"), true)
+    // The separate owner lock excludes other new hosts even during flock's
+    // non-atomic EX -> SH conversion. Legacy hosts still take host.lock EX.
+    let _owner = FileLock::acquire(&store.runtime_dir.join("host-owner.lock"), true)
+        .context("another host holds the host ownership lock")?;
+    let mut lifetime = FileLock::acquire(&store.runtime_dir.join("host.lock"), true)
         .context("another host holds the lifetime lock")?;
+    // Root reconnection may share this guard with a compatible host, while a
+    // legacy EX holder is excluded. A legacy winner during conversion makes
+    // this startup fail before any actor, socket or durable ledger is opened.
+    lifetime.downgrade_shared()?;
     let build_id = protocol::executable_build_id(&launcher)?;
     ensure!(
         build_id == protocol::executable_build_id(std::path::Path::new("/proc/self/exe"))?,
