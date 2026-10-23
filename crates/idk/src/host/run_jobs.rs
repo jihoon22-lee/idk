@@ -103,6 +103,7 @@ enum Deferred {
     Finish {
         seq: u64,
         dispatched: Instant,
+        session: String,
         run_id: String,
         exit: Option<TerminalExit>,
         error: Option<String>,
@@ -145,6 +146,8 @@ pub(super) enum Work {
         signal_level: bool,
     },
     Finish {
+        /// Reply routing must survive an unavailable/missing registry record.
+        session: String,
         run_id: String,
         exit: Option<TerminalExit>,
         error: Option<String>,
@@ -318,6 +321,7 @@ impl Bridge {
                                 }]
                             }
                             Work::Finish {
+                                session,
                                 run_id,
                                 exit,
                                 error,
@@ -326,6 +330,7 @@ impl Bridge {
                                 &mut registry,
                                 &mut prober,
                                 &mut deferred,
+                                session,
                                 run_id,
                                 exit,
                                 error,
@@ -477,6 +482,7 @@ impl Bridge {
     }
     pub fn finish(
         &mut self,
+        session: &str,
         id: &str,
         exit: Option<TerminalExit>,
         error: Option<String>,
@@ -485,6 +491,7 @@ impl Bridge {
         self.ensure_live()?;
         self.sender
             .try_send(Work::Finish {
+                session: session.into(),
                 run_id: id.into(),
                 exit,
                 error,
@@ -859,7 +866,17 @@ fn spawn_start(
             if cancel.load(Ordering::Acquire) {
                 let _ = registry.cancel(&id, false);
             }
-            *run_out = Some(registry.finish(&id, None, true, Some(safe_error(&error)))?);
+            *run_out = Some(
+                registry
+                    .finish(&id, None, true, Some(safe_error(&error)))
+                    .map_err(|persistence| {
+                        anyhow::anyhow!(
+                            "task preparation failed: {}; outcome could not be saved: {}",
+                            safe_error(&error),
+                            safe_error(persistence)
+                        )
+                    })?,
+            );
             Err(error)
         }
     }
@@ -984,31 +1001,28 @@ fn complete_deferred(
             let waiter_events: Vec<Event> = waiters
                 .into_iter()
                 .map(|(waiter_id, waiter_session, waiter_cancel)| {
-                    let (run, result) = if waiter_cancel.load(Ordering::Acquire) {
-                        (
-                            run_out.clone(),
-                            Err(anyhow::anyhow!("run job cancelled before execution")),
-                        )
+                    let result = if waiter_cancel.load(Ordering::Acquire) {
+                        Err(anyhow::anyhow!("run job cancelled before execution"))
                     } else {
                         match &result {
-                            Ok(RunResult::Started(reply)) => (
-                                run_out.clone(),
+                            Ok(RunResult::Started(reply)) => {
                                 Ok(RunResult::Started(RunStartReply {
                                     run: reply.run.clone(),
                                     existing: true,
-                                })),
-                            ),
-                            Ok(other) => (run_out.clone(), Ok(other.clone())),
-                            Err(error) => {
-                                (run_out.clone(), Err(anyhow::anyhow!(error.to_string())))
+                                }))
                             }
+                            Ok(other) => Ok(other.clone()),
+                            Err(error) => Err(anyhow::anyhow!(error.to_string())),
                         }
                     };
                     Event {
                         job_id: Some(waiter_id),
                         session_id: waiter_session,
                         runtime: None,
-                        run,
+                        // The placeholder never owns the original execution,
+                        // including when it is cancelled or the start fails.
+                        // Only the client-visible result shares that Run.
+                        run: None,
                         result,
                         cancel: None,
                         work_done: true,
@@ -1028,6 +1042,7 @@ fn complete_deferred(
             events
         }
         Deferred::Finish {
+            session,
             run_id,
             exit,
             error,
@@ -1041,7 +1056,7 @@ fn complete_deferred(
                 .or_else(|| registry.info(&run_id).ok());
             vec![Event {
                 job_id: None,
-                session_id: run.as_ref().and_then(|run| run.session_id.clone()),
+                session_id: Some(session),
                 runtime: None,
                 run,
                 result: result.map(RunResult::Run),
@@ -1237,10 +1252,12 @@ fn request_events(
 /// Finishes a run: the source observation is deferred to the probe worker
 /// when the run owns a repository; without one the observation is trivial
 /// and the finish stays synchronous.
+#[allow(clippy::too_many_arguments)]
 fn finish_events(
     registry: &mut RunRegistry,
     prober: &mut Option<Prober>,
     deferred: &mut Vec<Deferred>,
+    session: String,
     run_id: String,
     exit: Option<TerminalExit>,
     error: Option<String>,
@@ -1264,6 +1281,7 @@ fn finish_events(
                         deferred.push(Deferred::Finish {
                             seq,
                             dispatched: Instant::now(),
+                            session,
                             run_id,
                             exit,
                             error,
@@ -1282,7 +1300,7 @@ fn finish_events(
                             .or_else(|| registry.info(&run_id).ok());
                         return vec![Event {
                             job_id: None,
-                            session_id: run.as_ref().and_then(|run| run.session_id.clone()),
+                            session_id: Some(session),
                             runtime: None,
                             run,
                             result: result.map(RunResult::Run),
@@ -1302,7 +1320,7 @@ fn finish_events(
         .or_else(|| registry.info(&run_id).ok());
     vec![Event {
         job_id: None,
-        session_id: run.as_ref().and_then(|run| run.session_id.clone()),
+        session_id: Some(session),
         runtime: None,
         run,
         result: result.map(RunResult::Run),
@@ -1367,7 +1385,9 @@ mod tests {
             )
             .is_err());
         assert!(bridge.cancel_run(&new_id(), false).is_err());
-        assert!(bridge.finish(&new_id(), None, None, false).is_err());
+        assert!(bridge
+            .finish(&new_id(), &new_id(), None, None, false)
+            .is_err());
     }
     #[test]
     fn live_worker_empty_poll_is_not_death() {
@@ -1382,6 +1402,49 @@ mod tests {
                 Arc::new(AtomicBool::new(false)),
             )
             .is_ok());
+    }
+    #[test]
+    fn failed_finish_events_keep_the_origin_session_without_a_registry_record() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(Some(&root.path().join("data"))).unwrap();
+        let mut registry = RunRegistry::open(store, SourceGate::default()).unwrap();
+        let session = new_id();
+        let run_id = new_id();
+        let direct = finish_events(
+            &mut registry,
+            &mut None,
+            &mut Vec::new(),
+            session.clone(),
+            run_id.clone(),
+            None,
+            None,
+            false,
+        );
+        let deferred = Deferred::Finish {
+            seq: 1,
+            dispatched: Instant::now(),
+            session: session.clone(),
+            run_id,
+            exit: None,
+            error: None,
+            identity: None,
+        };
+        let observation = lost_observation(&deferred);
+        let deferred = complete_deferred(
+            root.path(),
+            root.path(),
+            &mut registry,
+            deferred,
+            observation,
+        );
+        for events in [direct, deferred] {
+            assert_eq!(events.len(), 1);
+            let event = &events[0];
+            assert_eq!(event.session_id.as_deref(), Some(session.as_str()));
+            assert!(event.result.is_err());
+            assert!(event.run.is_none());
+            assert!(event.work_done);
+        }
     }
     #[test]
     fn repeated_follow_requests_evict_completed_jobs_but_preserve_pending_work() {
@@ -1502,6 +1565,7 @@ mod tests {
             Deferred::Finish {
                 seq: 1,
                 dispatched: Instant::now(),
+                session: new_id(),
                 run_id: new_id(),
                 exit: None,
                 error: None,
@@ -1510,6 +1574,7 @@ mod tests {
             Deferred::Finish {
                 seq: 2,
                 dispatched: Instant::now(),
+                session: new_id(),
                 run_id: new_id(),
                 exit: None,
                 error: None,
@@ -1531,6 +1596,7 @@ mod tests {
         let entry = Deferred::Finish {
             seq: 7,
             dispatched: Instant::now(),
+            session: new_id(),
             run_id: new_id(),
             exit: None,
             error: None,

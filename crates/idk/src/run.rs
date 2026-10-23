@@ -170,6 +170,9 @@ struct Active {
     _lease: Option<GateLease>,
     directory: PathBuf,
     started: Instant,
+    /// The host has reported the execution's end. Source observation and
+    /// durable finalization may still be pending, with the lease retained.
+    finishing: bool,
 }
 struct PendingResources {
     directory: PathBuf,
@@ -448,15 +451,21 @@ impl RunRegistry {
         for pending in &self.pending_starts {
             ensure!(!outputs.iter().any(|path| pending.build_outputs.iter().any(|other| path.starts_with(other) || other.starts_with(path))), "build output conflicts with a start still being prepared; wait or register distinct output locations");
         }
-        while self.runs.len() >= HISTORY_LIMIT {
+        // Each deferred ticket will add one record when its observation
+        // completes. Reserve that capacity now, alongside committed history.
+        while self.runs.len() + self.pending_starts.len() >= HISTORY_LIMIT {
             let index = self
                 .runs
                 .iter()
                 .position(|run| {
                     !run.state.is_live()
                         && (run.state != RunState::Unknown || run.cleanup_confirmed)
+                        && !self
+                            .active
+                            .get(&run.run_id)
+                            .is_some_and(|active| active.finishing)
                 })
-                .context("run history full of active/unknown executions")?;
+                .context("run history full of active, unknown or unfinalized executions")?;
             let old = self.runs.remove(index);
             self.active.remove(&old.run_id);
             let path = self.logs.join(format!("{}.log", old.run_id));
@@ -609,6 +618,7 @@ impl RunRegistry {
                 _lease: lease,
                 directory,
                 started: Instant::now(),
+                finishing: false,
             },
         );
         pending.retained = true;
@@ -657,6 +667,13 @@ impl RunRegistry {
     }
     /// Cancellation request is durable before the caller attempts owned process cleanup.
     pub fn cancel(&mut self, run_id: &str, timeout: bool) -> Result<RunInfo> {
+        ensure!(
+            !self
+                .active
+                .get(run_id)
+                .is_some_and(|active| active.finishing),
+            "run execution already ended; source observation or durable finalization is pending"
+        );
         let run = self.run_mut(run_id)?;
         ensure!(
             run.state.is_live(),
@@ -708,21 +725,24 @@ impl RunRegistry {
                 matches!(run.state, RunState::Preparing | RunState::Running)
                     && run.timeout_seconds.is_some_and(|seconds| {
                         self.active.get(&run.run_id).is_some_and(|active| {
-                            now.saturating_duration_since(active.started)
-                                >= Duration::from_secs(seconds)
+                            !active.finishing
+                                && now.saturating_duration_since(active.started)
+                                    >= Duration::from_secs(seconds)
                         })
                     })
             })
             .map(|run| run.run_id.clone())
             .collect()
     }
-    /// Source inputs for a finish observation, while the lease is still held.
-    /// The observation may run off this thread before `finish_observed`.
-    pub fn finish_probe(&self, run_id: &str) -> Result<SourceProbe> {
+    /// Begins finalization after the caller observes execution end. The
+    /// execution timeout stops here; the source lease stays held while this
+    /// observation and the eventual durable `finish_observed` are pending.
+    pub fn finish_probe(&mut self, run_id: &str) -> Result<SourceProbe> {
         let active = self
             .active
-            .get(run_id)
+            .get_mut(run_id)
             .context("run not owned by this host")?;
+        active.finishing = true;
         Ok(SourceProbe {
             repository: active.plan.repository.clone(),
             gate: self.gate.clone(),
@@ -752,8 +772,12 @@ impl RunRegistry {
     ) -> Result<RunInfo> {
         let active = self
             .active
-            .get(run_id)
+            .get_mut(run_id)
             .context("run not owned by this host")?;
+        // Direct/synchronous finalization has the same retention boundary as
+        // a deferred probe. A failed save must leave its retry state and lease
+        // intact even though the in-memory outcome below is already final.
+        active.finishing = true;
         let results = read_steps(&active.directory, &steps(&active.plan.task));
         active.sink.finish();
         let log = active.sink.descriptor();
@@ -794,8 +818,9 @@ impl RunRegistry {
         run.cleanup_confirmed = cleanup_confirmed;
         // Persist actual outcome BEFORE allowing source mutation again.
         self.persist()?;
-        if cleanup_confirmed {
-            if let Some(active) = self.active.get_mut(run_id) {
+        if let Some(active) = self.active.get_mut(run_id) {
+            active.finishing = false;
+            if cleanup_confirmed {
                 active._lease.take();
             }
         }
@@ -966,13 +991,12 @@ impl RunRegistry {
         Ok(reply)
     }
     pub fn persist(&self) -> Result<()> {
-        self.store.write_state(
-            LEDGER,
-            &Ledger {
-                schema: 1,
-                runs: self.list(None),
-            },
-        )
+        let ledger = Ledger {
+            schema: 1,
+            runs: self.list(None),
+        };
+        ledger.validate()?;
+        self.store.write_state(LEDGER, &ledger)
     }
     fn run_mut(&mut self, run_id: &str) -> Result<&mut RunInfo> {
         self.runs

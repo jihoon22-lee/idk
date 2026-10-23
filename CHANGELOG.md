@@ -9,6 +9,18 @@
 
 ## [Unreleased]
 
+### Fixed
+- 중복 Run 준비 요청의 취소·실패가 원본 실행 identity를 별도 session에 복제해
+  host 재시작을 막던 문제를 수정한다. 대기 요청은 실행 결과만 공유하며 소유권을 갖지 않는다.
+- Run 이력 64개 한도에 진행 중인 시작 예약을 포함하고, host·Run 원장은 저장 전에
+  schema와 identity 불변식을 검사한다. 종료 결과 저장이 실패한 실행은 저장 재시도가
+  끝날 때까지 실행과 host session을 이력 정리에서 제외하여 로그·runtime·source lease를
+  보존한다. host 종료도 최종 저장의 성공 응답을 확인한 뒤 완료한다.
+- 실제 종료와 cleanup 이후 source 관찰을 기다리는 시간을 작업 timeout에서 제외한다.
+  늦은 취소 요청이 확인된 실행 결과를 바꾸지 않으며 source 보호는 최종 저장까지 유지한다.
+- `doctor`는 같은 binary의 host 접속에서 instance와 PID가 모두 일치할 때만 실행 중으로
+  판정한다. 재사용된 PID·확인 불가능한 접속은 경고이며 `--strict` 검사에 반영한다.
+
 ## [0.4.2] - 2026-10-08
 
 ### Fixed

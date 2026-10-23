@@ -291,6 +291,90 @@ fn deferred_begin_reservation_commits_and_blocks_duplicates() {
     assert_eq!(registry.list(None).len(), 2);
 }
 #[test]
+fn deferred_reservations_share_history_capacity_and_reopen_within_the_limit() {
+    use idk_workspace::run::BeginReservation;
+    let f = Fixture::new(&["echo command"], FailurePolicy::Stop);
+    let mut registry = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
+    let plan = (TaskService { store: &f.store })
+        .launch_plan(&f.project, &f.task, f.env.clone())
+        .unwrap();
+    for _ in 0..63 {
+        let run = registry.begin(plan.clone(), &new_id(), false).unwrap().run;
+        registry
+            .finish(
+                &run.run_id,
+                Some(TerminalExit {
+                    code: 0,
+                    signal: None,
+                }),
+                true,
+                None,
+            )
+            .unwrap();
+    }
+    let mut tickets = Vec::new();
+    for _ in 0..2 {
+        let BeginReservation::Fresh(ticket) = registry
+            .begin_reserve(plan.clone(), &new_id(), true)
+            .unwrap()
+        else {
+            panic!("parallel reservation must be fresh");
+        };
+        tickets.push(ticket);
+    }
+    let mut started = Vec::new();
+    for ticket in tickets {
+        let observation = ticket.probe(registry.gate()).observe_now();
+        started.push(
+            registry
+                .begin_commit(ticket, observation)
+                .unwrap()
+                .run
+                .run_id,
+        );
+    }
+    assert_eq!(registry.list(None).len(), 64);
+    drop(registry);
+    let recovered = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
+    assert_eq!(recovered.list(None).len(), 64);
+    for id in started {
+        assert_eq!(recovered.info(&id).unwrap().state, RunState::Unknown);
+    }
+}
+#[test]
+fn pending_reservations_cannot_overbook_history_and_abandonment_returns_capacity() {
+    use idk_workspace::run::BeginReservation;
+    let f = Fixture::new(&["echo command"], FailurePolicy::Stop);
+    let mut registry = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
+    let plan = (TaskService { store: &f.store })
+        .launch_plan(&f.project, &f.task, f.env.clone())
+        .unwrap();
+    let mut tickets = Vec::new();
+    for _ in 0..64 {
+        let BeginReservation::Fresh(ticket) = registry
+            .begin_reserve(plan.clone(), &new_id(), true)
+            .unwrap()
+        else {
+            panic!("parallel reservation must be fresh");
+        };
+        tickets.push(ticket);
+    }
+    assert!(registry
+        .begin_reserve(plan.clone(), &new_id(), true)
+        .is_err());
+    registry.begin_abandon(tickets.pop().unwrap());
+    let BeginReservation::Fresh(replacement) =
+        registry.begin_reserve(plan, &new_id(), true).unwrap()
+    else {
+        panic!("abandonment must release the reserved capacity");
+    };
+    tickets.push(replacement);
+    for ticket in tickets {
+        registry.begin_abandon(ticket);
+    }
+    assert!(registry.list(None).is_empty());
+}
+#[test]
 fn abandoned_reservation_releases_task_and_lease() {
     use idk_workspace::run::BeginReservation;
     let f = Fixture::new(&["echo command"], FailurePolicy::Stop);
@@ -320,6 +404,42 @@ fn finish_probe_then_observed_matches_synchronous_finish() {
         .unwrap();
     assert_eq!(finished.state, RunState::Unknown);
     assert!(finished.source_end.is_some());
+}
+#[test]
+fn observed_execution_end_stops_timeout_while_source_finalization_is_pending() {
+    let f = Fixture::new(&["echo command"], FailurePolicy::Stop);
+    f.store
+        .update(|workspace| {
+            workspace.project_mut(&f.project)?.tasks[0].timeout_seconds = Some(1);
+            Ok(())
+        })
+        .unwrap();
+    f.approve();
+    let mut registry = RunRegistry::open(f.store.clone(), SourceGate::default()).unwrap();
+    let run = f.begin(&mut registry, &new_id(), false).run;
+    let after_timeout = Instant::now() + Duration::from_secs(2);
+    assert_eq!(
+        registry.timed_out_at(after_timeout),
+        vec![run.run_id.clone()]
+    );
+    let probe = registry.finish_probe(&run.run_id).unwrap();
+    assert!(registry.timed_out_at(after_timeout).is_empty());
+    assert!(registry.cancel(&run.run_id, false).is_err());
+    let finished = registry
+        .finish_observed(
+            &run.run_id,
+            Some(TerminalExit {
+                code: 0,
+                signal: None,
+            }),
+            true,
+            None,
+            probe.observe_now(),
+        )
+        .unwrap();
+    assert_eq!(finished.state, RunState::Succeeded);
+    assert_eq!(finished.exit_code, Some(0));
+    assert!(!finished.cancel_requested && !finished.timeout_requested);
 }
 #[test]
 fn logging_is_bounded_and_search_keeps_byte_positions_and_sanitizes_controls() {
@@ -714,6 +834,147 @@ fn bounded_retention_removes_only_old_completed_owned_logs_and_resources() {
         .sources[0]
         .path
         .exists());
+}
+#[test]
+fn retention_preserves_finalization_retry_and_source_lease_after_a_storage_failure() {
+    use idk_workspace::run::BeginReservation;
+    let f = Fixture::new(&["echo retained"], FailurePolicy::Stop);
+    let root = f
+        .store
+        .load()
+        .unwrap()
+        .project(&f.project)
+        .unwrap()
+        .root
+        .clone();
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.name", "Fixture"],
+        vec!["config", "user.email", "fixture@example.invalid"],
+        vec!["add", "."],
+        vec!["commit", "-qm", "fixture"],
+    ] {
+        assert!(std::process::Command::new("git")
+            .current_dir(&root)
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let repository = idk_workspace::git::Repository::discover(&root).unwrap();
+    f.store
+        .update(|workspace| {
+            let project = workspace.project_mut(&f.project)?;
+            project.repository = Some(root.clone());
+            project.repository_binding = Some(repository.clone());
+            Ok(())
+        })
+        .unwrap();
+    f.approve();
+    let gate = SourceGate::default();
+    let mut registry = RunRegistry::open(f.store.clone(), gate.clone()).unwrap();
+    let plan = (TaskService { store: &f.store })
+        .launch_plan(&f.project, &f.task, f.env.clone())
+        .unwrap();
+    let oldest = registry.begin(plan.clone(), &new_id(), true).unwrap().run;
+    registry.mark_running(&oldest.run_id, &new_id()).unwrap();
+    let observed = oldest.source_start.clone();
+    let exit = TerminalExit {
+        code: 0,
+        signal: None,
+    };
+    // Fill the remaining history while keeping the first execution owned.
+    for _ in 0..63 {
+        let BeginReservation::Fresh(ticket) = registry
+            .begin_reserve(plan.clone(), &new_id(), true)
+            .unwrap()
+        else {
+            panic!()
+        };
+        let run = registry.begin_commit(ticket, observed.clone()).unwrap().run;
+        registry
+            .finish_observed(
+                &run.run_id,
+                Some(exit.clone()),
+                true,
+                None,
+                observed.clone(),
+            )
+            .unwrap();
+    }
+    let log = f
+        .store
+        .state_dir
+        .join("run-logs")
+        .join(format!("{}.log", oldest.run_id));
+    let directory = f.store.runtime_dir.join(format!("run-{}", oldest.run_id));
+    let ledger = f.store.state_dir.join("runs.json");
+    let backup = f.store.state_dir.join("runs.saved");
+    std::fs::rename(&ledger, &backup).unwrap();
+    std::fs::create_dir(&ledger).unwrap();
+    assert!(registry
+        .finish_observed(
+            &oldest.run_id,
+            Some(exit.clone()),
+            true,
+            None,
+            observed.clone()
+        )
+        .is_err());
+    assert!(gate
+        .state(repository.identity())
+        .unwrap()
+        .runs
+        .contains_key(&oldest.operation_id));
+    std::fs::remove_dir(&ledger).unwrap();
+    std::fs::rename(&backup, &ledger).unwrap();
+    // Storage recovered, but no finish retry has saved the oldest outcome yet.
+    let BeginReservation::Fresh(ticket) = registry
+        .begin_reserve(plan.clone(), &new_id(), true)
+        .unwrap()
+    else {
+        panic!()
+    };
+    registry.begin_abandon(ticket);
+    assert!(
+        registry.info(&oldest.run_id).is_ok(),
+        "retention discarded an execution still awaiting durable finalization"
+    );
+    assert!(log.is_file() && directory.is_dir());
+    assert!(gate
+        .reserve_mutation(repository.identity(), &new_id())
+        .is_err());
+    let finished = registry
+        .finish_observed(
+            &oldest.run_id,
+            Some(exit.clone()),
+            true,
+            None,
+            observed.clone(),
+        )
+        .unwrap();
+    assert_eq!(finished.state, RunState::Succeeded);
+    assert!(gate
+        .reserve_mutation(repository.identity(), &new_id())
+        .is_ok());
+    // Once the final outcome is durable, ordinary retention can reclaim it.
+    let BeginReservation::Fresh(ticket) = registry
+        .begin_reserve(plan.clone(), &new_id(), true)
+        .unwrap()
+    else {
+        panic!()
+    };
+    let run = registry.begin_commit(ticket, observed.clone()).unwrap().run;
+    registry
+        .finish_observed(&run.run_id, Some(exit), true, None, observed)
+        .unwrap();
+    let BeginReservation::Fresh(ticket) = registry.begin_reserve(plan, &new_id(), true).unwrap()
+    else {
+        panic!()
+    };
+    registry.begin_abandon(ticket);
+    assert!(registry.info(&oldest.run_id).is_err());
+    assert!(!log.exists() && !directory.exists());
 }
 #[test]
 fn builtin_aliases_cannot_mask_step_status_or_wrapper_assignment() {

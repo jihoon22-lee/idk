@@ -130,8 +130,15 @@ impl Fixture {
             .unwrap();
     }
     fn host(&self) -> (Host, Client) {
+        self.host_with_path(None)
+    }
+    fn host_with_path(&self, path: Option<&std::ffi::OsStr>) -> (Host, Client) {
+        let mut command = Command::new(launcher::path());
+        if let Some(path) = path {
+            command.env("PATH", path);
+        }
         let mut host = Host(
-            Command::new(launcher::path())
+            command
                 .args(["__host", "--config-dir"])
                 .arg(&self.store.config_dir)
                 .arg("--state-dir")
@@ -168,18 +175,22 @@ impl Fixture {
             .unwrap()
     }
 }
-fn result(client: &mut Client, job: RunJob) -> RunResult {
+fn settled(client: &mut Client, job: RunJob) -> RunJob {
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut job = job;
     loop {
         if job.state != RunJobState::Pending {
-            assert_eq!(job.state, RunJobState::Complete, "{job:?}");
-            return job.result.unwrap();
+            return job;
         }
         assert!(Instant::now() < deadline, "{job:?}");
         std::thread::sleep(Duration::from_millis(10));
         job = client.run(RunRequest::Job { job_id: job.job_id }).unwrap();
     }
+}
+fn result(client: &mut Client, job: RunJob) -> RunResult {
+    let job = settled(client, job);
+    assert_eq!(job.state, RunJobState::Complete, "{job:?}");
+    job.result.unwrap()
 }
 fn request(client: &mut Client, request: RunRequest) -> RunResult {
     let job = client.run(request).unwrap();
@@ -401,6 +412,409 @@ fn git_binding(f: &Fixture) -> idk_workspace::git::Repository {
         .unwrap();
     f.approve();
     repo
+}
+/// A real Git fsmonitor invocation holds a provenance observation until the
+/// test releases it. Its files stay under .git so they do not change source.
+struct SourceProbeBarrier {
+    entered: PathBuf,
+    release: PathBuf,
+}
+impl SourceProbeBarrier {
+    fn install(f: &Fixture, block_immediately: bool) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = f.root.join(".git");
+        let hook = directory.join("probe-barrier");
+        std::fs::write(
+            &hook,
+            "#!/bin/sh\ncontrol=$(dirname \"$0\")\nif test -e \"$control/probe-block\"; then\n  : > \"$control/probe-entered\"\n  while test -d \"$control\" && ! test -e \"$control/probe-release\"; do sleep 0.01; done\nfi\nprintf 'fixture\\0/\\0'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(Command::new("git")
+            .current_dir(&f.root)
+            .args(["config", "core.fsmonitor"])
+            .arg(&hook)
+            .status()
+            .unwrap()
+            .success());
+        if block_immediately {
+            std::fs::write(directory.join("probe-block"), "block").unwrap();
+        }
+        Self {
+            entered: directory.join("probe-entered"),
+            release: directory.join("probe-release"),
+        }
+    }
+    fn verification(f: &Fixture) -> (Self, std::ffi::OsString) {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = f.root.join(".git/probe-bin");
+        std::fs::create_dir(&directory).unwrap();
+        let wrapper = directory.join("git");
+        // Hold successive discovery steps in bounded rounds below each Git
+        // subprocess deadline. This leaves enough time to fill the actor's
+        // retention window without relying on one almost-expired subprocess.
+        std::fs::write(
+            &wrapper,
+            "#!/bin/sh\ncontrol=$(dirname \"$0\")\nfor option do\n  case \"$option\" in\n  --show-toplevel|--absolute-git-dir|--git-common-dir)\n    if test -e .git/probe-block; then\n      : > \"$control/probe-entered\"\n      round=0\n      while test -d \"$control\" && ! test -e \"$control/probe-release\" && test \"$round\" -lt 100; do\n        sleep 0.02\n        round=$((round + 1))\n      done\n    fi\n    ;;\n  esac\ndone\nexec /usr/bin/git \"$@\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = std::env::join_paths([
+            directory.clone(),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+        (
+            Self {
+                entered: directory.join("probe-entered"),
+                release: directory.join("probe-release"),
+            },
+            path,
+        )
+    }
+    fn wait(&self) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !self.entered.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "source probe never reached the barrier"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    fn release(&self) {
+        std::fs::write(&self.release, "released").unwrap();
+    }
+}
+impl Drop for SourceProbeBarrier {
+    fn drop(&mut self) {
+        // A failed assertion must not leave the test's Git child waiting.
+        let _ = std::fs::write(&self.release, "released");
+    }
+}
+
+#[test]
+fn cancelled_deferred_start_waiter_keeps_single_run_ownership_and_host_restarts() {
+    deferred_start_waiter(false);
+}
+#[test]
+fn failed_deferred_start_waiters_keep_single_run_ownership_and_host_restarts() {
+    deferred_start_waiter(true);
+}
+fn deferred_start_waiter(fail_original: bool) {
+    let f = Fixture::new("echo ONCE >> starts\nsleep 20", false);
+    git_binding(&f);
+    let barrier = SourceProbeBarrier::install(&f, true);
+    let (mut host, mut client) = f.host();
+    let operation = new_id();
+    let original = f.start(&mut client, &operation);
+    barrier.wait();
+    let waiter = f.start(&mut client, &operation);
+    // The registry processes requests in order. A completed List proves that
+    // the duplicate has attached before the observation is allowed to finish.
+    let RunResult::Runs(runs) = request(&mut client, RunRequest::List { project_id: None }) else {
+        panic!()
+    };
+    assert!(runs.is_empty());
+    if fail_original {
+        f.store
+            .update(|workspace| {
+                workspace.project_mut(&f.project)?.tasks[0]
+                    .command
+                    .push_str("\necho changed");
+                Ok(())
+            })
+            .unwrap();
+    } else {
+        client
+            .run(RunRequest::CancelJob {
+                job_id: waiter.job_id.clone(),
+            })
+            .unwrap();
+    }
+    barrier.release();
+    let original = settled(&mut client, original);
+    let waiter = settled(&mut client, waiter);
+    if fail_original {
+        assert_eq!(original.state, RunJobState::Failed, "{original:?}");
+        assert_eq!(waiter.state, RunJobState::Failed, "{waiter:?}");
+        assert!(!f.root.join("starts").exists());
+    } else {
+        assert_eq!(waiter.state, RunJobState::Cancelled, "{waiter:?}");
+        let Some(RunResult::Started(started)) = original.result else {
+            panic!("original start failed: {original:?}")
+        };
+        request(
+            &mut client,
+            RunRequest::Cancel {
+                run_id: started.run.run_id.clone(),
+                force: true,
+            },
+        );
+        assert_eq!(
+            finished(&mut client, &started.run.run_id).state,
+            RunState::Cancelled
+        );
+    }
+    let ledger: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(f.store.state_dir.join("host-sessions.json")).unwrap(),
+    )
+    .unwrap();
+    let owners = ledger["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|session| session["run_id"].is_string())
+        .count();
+    assert_eq!(owners, 1, "only the original start owns the Run: {ledger}");
+    shutdown(&mut client, &mut host);
+    let (mut recovered_host, mut recovered_client) = f.host();
+    let RunResult::Runs(runs) =
+        request(&mut recovered_client, RunRequest::List { project_id: None })
+    else {
+        panic!()
+    };
+    assert_eq!(runs.len(), 1);
+    assert!(!runs[0].state.is_live());
+    shutdown(&mut recovered_client, &mut recovered_host);
+}
+
+#[test]
+fn exited_run_does_not_time_out_while_its_end_source_probe_is_pending() {
+    let f = Fixture::with_timeout(
+        "echo block > .git/probe-block\necho COMPLETE",
+        false,
+        Some(1),
+    );
+    git_binding(&f);
+    let barrier = SourceProbeBarrier::install(&f, false);
+    let (mut host, mut client) = f.host();
+    let job = f.start(&mut client, &new_id());
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let observed = Instant::now();
+    barrier.wait();
+    let terminal = client
+        .snapshot(started.run.session_id.as_ref().unwrap(), None)
+        .unwrap()
+        .session;
+    assert!(
+        !terminal.state.is_live(),
+        "the end probe needs confirmed cleanup first"
+    );
+    assert_eq!(terminal.exit.as_ref().map(|exit| exit.code), Some(0));
+    let cancel = client
+        .run(RunRequest::Cancel {
+            run_id: started.run.run_id.clone(),
+            force: true,
+        })
+        .unwrap();
+    let cancel = settled(&mut client, cancel);
+    assert_eq!(cancel.state, RunJobState::Failed);
+    assert!(cancel.error.unwrap().contains("execution already ended"));
+    loop {
+        let RunResult::Run(run) = request(
+            &mut client,
+            RunRequest::Info {
+                run_id: started.run.run_id.clone(),
+            },
+        ) else {
+            panic!()
+        };
+        assert!(
+            !run.cancel_requested && !run.timeout_requested,
+            "finished execution timed out while observing source: {run:?}"
+        );
+        if observed.elapsed() >= Duration::from_millis(1100) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    barrier.release();
+    let run = finished(&mut client, &started.run.run_id);
+    assert_eq!(run.state, RunState::Succeeded);
+    assert_eq!(run.exit_code, Some(0));
+    assert!(!run.cancel_requested && !run.timeout_requested);
+    shutdown(&mut client, &mut host);
+}
+
+#[test]
+fn pending_finish_survives_session_retention_and_retries_until_durable_acknowledgement() {
+    let f = Fixture::new("echo block > .git/probe-block\necho COMPLETE", false);
+    git_binding(&f);
+    let (barrier, path) = SourceProbeBarrier::verification(&f);
+    let (mut host, mut client) = f.host_with_path(Some(&path));
+    let operation = new_id();
+    let job = f.start(&mut client, &operation);
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let session = started.run.session_id.unwrap();
+    barrier.wait();
+    assert!(!client
+        .snapshot(&session, None)
+        .unwrap()
+        .session
+        .state
+        .is_live());
+    let mut last = None;
+    for _ in 0..65 {
+        last = Some(f.start(&mut client, &operation));
+    }
+    // Completion of this later request proves that all duplicate-start events
+    // were consumed in order, without spending the probe budget polling each.
+    let RunResult::Runs(runs) = request(&mut client, RunRequest::List { project_id: None }) else {
+        panic!()
+    };
+    assert_eq!(runs.len(), 1);
+    assert!(
+        runs[0].source_end.is_none(),
+        "the end probe must still be blocked"
+    );
+    let RunResult::Started(duplicate) = result(&mut client, last.unwrap()) else {
+        panic!()
+    };
+    assert!(duplicate.existing);
+    assert_eq!(duplicate.run.run_id, started.run.run_id);
+    let snapshot = client
+        .snapshot(&session, None)
+        .expect("retention removed the slot before its finish was acknowledged");
+    assert_eq!(snapshot.session.exit.unwrap().code, 0);
+    let ledger = f.store.state_dir.join("runs.json");
+    let backup = f.store.state_dir.join("runs.saved");
+    std::fs::rename(&ledger, &backup).unwrap();
+    std::fs::create_dir(&ledger).unwrap();
+    barrier.release();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot = client.snapshot(&session, None).unwrap();
+        if snapshot.session.error.as_deref() == Some("destination must be a regular owned file") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "finish storage failure was not observed: {snapshot:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(client.preview_close(None).unwrap().targets.is_empty());
+    client.shutdown(&[], false).unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(
+        host.0.try_wait().unwrap().is_none(),
+        "host exited before a durable finish acknowledgement"
+    );
+    std::fs::remove_dir(&ledger).unwrap();
+    std::fs::rename(&backup, &ledger).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while host.0.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "finish was not retried after storage recovery"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(ledger).unwrap()).unwrap();
+    assert_eq!(saved["runs"][0]["state"], "Succeeded");
+    assert_eq!(saved["runs"][0]["cleanup_confirmed"], true);
+    assert_eq!(saved["runs"][0]["exit_code"], 0);
+}
+
+#[test]
+fn failed_preparation_retries_finalization_after_its_first_outcome_save_fails() {
+    use idk_workspace::git_wire::*;
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new("echo MUST_NOT_RUN > starts", false);
+    git_binding(&f);
+    let ledger = f.store.state_dir.join("runs.json");
+    let backup = f.store.state_dir.join("runs.saved");
+    let shell = f
+        .store
+        .load()
+        .unwrap()
+        .project(&f.project)
+        .unwrap()
+        .shell
+        .executable
+        .clone();
+    let wrapper = f.tmp.path().join("preparation-fault-shell");
+    let quote = |path: &PathBuf| format!("'{}'", path.to_str().unwrap().replace('\'', "'\\''"));
+    // Trust review and the initial launch plan see an empty ledger. Only the
+    // post-reservation shell check sees the durable Preparing record, installs
+    // a real write failure, and fails before any task PTY/command is started.
+    std::fs::write(&wrapper, format!(
+        "#!/bin/sh\nif test -f {ledger} && grep -q '\"state\": \"Preparing\"' {ledger}; then\n  mv {ledger} {backup}\n  mkdir {ledger}\n  exit 91\nfi\nexec {shell} \"$@\"\n",
+        ledger = quote(&ledger), backup = quote(&backup), shell = quote(&shell)
+    )).unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+    f.store
+        .update(|workspace| {
+            workspace.project_mut(&f.project)?.shell.executable = wrapper.clone();
+            Ok(())
+        })
+        .unwrap();
+    let environment = LaunchEnvironment::from_variables(f.env.clone()).unwrap();
+    let service = ProjectService { store: &f.store };
+    let review = service
+        .review_initialization(&f.project, &environment)
+        .unwrap();
+    service
+        .approve_initialization(review.revision, review)
+        .unwrap();
+    f.approve();
+    let (mut host, mut client) = f.host();
+    let job = f.start(&mut client, &new_id());
+    let job = settled(&mut client, job);
+    assert_eq!(job.state, RunJobState::Failed, "{job:?}");
+    assert!(ledger.is_dir());
+    assert!(!f.root.join("starts").exists());
+    let opened = git_job(
+        &mut client,
+        GitTask::Open {
+            project: f.project.clone(),
+            repository: None,
+            env: f.env.clone(),
+        },
+    );
+    let Some(GitValue::Open(context)) = opened.result else {
+        panic!("{opened:?}")
+    };
+    assert_eq!(
+        context.source_use.runs.len(),
+        1,
+        "the failed outcome is not durable yet"
+    );
+    assert!(client.preview_close(None).unwrap().targets.is_empty());
+    client.shutdown(&[], false).unwrap();
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(
+        host.0.try_wait().unwrap().is_none(),
+        "host discarded the failed preparation's finalization retry"
+    );
+    std::fs::remove_dir(&ledger).unwrap();
+    std::fs::rename(&backup, &ledger).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while host.0.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "failed preparation was not finalized after storage recovery"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(ledger).unwrap()).unwrap();
+    assert_eq!(saved["runs"][0]["state"], "Failed");
+    assert_eq!(saved["runs"][0]["cleanup_confirmed"], true);
+    assert!(saved["runs"][0]["exit_code"].is_null());
+    assert!(saved["runs"][0]["error"]
+        .as_str()
+        .unwrap()
+        .contains("common initialization needs review"));
+    assert!(
+        !f.root.join("starts").exists(),
+        "finalization must never replay the failed start"
+    );
 }
 fn git_job(
     client: &mut Client,

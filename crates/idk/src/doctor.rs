@@ -150,27 +150,43 @@ fn inspect_runtime(store: &Store, findings: &mut Vec<Finding>) {
         Err(error) => findings.push(Finding { area: "state".into(), status: "error".into(),
             detail: format!("{error:#}; original files preserved") }),
     }
-    match crate::client::Client::connect(store) {
-        Ok(client) => findings.push(Finding { area: "host".into(), status: "ok".into(),
-            detail: format!("same-user host {} / protocol {} / matching binary; project commands were not started",
-                client.info().version, client.info().protocol) }),
-        Err(error) if error.downcast_ref::<std::io::Error>().is_some_and(|error|
-            matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused)) => {
-                findings.push(Finding { area: "host".into(), status: "ok".into(),
-                    detail: "no active host listener; an explicit session start can create one".into() });
-            }
-        Err(error) => findings.push(Finding { area: "host".into(), status: "warning".into(),
-            detail: format!("{error:#}; keep existing host and use its original generation binary when builds differ") }),
-    }
+    let connected_host = match crate::client::Client::connect(store) {
+        Ok(client) => {
+            findings.push(Finding { area: "host".into(), status: "ok".into(),
+                detail: format!("same-user host {} / protocol {} / matching binary; project commands were not started",
+                    client.info().version, client.info().protocol) });
+            Some((client.info().host_instance.clone(), client.info().pid))
+        }
+        Err(error)
+            if error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                )
+            }) =>
+        {
+            findings.push(Finding {
+                area: "host".into(),
+                status: "ok".into(),
+                detail: "no active host listener; an explicit session start can create one".into(),
+            });
+            None
+        }
+        Err(error) => {
+            findings.push(Finding { area: "host".into(), status: "warning".into(),
+                detail: format!("{error:#}; keep existing host and use its original generation binary when builds differ") });
+            None
+        }
+    };
     match store.read_state::<crate::saved_state::HostExit>("host-exit.json") {
         Ok(Some(exit)) if exit.validate().is_ok() => {
             match (exit.stopped_at_ms, exit.error) {
                 (None, _) => {
-                    // A running record with a dead pid is a crash: no exit
-                    // path ran to record an outcome.
-                    let alive = unsafe { libc::kill(exit.pid as libc::pid_t, 0) } == 0
-                        || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
-                    if alive {
+                    // A PID can belong to another process after a crash or
+                    // reboot. Only the verified handshake identifies this host.
+                    if connected_host.as_ref().is_some_and(|(instance, pid)| {
+                        instance == &exit.host_instance && *pid == exit.pid
+                    }) {
                         findings.push(Finding {
                             area: "host-exit".into(),
                             status: "ok".into(),
@@ -184,7 +200,7 @@ fn inspect_runtime(store: &Store, findings: &mut Vec<Finding>) {
                             area: "host-exit".into(),
                             status: "warning".into(),
                             detail: format!(
-                                "host instance {} (pid {}) exited without recording an outcome; its ledgers reconcile on the next host",
+                                "host instance {} (pid {}) has no recorded exit and its running identity was not confirmed; inspect host status with its original generation binary",
                                 exit.host_instance, exit.pid
                             ),
                         });
@@ -248,6 +264,37 @@ fn inspect_installation(findings: &mut Vec<Finding>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unconfirmed_host_record_remains_a_failure_in_the_brief_report() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::open(Some(&temp.path().join("data"))).unwrap();
+        let record = crate::saved_state::HostExit {
+            schema: 1,
+            host_instance: crate::model::new_id(),
+            pid: std::process::id(),
+            started_at_ms: 1,
+            stopped_at_ms: None,
+            error: None,
+        };
+        store.write_state("host-exit.json", &record).unwrap();
+        let path = store.state_dir.join("host-exit.json");
+        let before = std::fs::read(&path).unwrap();
+        let mut findings = Vec::new();
+        inspect_runtime(&store, &mut findings);
+        let report = Report {
+            version: env!("CARGO_PKG_VERSION"),
+            findings,
+            field_acceptance: "not inferred",
+        };
+        assert!(report.has_failures());
+        let brief = report.brief();
+        assert!(brief.contains("host-exit: ok=0 warning=1 error=0"));
+        assert!(!brief.contains(&record.host_instance));
+        assert_eq!(std::fs::read(path).unwrap(), before);
+        assert!(!store.socket_path().exists());
+    }
+
     #[test]
     fn brief_keeps_failure_counts_without_local_project_or_error_payloads() {
         let report = Report {

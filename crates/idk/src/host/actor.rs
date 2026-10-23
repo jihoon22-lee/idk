@@ -73,6 +73,12 @@ enum SlotPurpose {
     Run { run_id: Option<String> },
     Editor,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunFinalization {
+    Pending,
+    InFlight,
+    Done,
+}
 struct Slot {
     info: SessionInfo,
     purpose: SlotPurpose,
@@ -84,7 +90,7 @@ struct Slot {
     exited_at: Option<Instant>,
     cleanup: Cleanup,
     run_cancel_durable: bool,
-    run_finalized: bool,
+    run_finalization: RunFinalization,
     run_cancel_pending: bool,
     run_retry_after: Option<Instant>,
 }
@@ -198,7 +204,7 @@ impl Actor {
                         exited_at: None,
                         cleanup: Cleanup::default(),
                         run_cancel_durable: false,
-                        run_finalized: true,
+                        run_finalization: RunFinalization::Done,
                         run_cancel_pending: false,
                         run_retry_after: None,
                     },
@@ -242,13 +248,12 @@ impl Actor {
         Ok(actor)
     }
     fn persist(&self) -> Result<()> {
-        self.store.write_state(
-            LEDGER,
-            &Ledger {
-                schema: 1,
-                sessions: self.slots.values().map(Tombstone::from_slot).collect(),
-            },
-        )
+        let ledger = Ledger {
+            schema: 1,
+            sessions: self.slots.values().map(Tombstone::from_slot).collect(),
+        };
+        ledger.validate()?;
+        self.store.write_state(LEDGER, &ledger)
     }
     pub fn finished(&self) -> bool {
         self.quiescing
@@ -258,7 +263,7 @@ impl Actor {
                 !slot.info.state.is_live()
                     && !slot.preparing
                     && slot.runtime.is_none()
-                    && (slot.run_finalized
+                    && (slot.run_finalization == RunFinalization::Done
                         || !matches!(slot.purpose, SlotPurpose::Run { run_id: Some(_) }))
             })
     }
@@ -732,7 +737,7 @@ impl Actor {
                     exited_at: None,
                     cleanup: Cleanup::default(),
                     run_cancel_durable: false,
-                    run_finalized: false,
+                    run_finalization: RunFinalization::Pending,
                     run_cancel_pending: false,
                     run_retry_after: None,
                 },
@@ -786,7 +791,7 @@ impl Actor {
                         slot.preparing = false;
                         slot.info.state = SessionState::Closed;
                         slot.info.owner = None;
-                        slot.run_finalized = true;
+                        slot.run_finalization = RunFinalization::Done;
                         slot.exited_at = Some(Instant::now());
                     } else if slot.preparing {
                         slot.preparing = false;
@@ -795,7 +800,15 @@ impl Actor {
                         } else {
                             SessionState::Failed
                         };
-                        slot.run_finalized = true;
+                        // A run intent can be durable even when preparation
+                        // fails before any PTY exists. If saving that failure
+                        // also failed, the original owner still owes Finish.
+                        slot.run_finalization =
+                            if event.run.as_ref().is_some_and(|run| !run.cleanup_confirmed) {
+                                RunFinalization::Pending
+                            } else {
+                                RunFinalization::Done
+                            };
                         slot.info.initialization = Some(InitializationState::Failed);
                         slot.info.error = event.result.as_ref().err().map(safe_error);
                         slot.exited_at = Some(Instant::now());
@@ -832,12 +845,33 @@ impl Actor {
                 }
             }
         }
+        if event.job_id.is_none() && event.cancel.is_none() {
+            if let Some(slot) = event
+                .session_id
+                .as_ref()
+                .and_then(|id| self.slots.get_mut(id))
+            {
+                // Enqueueing Finish transfers work, not proof that the outcome
+                // is durable. Retain this slot until its own acknowledgement.
+                slot.run_finalization = if event.result.is_ok() {
+                    RunFinalization::Done
+                } else {
+                    RunFinalization::Pending
+                };
+            }
+        }
         if event.job_id.is_none() && event.result.is_err() {
             if let Some(session) = &event.session_id {
                 if let Some(slot) = self.slots.get_mut(session) {
-                    slot.info.error = event.result.as_ref().err().map(safe_error);
-                    if !slot.info.state.is_live() {
-                        slot.run_finalized = false;
+                    // With no spawned process, retain the initial preparation
+                    // failure across repeated outcome-save errors. It is also
+                    // the failure supplied by the next finalization retry.
+                    let preparation_failure = event.cancel.is_none()
+                        && slot.runtime.is_none()
+                        && slot.info.exit.is_none()
+                        && slot.info.error.is_some();
+                    if !preparation_failure {
+                        slot.info.error = event.result.as_ref().err().map(safe_error);
                     }
                     if event.cancel.is_some() {
                         slot.run_cancel_pending = false;
@@ -980,7 +1014,7 @@ impl Actor {
                 exited_at: None,
                 cleanup: Cleanup::default(),
                 run_cancel_durable: false,
-                run_finalized: false,
+                run_finalization: RunFinalization::Pending,
                 run_cancel_pending: false,
                 run_retry_after: None,
             },
@@ -1616,7 +1650,7 @@ impl Actor {
                 !slot.info.state.is_live()
                     && !slot.preparing
                     && slot.runtime.is_none()
-                    && !slot.run_finalized
+                    && slot.run_finalization == RunFinalization::Pending
                     && slot.run_retry_after.is_none_or(|at| Instant::now() >= at)
             })
             .filter_map(|slot| match &slot.purpose {
@@ -1633,9 +1667,13 @@ impl Actor {
             })
             .collect();
         for (session, id, exit, error, partial) in final_runs {
-            if self.runs.finish(&id, exit, error, partial).is_ok() {
+            if self
+                .runs
+                .finish(&session, &id, exit, error, partial)
+                .is_ok()
+            {
                 if let Some(slot) = self.slots.get_mut(&session) {
-                    slot.run_finalized = true;
+                    slot.run_finalization = RunFinalization::InFlight;
                 }
             }
         }
@@ -1663,7 +1701,7 @@ impl Actor {
                     && !slot.info.state.is_live()
                     && !slot.preparing
                     && slot.runtime.is_none()
-                    && slot.run_finalized
+                    && slot.run_finalization == RunFinalization::Done
             })
             .map(|(id, slot)| (slot.exited_at, id.clone()))
             .collect();
@@ -1738,7 +1776,7 @@ impl Actor {
                     // No finish or cancel event can arrive regardless of the
                     // slot's own state; a pending Finish work item is lost with
                     // the worker and must not keep shutdown waiting.
-                    slot.run_finalized = true;
+                    slot.run_finalization = RunFinalization::Done;
                 }
                 SlotPurpose::Run { run_id: None } if slot.preparing => {
                     slot.preparing = false;
@@ -1749,7 +1787,7 @@ impl Actor {
                     slot.info.error =
                         Some("run registry worker exited before the task was prepared".into());
                     slot.exited_at = Some(Instant::now());
-                    slot.run_finalized = true;
+                    slot.run_finalization = RunFinalization::Done;
                 }
                 // Editor launches run on the same registry worker; a lost
                 // event would wedge the slot in Preparing forever.
@@ -1762,7 +1800,7 @@ impl Actor {
                     slot.info.error =
                         Some("run registry worker exited before the editor was prepared".into());
                     slot.exited_at = Some(Instant::now());
-                    slot.run_finalized = true;
+                    slot.run_finalization = RunFinalization::Done;
                 }
                 _ => {}
             }
