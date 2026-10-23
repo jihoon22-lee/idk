@@ -10,7 +10,12 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+// Serialize subprocess fixtures so a concurrent fork cannot inherit the copied
+// host's writable FD before CLOEXEC runs and keep that executable busy.
+static PROCESS_FIXTURE_LOCK: Mutex<()> = Mutex::new(());
 
 struct OwnedChild(Child);
 impl Drop for OwnedChild {
@@ -96,6 +101,9 @@ fn shutdown(host: &mut OwnedChild, client: &mut Client) {
 
 #[test]
 fn strict_doctor_rejects_an_unrelated_live_pid_without_changing_the_record_or_process() {
+    let _serial = PROCESS_FIXTURE_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let temp = tempfile::tempdir().unwrap();
     let data = temp.path().join("data");
     let store = Store::open(Some(&data)).unwrap();
@@ -128,6 +136,9 @@ fn strict_doctor_rejects_an_unrelated_live_pid_without_changing_the_record_or_pr
 
 #[test]
 fn strict_doctor_requires_the_live_handshake_to_match_both_recorded_identity_fields() {
+    let _serial = PROCESS_FIXTURE_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let temp = tempfile::tempdir().unwrap();
     let data = temp.path().join("data");
     let store = Store::open(Some(&data)).unwrap();
@@ -179,6 +190,9 @@ fn strict_doctor_requires_the_live_handshake_to_match_both_recorded_identity_fie
 
 #[test]
 fn strict_doctor_keeps_a_different_build_host_unconfirmed_and_preserves_it() {
+    let _serial = PROCESS_FIXTURE_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let temp = tempfile::tempdir().unwrap();
     let data = temp.path().join("data");
     let store = Store::open(Some(&data)).unwrap();
@@ -207,6 +221,9 @@ fn strict_doctor_keeps_a_different_build_host_unconfirmed_and_preserves_it() {
 
 #[test]
 fn doctor_preserves_missing_stopped_and_unreadable_exit_record_semantics() {
+    let _serial = PROCESS_FIXTURE_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let temp = tempfile::tempdir().unwrap();
     let data = temp.path().join("data");
     let store = Store::open(Some(&data)).unwrap();
