@@ -700,6 +700,130 @@ fn hook_cancellation_retains_repository_single_flight_and_stale_owners_cannot_si
 }
 
 #[test]
+fn root_rebind_waits_for_owned_git_cleanup_and_unknown_acknowledgment() {
+    let fixture = Fixture::new();
+    let project = fixture.project("move-git");
+    fixture.git(&project.root, &["branch", "topic"]);
+    let hook = project.root.join(".git/hooks/post-checkout");
+    fs::write(
+        &hook,
+        "#!/bin/sh\nprintf '%s\\n' \"$$\" > hook-pid\nprintf ready > hook-ready\ni=0\nwhile [ ! -f hook-release ] && [ \"$i\" -lt 500 ]; do i=$((i+1)); sleep 0.02; done\ntest -f hook-release || exit 9\nprintf 'git-finished\\n' > shared-output\n",
+    )
+    .unwrap();
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o700)).unwrap();
+    let (mut host, mut client) = fixture.host();
+    let context = fixture.open(&mut client, &project, fixture.env.clone());
+    let stale = plan(
+        &mut client,
+        GitTask::CreateBranch {
+            context: context.id.clone(),
+            name: "stale-after-rebind".into(),
+            start: None,
+        },
+    );
+    let snapshot = status(&mut client, &context.id);
+    let switch = plan(
+        &mut client,
+        GitTask::Switch {
+            context: context.id,
+            snapshot: snapshot.snapshot_id,
+            name: "topic".into(),
+        },
+    );
+    let operation = client.git_execute(&switch.id, 24, 100).unwrap();
+    assert_eq!(operation.state, GitOperationState::Pending);
+    let run_use = fixture.store.runtime_dir.join("run-use.lock");
+    let pending_held = idk_workspace::store::FileLock::acquire(&run_use, true).is_err();
+    wait_file(&project.root.join("hook-ready"));
+    let hook_pid: u32 = fs::read_to_string(project.root.join("hook-pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let moved = fixture.root.join("moved-git");
+    fs::rename(&project.root, &moved).unwrap();
+    assert_eq!(
+        fs::read_link(format!("/proc/{hook_pid}/cwd")).unwrap(),
+        moved
+    );
+    let projects = ProjectService {
+        store: &fixture.store,
+    };
+    let config_before = fs::read(fixture.store.config_path()).unwrap();
+    let preview = projects
+        .preview_rebind_root(&project.id, moved.clone())
+        .unwrap();
+    let during_hook = projects.rebind_root(preview.revision, preview);
+    let config_during_hook = fs::read(fixture.store.config_path()).unwrap();
+
+    // Release the finite fixture barrier and reap the owned child before any
+    // regression assertion, including when the old product accepts the rebind.
+    fs::write(moved.join("hook-release"), b"continue").unwrap();
+    let completed = complete(&mut client, &operation.id);
+    assert!(!Path::new(&format!("/proc/{hook_pid}")).exists());
+    assert_eq!(
+        fs::read_to_string(moved.join("shared-output")).unwrap(),
+        "git-finished\n"
+    );
+    assert_eq!(completed.state, GitOperationState::Unknown);
+    assert!(!completed.terminal_available);
+    assert!(!completed.cleanup_acknowledged);
+    // The worker no longer holds the lock: the durable Unknown record alone
+    // must prevent reconnection until the explicit cleanup acknowledgment.
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        if idk_workspace::store::FileLock::acquire(&run_use, true).is_ok() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "completed Git worker retained its workspace reservation"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let preview = projects
+        .preview_rebind_root(&project.id, moved.clone())
+        .unwrap();
+    let before_ack = projects.rebind_root(preview.revision, preview);
+    let acknowledged: GitOperationInfo = client
+        .request(idk_workspace::protocol::Request::GitOperationReconcile {
+            operation: operation.id.clone(),
+            repository: completed.repository,
+        })
+        .unwrap()
+        .decode()
+        .unwrap();
+    assert_eq!(acknowledged.state, GitOperationState::Unknown);
+    assert!(acknowledged.cleanup_acknowledged);
+    let preview = projects
+        .preview_rebind_root(&project.id, moved.clone())
+        .unwrap();
+    projects.rebind_root(preview.revision, preview).unwrap();
+    let stale_error = client.git_execute(&stale.id, 24, 100).unwrap_err();
+    assert!(
+        stale_error
+            .to_string()
+            .contains("project Git binding changed"),
+        "{stale_error:#}"
+    );
+    shutdown(&mut client, &mut host);
+
+    assert!(
+        pending_held,
+        "pending Git execution did not reserve the workspace; hook rebind: {during_hook:?}; before acknowledgment: {before_ack:?}"
+    );
+    assert!(
+        during_hook.is_err(),
+        "rebind changed identity while the Git hook was still live"
+    );
+    assert_eq!(config_during_hook, config_before);
+    assert!(
+        before_ack.is_err(),
+        "Unknown Git cleanup allowed rebind without acknowledgment"
+    );
+}
+
+#[test]
 fn host_crash_restores_unknown_without_replaying_git_or_persisting_terminal_content() {
     let fixture = Fixture::new();
     let project = fixture.project("crash");

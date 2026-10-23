@@ -1,6 +1,7 @@
 //! Blocking Git reads/planning and execution callbacks stay off the host actor.
 use crate::git::{self, GitOperationPlan, GitService, Repository};
 use crate::model::SourceGate;
+use crate::store::FileLock;
 use crate::terminal::TerminalSession;
 use anyhow::{ensure, Context, Result};
 use std::collections::BTreeMap;
@@ -82,6 +83,7 @@ pub(super) struct ExecuteWork {
     pub rows: u16,
     pub cols: u16,
     pub cancelled: Arc<AtomicBool>,
+    pub run_use: FileLock,
 }
 pub(super) enum Event {
     Read {
@@ -184,6 +186,9 @@ pub(super) fn workers() -> Result<Workers> {
                     let Ok(work) = work else {
                         return;
                     };
+                    // The actor's durable Pending record remains restrictive
+                    // after publication, until it saves the completed outcome.
+                    let _run_use = work.run_use;
                     let result = work.service.execute_with(
                         &work.plan,
                         &work.gate,

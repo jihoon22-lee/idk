@@ -336,6 +336,14 @@ pub struct FileLock(File);
 
 impl FileLock {
     pub fn acquire(path: &Path, nonblocking: bool) -> Result<Self> {
+        Self::acquire_mode(path, nonblocking, libc::LOCK_EX)
+    }
+
+    pub fn acquire_shared(path: &Path, nonblocking: bool) -> Result<Self> {
+        Self::acquire_mode(path, nonblocking, libc::LOCK_SH)
+    }
+
+    fn acquire_mode(path: &Path, nonblocking: bool, mode: libc::c_int) -> Result<Self> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -353,7 +361,7 @@ impl FileLock {
         }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
-            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            if unsafe { libc::flock(file.as_raw_fd(), mode | libc::LOCK_NB) } == 0 {
                 break;
             }
             let error = std::io::Error::last_os_error();
@@ -367,6 +375,18 @@ impl FileLock {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         Ok(Self(file))
+    }
+
+    /// Conversion may release the exclusive lock before obtaining the shared
+    /// lock. A failure therefore ends the caller's authority to proceed; it
+    /// must not treat the previous exclusive lock as still held.
+    pub fn downgrade_shared(&mut self) -> Result<()> {
+        if unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) } != 0 {
+            return Err(std::io::Error::last_os_error()).context(
+                "cannot retain shared lock during conversion; competing holder preserved",
+            );
+        }
+        Ok(())
     }
 }
 
@@ -382,6 +402,58 @@ impl Drop for FileLock {
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+
+    #[test]
+    fn shared_leases_exclude_writers_until_every_holder_releases() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("run-use.lock");
+        let first = FileLock::acquire_shared(&path, true).unwrap();
+        let second = FileLock::acquire_shared(&path, true).unwrap();
+        assert!(FileLock::acquire(&path, true).is_err());
+        drop(first);
+        assert!(FileLock::acquire(&path, true).is_err());
+        drop(second);
+        let exclusive = FileLock::acquire(&path, true).unwrap();
+        assert!(FileLock::acquire_shared(&path, true).is_err());
+        drop(exclusive);
+        assert!(FileLock::acquire_shared(&path, true).is_ok());
+    }
+
+    #[test]
+    fn checked_downgrade_allows_shared_readers_and_preserves_a_competing_exclusive_holder() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("host.lock");
+        let mut lock = FileLock::acquire(&path, true).unwrap();
+        assert!(FileLock::acquire_shared(&path, true).is_err());
+        lock.downgrade_shared().unwrap();
+        assert!(FileLock::acquire_shared(&path, true).is_ok());
+        assert!(FileLock::acquire(&path, true).is_err());
+        // Model the documented conversion window: the previous lock has
+        // been dropped and a legacy exclusive holder wins before SH acquisition.
+        assert_eq!(unsafe { libc::flock(lock.0.as_raw_fd(), libc::LOCK_UN) }, 0);
+        let winner = FileLock::acquire(&path, true).unwrap();
+        let started = std::time::Instant::now();
+        assert!(lock.downgrade_shared().is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        drop(lock);
+        assert!(FileLock::acquire_shared(&path, true).is_err());
+        drop(winner);
+        assert!(FileLock::acquire_shared(&path, true).is_ok());
+    }
+
+    #[test]
+    fn shared_lock_rejects_symlinks_and_shared_permissions_without_changing_files() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("original");
+        fs::write(&original, "preserved").unwrap();
+        fs::set_permissions(&original, fs::Permissions::from_mode(0o600)).unwrap();
+        let link = root.path().join("lock");
+        symlink(&original, &link).unwrap();
+        assert!(FileLock::acquire_shared(&link, true).is_err());
+        fs::set_permissions(&original, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(FileLock::acquire_shared(&original, true).is_err());
+        assert_eq!(fs::read_to_string(original).unwrap(), "preserved");
+    }
 
     #[test]
     fn nfs_state_is_rejected_and_uninspectable_paths_do_not_become_local() {

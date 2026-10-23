@@ -45,6 +45,18 @@ worker는 느린 파일/Git/초기화 작업을 actor 밖에서 처리한다. ho
 입력 권한을 추적한다. 같은 session의 자손 정리와 실제 leader exit를 확인한 뒤에만 완료와
 source lease 해제를 연결한다. 별도 session으로 이탈한 프로세스까지 소유했다고 주장하지 않는다.
 
+루트 재연결과 Run 시작은 workspace 전체의 `run-use.lock`으로 직렬화한다. Run은 시작 예약부터
+cleanup과 최종 저장 성공까지 shared lock을 보유하고, 재연결은 exclusive lock 아래에서 저장된
+Run의 cleanup도 확인한 뒤 정의를 바꾼다. 같은 루트를 공유하는 다른 프로젝트도 보호 범위다.
+host의 Git 쓰기 작업도 현재 binding 확인과 Pending 저장 전부터 실제 프로세스 정리까지
+같은 shared lock을 보유한다. 재연결은 Git 원장의 active/cleanup 미확인 기록도 거부하므로
+Git worker 반환과 최종 저장 사이에도 새 경로 identity로 source gate를 우회할 수 없다.
+host는 `host-owner.lock`을 exclusive로 유지하고 기존 `host.lock`을 exclusive로 선점한 뒤
+shared로 전환한다. 재연결도 `host.lock`의 shared lock을 보유하므로 일반 터미널과 공존하면서
+새 host 시작을 막고, 기존 exclusive lock만 아는 구버전 host와의 재연결은 거부한다.
+lock 전환 실패 시 host를 시작하지 않으며
+[flock(2)의 비원자적인 전환](https://man7.org/linux/man-pages/man2/flock.2.html)을 고려한다.
+
 ## 상태와 결과의 의미
 
 설정, host tombstone, Git operation, Run metadata/log는 서로 다른 기록이다. 실행 의도와

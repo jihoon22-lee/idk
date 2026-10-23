@@ -3,12 +3,13 @@
 //! direct files are re-read before launch; concurrent external edits and dynamic
 //! or nested source dependencies cannot be completely tracked.
 use crate::git::Repository;
+use crate::git_wire::GitOperationState;
 use crate::model::{
     absolute_path, hash_field, new_id, valid_name, validate_sources, Project, ShellConfig,
     SourceSpec, TerminalDefinition, Workspace,
 };
 use crate::shell::{inspect_shell, ShellInspection, ShellPlan, STARTUP_POLICY_VERSION};
-use crate::store::Store;
+use crate::store::{FileLock, Store};
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -365,6 +366,44 @@ impl ProjectService<'_> {
             expected == preview.revision,
             "root reconnection preview is stale"
         );
+        // Pin a compatible host generation (or its absence) while changing
+        // reservation identities. Older hosts hold this lock exclusively and
+        // cannot participate in the Run/reconnection locking contract.
+        let _host_generation =
+            FileLock::acquire_shared(&self.store.runtime_dir.join("host.lock"), true).context(
+                "host startup or an older host blocks root reconnection; retry after startup, or explicitly shut down the older host after finishing its work",
+            )?;
+        // Use the whole workspace: different projects can share the same root
+        // or overlapping output directories. A per-project lock misses them.
+        let _run_use = FileLock::acquire(&self.store.runtime_dir.join("run-use.lock"), true)
+            .context("root reconnection is blocked by a pending, active or unfinalized Run or Git operation; wait for confirmed cleanup")?;
+        if let Some(ledger) = self
+            .store
+            .read_state::<crate::saved_state::RunLedger>("runs.json")?
+        {
+            ledger.validate()?;
+            ensure!(
+                ledger
+                    .runs
+                    .iter()
+                    .all(|run| !run.state.is_live() && run.cleanup_confirmed),
+                "saved Run cleanup is live or unconfirmed; root reconnection was not applied"
+            );
+        }
+        if let Some(ledger) = self
+            .store
+            .read_state::<crate::saved_state::GitLedger>("git-operations.json")?
+        {
+            ledger.validate()?;
+            ensure!(
+                ledger.operations.iter().all(|operation| {
+                    operation.state == GitOperationState::Complete
+                        || (operation.state == GitOperationState::Unknown
+                            && operation.cleanup_acknowledged)
+                }),
+                "saved Git operation is active or its cleanup is unconfirmed; root reconnection was not applied"
+            );
+        }
         self.change(expected, |workspace| {
             ensure!(
                 workspace.project(&preview.project_id)?.root == preview.old_root,

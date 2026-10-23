@@ -6,7 +6,7 @@ use crate::git_wire::*;
 use crate::model::{new_id, valid_id, SourceGate};
 use crate::protocol::{safe_error, Request, MAX_INPUT_PACKET};
 use crate::saved_state::{GitLedger as Ledger, GitRecord as Record};
-use crate::store::{ensure_private_dir, Store};
+use crate::store::{ensure_private_dir, FileLock, Store};
 use anyhow::{bail, ensure, Context, Result};
 use base64::Engine;
 use serde::{de::DeserializeOwned, Serialize};
@@ -797,6 +797,10 @@ impl Bridge {
         if let Some(operation) = self.operations.get(id) {
             return Ok(operation.info.clone());
         }
+        // Pin the saved binding before validating a sealed context and keep
+        // reconnection blocked from durable Pending through owned cleanup.
+        let run_use = FileLock::acquire_shared(&self.store.runtime_dir.join("run-use.lock"), true)
+            .context("root reconnection is in progress; Git operation was not started")?;
         self.prune();
         ensure!(
             self.occupied() < 4 && self.occupied() + shell_count < crate::model::MAX_TERMINALS,
@@ -872,6 +876,7 @@ impl Bridge {
             rows,
             cols,
             cancelled,
+            run_use,
         };
         if self.workers.executions.try_send(work).is_err() {
             self.repos.get_mut(&plan.repository).unwrap().busy = None;
