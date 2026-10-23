@@ -309,8 +309,25 @@ pub(super) fn run() {
         "ui_marker\necho UI_LOCAL_$ui_local\necho '진단 한글.cpp:1:1: error: 한글 오류'\nexit 7",
     );
     flow.key(KeyCode::F(2));
-    flow.wait("Definition saved");
+    flow.wait_for(
+        |s| {
+            s.contains("Saved revision")
+                && s.contains("1 tasks")
+                && s.contains("한글 빌드")
+                && !s.contains("Task draft")
+        },
+        "saved task list",
+    );
     flow.resize(18, 48);
+    flow.wait_for(
+        |s| {
+            s.contains("Saved revision")
+                && s.contains("1 tasks")
+                && s.contains("한글 빌드")
+                && s.contains("Tab: focus · F1: all actions · q: close")
+        },
+        "narrow saved task list",
+    );
     flow.key(KeyCode::Enter);
     flow.wait("Review task");
     flow.wait("한글 빌드");
@@ -346,7 +363,15 @@ pub(super) fn run() {
     flow.key(KeyCode::Char('p'));
     flow.wait("한글 오류");
     flow.resize(18, 48);
-    // A help round trip clears the old wide frame before we assert the narrow redraw.
+    flow.wait_for(
+        |s| {
+            s.contains("Enter Review source location")
+                && s.contains("한글 오류")
+                && s.contains("Tab: focus · F1: all actions · q: close")
+        },
+        "narrow Problems",
+    );
+    // A help round trip must restore the narrow Problems view before editor review.
     flow.key(KeyCode::F(1));
     flow.wait_for(
         |s| s.contains("Project controls") && !s.contains("한글 오류"),
@@ -361,15 +386,23 @@ pub(super) fn run() {
     flow.resize(36, 120);
     flow.wait("argv[1] = --");
     flow.key(KeyCode::F(2));
+    let expected_editor_arguments = format!("+1\n--\n{}\n", diagnostic.display());
     let deadline = Instant::now() + Duration::from_secs(15);
-    while !source.join("editor-arguments").exists() {
-        assert!(Instant::now() < deadline, "{}", flow.screen());
+    loop {
+        let arguments = fs::read_to_string(source.join("editor-arguments"));
+        if arguments
+            .as_deref()
+            .is_ok_and(|contents| contents == expected_editor_arguments)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "editor arguments not complete: {arguments:?}\n{}",
+            flow.screen()
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
-    assert_eq!(
-        fs::read_to_string(source.join("editor-arguments")).unwrap(),
-        format!("+1\n--\n{}\n", diagnostic.display())
-    );
     flow.wait("Editor");
     flow.control('g');
     flow.wait("1 Terminal");
