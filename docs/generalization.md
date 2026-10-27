@@ -13,14 +13,14 @@
 
 | 단계 | 범위 | 상태 |
 |---|---|---|
-| P0 | 지침·제품 방향·환경별 검증 계약 | 구현 완료·통합 검증 중 |
-| P1 | 설정 schema/legacy reader/live generation 호환 | 구현 완료·통합 검증 중 |
-| P2 | native executable/argv/cwd/env 터미널과 선택 readiness | 구현 완료·통합 검증 중 |
-| P3 | process pipes/script/interactive PTY, 취소·cleanup | 구현 완료·통합 검증 중 |
-| P4 | 온라인 취득→archive 검증·generation 설치 | 구현 완료·통합 검증 중 |
-| P5 | 구조화 결과 provenance, ici/Lens 연결 | 구현 완료·통합 검증 중 |
-| 공개 | 버전·CI·exact-main artifact·다운로드 검증 | 미실행 |
-| 정리 | 작업 branch/worktree/임시산출물만 정리 | 미실행 |
+| P0 | 지침·제품 방향·환경별 검증 계약 | 구현·로컬 검증 완료 |
+| P1 | 설정 schema/legacy reader/live generation 호환 | 구현·로컬 검증 완료 |
+| P2 | native executable/argv/cwd/env 터미널과 선택 readiness | 구현·로컬 검증 완료 |
+| P3 | process pipes/script/interactive PTY, 취소·cleanup | 구현·로컬 검증 완료 |
+| P4 | 온라인 취득→archive 검증·generation 설치 | 구현·로컬 검증 완료 |
+| P5 | 구조화 결과 provenance, ici/Lens 연결 | 구현·로컬 검증 완료 |
+| 공개 | 버전·CI·exact-main artifact·다운로드 검증 | [PR #64](https://github.com/jihoon22-lee/idk/pull/64)와 연결된 CI·릴리스 기록에서 최종 결과 확인 |
+| 정리 | 작업 branch/worktree/임시산출물만 정리 | 공개 후 작업 세션에서 실행·보고 |
 
 실행 정의·터미널/작업, 배포, 결과 연동은 변경 단위로 검토한다. schema/protocol 2와 최초 업그레이드가 함께 적용되어야 하므로 하나의 통합 PR로 공개한다. 과거 B01~B07 이슈는 완료 이력으로 보존한다.
 
@@ -32,7 +32,7 @@ NFS state/runtime은 기존 기술 제한을 유지한다. 폐쇄망 현장 인�
 
 ## 교차 프로젝트 계약
 
-ici `ici.next.run` v2 / event v1 / exits 0,1,2,3,130을 읽는다. Lens canonical repository는 https://github.com/jihoon22-lee/lens-diagnostics 이며 새 envelope는 확정 후 반영한다. 실행은 program+argv이며 별도 daemon/plugin 플랫폼을 만들지 않는다. run별 결과 경로와 producer/schema/version/digest를 보존하고 raw-log offset을 구조화 finding에 위조하지 않는다.
+ici `ici.next.run` v2와 Lens `lens.result` v1을 읽고 실제 exits 0,1,2,3,130을 별도로 보존한다. ici event v1 파일 경로를 제공하지만 이벤트 스트림을 해석하지는 않는다. Lens canonical repository는 https://github.com/jihoon22-lee/lens-diagnostics 이다. 실행은 program+argv이며 별도 daemon/plugin 플랫폼을 만들지 않는다. run별 결과 경로와 producer/schema/version/digest를 보존하고 raw-log offset을 구조화 finding에 위조하지 않는다.
 
 ## 독립 검토와 실행 증거
 
@@ -56,3 +56,11 @@ ici `ici.next.run` v2 / event v1 / exits 0,1,2,3,130을 읽는다. Lens canonica
   구 reader의 schema2 거부를 실제 확인했다. 사용자 설치·데이터는 변경하지 않았다.
 - Python 3.10/3.14 packaging(10)·release(13), Ruff, actionlint PASS.
   실제 tcsh/BSD csh, native pipes/PTY와 UI 회귀를 수행했으며 최신 PR CI에서도 전체 gate를 실행한다.
+
+- 정적 musl 개발 후보(`aa54ea4`): executable SHA-256
+  `52bfa473e796b9ad4bc97a417dbcf5c557b7b4fc6da2078e4d7a8704421a634f`, archive SHA-256
+  `956661c86758916f08500b6332bfe7cc09f463acc732bc0c41447313d1375e92`.
+  smoke, 실제 CLI/host/Git/Run/project/전체 메뉴, live shell·Run·log 보존 설치 PASS.
+  이 branch 후보를 공개하지 않으며 PR 병합 후 성공한 exact-main CI의 새 후보를 별도 검증한다.
+- 기본 suite에서 ignored인 실제 PTY 4개와 패키지 설치 1개는 별도 실행 PASS. 실제 ici 검사는
+  지정 개발 binary로 실행한 위 결과만 적용한다. zsh fixture는 실제 prompt를 관찰한 뒤 입력한다.
