@@ -300,6 +300,8 @@ pub(super) fn run() {
     flow.wait("Saved revision");
     flow.key(KeyCode::Char('n'));
     flow.wait("Task draft");
+    flow.key(KeyCode::F(8)); // process -> explicit script
+    flow.key(KeyCode::F(8)); // retain this flow's legacy same-shell task contract
     flow.resize(18, 48);
     flow.replace("한글 빌드");
     flow.wait("한글 빌드");
