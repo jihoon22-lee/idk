@@ -1,4 +1,4 @@
-//! Reviewed registered csh programs. Definition edits never execute anything.
+//! Reviewed registered process, script and legacy csh programs. Definition edits never execute anything.
 use crate::model::{hash_field, Project, TaskDefinition, TaskStep};
 use crate::project::{common_scope, LaunchEnvironment};
 use crate::shell::ShellPlan;
@@ -45,6 +45,8 @@ impl TaskService<'_> {
             "configuration changed; reload task definition"
         );
         let project = workspace.project_mut(project_id)?;
+        ensure!(task.execution.is_some() || project.shell.native.is_none(),
+            "legacy csh tasks require a legacy csh project; use --program or --interpreter for a native project");
         task.approved_digest = None;
         if let Some(saved) = project.tasks.iter_mut().find(|saved| saved.id == task.id) {
             *saved = task.clone();
@@ -69,10 +71,7 @@ impl TaskService<'_> {
             .iter()
             .find(|task| task.id == task_id)
             .context("task not registered")?;
-        let common = common_scope(project, environment);
-        let common_digest = common
-            .digest
-            .context("common initialization unavailable for task review")?;
+        let (common_digest, common_approved) = initialization(project, task, environment)?;
         let digest = digest(project, task, &common_digest)?;
         Ok(TaskReview {
             revision: workspace.revision,
@@ -80,7 +79,7 @@ impl TaskService<'_> {
             task: task.clone(),
             approved: task.approved_digest.as_ref() == Some(&digest),
             digest,
-            common_approved: common.trusted,
+            common_approved,
             home: environment.home().into(),
         })
     }
@@ -130,9 +129,8 @@ impl TaskService<'_> {
             .find(|task| task.id == task_id)
             .context("task not registered")?
             .clone();
-        let common = common_scope(project, &environment);
-        ensure!(common.trusted, "common initialization needs review");
-        let initialization_digest = common.digest.context("common initialization unavailable")?;
+        let (initialization_digest, trusted) = initialization(project, &task, &environment)?;
+        ensure!(trusted, "common initialization needs review");
         let launch_digest = digest(project, &task, &initialization_digest)?;
         ensure!(
             task.approved_digest.as_ref() == Some(&launch_digest),
@@ -142,6 +140,7 @@ impl TaskService<'_> {
         let mut sources = project.shell.sources.clone();
         sources.extend(task.sources.clone());
         let shell = ShellPlan {
+            native: None,
             shell: project.shell.executable.clone(),
             login: project.shell.login,
             init_cwd: project.shell.init_cwd.clone(),
@@ -163,6 +162,27 @@ impl TaskService<'_> {
             repository: project.repository_binding.clone(),
             source_roots,
         })
+    }
+}
+fn initialization(
+    project: &Project,
+    task: &TaskDefinition,
+    environment: &LaunchEnvironment,
+) -> Result<(String, bool)> {
+    if task.execution.is_some() {
+        // Native tasks execute their reviewed argv directly; user shell rc files
+        // are neither executed nor part of their trust scope.
+        Ok((
+            format!("{:x}", Sha256::digest(b"idk-direct-process-v1")),
+            true,
+        ))
+    } else {
+        ensure!(project.shell.native.is_none(), "legacy csh tasks require a legacy csh project; use --program or --interpreter for a native project");
+        let common = common_scope(project, environment);
+        Ok((
+            common.digest.context("common initialization unavailable")?,
+            common.trusted,
+        ))
     }
 }
 fn digest(project: &Project, task: &TaskDefinition, common: &str) -> Result<String> {

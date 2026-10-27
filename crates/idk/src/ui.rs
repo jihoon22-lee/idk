@@ -555,12 +555,13 @@ impl<'a> App<'a> {
                 ("Connect project", vec![
                     Field::text("Project name", "", "A label for this project; the folder name does not identify it."),
                     Field::text("Project folder", &cwd, "Choose an existing folder. Git is detected without changing the repository."),
-                    Field::text("csh / tcsh executable", shell, "Absolute path to the shell you already use."),
-                    Field::toggle("Login startup", false, "Use the selected shell's login startup order."),
+                    Field::text("Shell executable", shell, "Absolute path to the shell you already use."),
+                    Field::toggle("Legacy csh login", false, "Enables the historical csh login initialization contract."),
                     Field::text("Initialization folder", &cwd, "Scripts run here before the terminal changes to its starting folder."),
                     Field::sources(),
                     Field::text("First terminal name", "Development", "Add more terminals later, including several with the same folder."),
                     Field::text("First terminal folder", &cwd, "A starting folder, not the live working directory."),
+                    Field::text("Native argv (JSON)", "[]", "Literal arguments, for example [\"-i\"]. Only used without legacy source/login."),
                 ])
             }
             FormKey::Rename(id) => ("Rename project", vec![Field::text("Project name", &self.project(id)?.name, "Only the saved label changes.")]),
@@ -568,10 +569,12 @@ impl<'a> App<'a> {
                 let shell = &self.project(id)?.shell;
                 sources = shell.sources.clone();
                 ("Project environment", vec![
-                    Field::text("csh / tcsh executable", shell.executable.to_string_lossy(), "Absolute path to the existing shell executable."),
+                    Field::text("Shell executable", shell.executable.to_string_lossy(), "Absolute path to the existing shell executable."),
                     Field::toggle("Login startup", shell.login, "Startup files and order are reviewed before initialization is approved."),
                     Field::text("Initialization folder", shell.init_cwd.to_string_lossy(), "A new shell initializes here; existing shells keep their state."),
                     Field::sources(),
+                    Field::toggle("Native startup", shell.native.is_some(), "On delegates startup to the executable; remove legacy login and sources first."),
+                    Field::text("Native argv (JSON)", serde_json::to_string(&shell.native.as_ref().map(|n| n.args.clone()).unwrap_or_default())?, "Literal executable arguments; existing environment overrides are preserved."),
                 ])
             }
             FormKey::Reconnect(id) => ("Reconnect moved project", vec![Field::text("New project folder", self.project(id)?.root.to_string_lossy(), "Review every changed definition path before reconnecting.")]),
@@ -829,6 +832,15 @@ impl<'a> App<'a> {
                     name: form.text(0).into(),
                     root: form.text(1).into(),
                     shell: ShellConfig {
+                        native: if form.toggle(3) || !form.sources.is_empty() {
+                            None
+                        } else {
+                            Some(crate::model::NativeShell {
+                                args: serde_json::from_str(form.text(8))
+                                    .context("native argv must be a JSON string array")?,
+                                env: Default::default(),
+                            })
+                        },
                         executable: form.text(2).into(),
                         login: form.toggle(3),
                         init_cwd: form.text(4).into(),
@@ -869,6 +881,21 @@ impl<'a> App<'a> {
             FormKey::Environment(id) => {
                 project_id = Some(id.clone());
                 let shell = ShellConfig {
+                    native: if form.toggle(4) {
+                        Some(crate::model::NativeShell {
+                            args: serde_json::from_str(form.text(5))
+                                .context("native argv must be a JSON string array")?,
+                            env: self
+                                .project(id)?
+                                .shell
+                                .native
+                                .as_ref()
+                                .map(|n| n.env.clone())
+                                .unwrap_or_default(),
+                        })
+                    } else {
+                        None
+                    },
                     executable: form.text(0).into(),
                     login: form.toggle(1),
                     init_cwd: form.text(2).into(),
@@ -1281,6 +1308,14 @@ fn source_summary(sources: &[SourceSpec]) -> Vec<String> {
     lines
 }
 fn shell_summary(shell: &ShellConfig) -> Vec<String> {
+    if let Some(native) = &shell.native {
+        return vec![
+            format!("Native executable: {}", shell.executable.display()),
+            format!("Arguments: {:?}", native.args),
+            "Native startup is owned by the executable; shell readiness is not observed.".into(),
+            format!("Environment overrides: {}", native.env.len()),
+        ];
+    }
     let mut lines = vec![
         format!("Shell: {}", shell.executable.display()),
         format!("Login startup: {}", if shell.login { "yes" } else { "no" }),

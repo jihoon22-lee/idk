@@ -34,6 +34,14 @@ impl Fixture {
         Self::with_timeout(command, interactive, None)
     }
     fn with_timeout(command: &str, interactive: bool, timeout_seconds: Option<u64>) -> Self {
+        Self::with_execution(command, interactive, timeout_seconds, None)
+    }
+    fn with_execution(
+        command: &str,
+        interactive: bool,
+        timeout_seconds: Option<u64>,
+        execution: Option<TaskExecution>,
+    ) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("source");
         std::fs::create_dir(&root).unwrap();
@@ -49,8 +57,11 @@ impl Fixture {
         let shell = std::env::var_os("IDK_TEST_SHELL")
             .map(PathBuf::from)
             .unwrap_or_else(|| "/usr/bin/tcsh".into());
-        assert!(shell.is_file());
+        if execution.is_none() {
+            assert!(shell.is_file());
+        }
         let task = TaskDefinition {
+            execution: execution.clone(),
             id: new_id(),
             name: "Build".into(),
             command: command.into(),
@@ -79,7 +90,12 @@ impl Fixture {
             related_repositories: vec![],
             default_terminal: None,
             shell: ShellConfig {
-                executable: shell,
+                native: execution.as_ref().map(|_| NativeShell::default()),
+                executable: if execution.is_some() {
+                    "/missing-shell-must-not-be-run".into()
+                } else {
+                    shell
+                },
                 login: false,
                 init_cwd: root.clone(),
                 sources: vec![],
@@ -96,12 +112,14 @@ impl Fixture {
         store.save(&mut workspace, 0).unwrap();
         let service = ProjectService { store: &store };
         let environment = LaunchEnvironment::from_variables(env.clone()).unwrap();
-        let review = service
-            .review_initialization(&project.id, &environment)
-            .unwrap();
-        service
-            .approve_initialization(review.revision, review)
-            .unwrap();
+        if execution.is_none() {
+            let review = service
+                .review_initialization(&project.id, &environment)
+                .unwrap();
+            service
+                .approve_initialization(review.revision, review)
+                .unwrap();
+        }
         let fixture = Self {
             tmp,
             store,
@@ -810,7 +828,7 @@ fn failed_preparation_retries_finalization_after_its_first_outcome_save_fails() 
     assert!(saved["runs"][0]["error"]
         .as_str()
         .unwrap()
-        .contains("common initialization needs review"));
+        .contains("common initialization unavailable"));
     assert!(
         !f.root.join("starts").exists(),
         "finalization must never replay the failed start"
@@ -1393,4 +1411,317 @@ fn captured_raw_run_rejects_typed_secret_without_changing_input_or_log() {
         RunState::Cancelled
     );
     shutdown(&mut client, &mut host);
+}
+
+fn native_log(client: &mut Client, run: &RunInfo) -> String {
+    let RunResult::Log(log) = request(
+        client,
+        RunRequest::Log {
+            run_id: run.run_id.clone(),
+            generation: run.log.generation,
+            offset: 0,
+            limit: 65536,
+        },
+    ) else {
+        panic!()
+    };
+    String::from_utf8(
+        base64::engine::general_purpose::STANDARD
+            .decode(log.data_base64)
+            .unwrap(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn native_process_preserves_literal_argv_without_shell_initialization() {
+    let f = Fixture::with_execution(
+        "",
+        false,
+        None,
+        Some(TaskExecution::Process {
+            program: "/usr/bin/printf".into(),
+            args: vec![
+                "<%s>\n".into(),
+                "two words".into(),
+                "$(touch unwanted)".into(),
+                "".into(),
+            ],
+            env: BTreeMap::new(),
+        }),
+    );
+    let (mut host, mut client) = f.host();
+    let job = f.start(&mut client, &new_id());
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let run = finished(&mut client, &started.run.run_id);
+    assert_eq!(run.state, RunState::Succeeded, "{run:?}");
+    assert_eq!(run.steps[0].exit_code, Some(0));
+    assert!(!run.log.merged_pty);
+    assert_eq!(
+        native_log(&mut client, &run),
+        "<two words>\n<$(touch unwanted)>\n<>\n"
+    );
+    assert!(!f.root.join("unwanted").exists());
+    shutdown(&mut client, &mut host);
+}
+
+#[test]
+fn native_script_has_pipe_stdio_explicit_environment_and_run_paths() {
+    let script = r#"test ! -t 0 && test ! -t 1 && test ! -t 2 || exit 91
+printf 'stdout:%s:%s\n' "$CUSTOM" "$PWD"
+printf 'stderr-visible\n' >&2
+printf '%s' "$IDK_RUN_ID" > "$IDK_RESULT_PATH"
+printf 'event' > "$IDK_EVENTS_PATH"
+exit 7
+"#;
+    let f = Fixture::with_execution(
+        "",
+        false,
+        None,
+        Some(TaskExecution::Script {
+            interpreter: "/bin/sh".into(),
+            args: vec![],
+            script: script.into(),
+            env: BTreeMap::from([("CUSTOM".into(), "literal value".into())]),
+        }),
+    );
+    let (mut host, mut client) = f.host();
+    let job = f.start(&mut client, &new_id());
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let run = finished(&mut client, &started.run.run_id);
+    assert_eq!(run.state, RunState::Failed);
+    assert_eq!(run.exit_code, Some(7));
+    assert_eq!(run.steps[0].exit_code, Some(7));
+    let log = native_log(&mut client, &run);
+    assert!(
+        log.contains(&format!("stdout:literal value:{}", f.root.display())),
+        "{log}"
+    );
+    assert!(log.contains("stderr-visible"), "{log}");
+    let directory = f.store.runtime_dir.join(format!("run-{}", run.run_id));
+    assert_eq!(
+        std::fs::read_to_string(directory.join("result.json")).unwrap(),
+        run.run_id
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.join("events.jsonl")).unwrap(),
+        "event"
+    );
+    shutdown(&mut client, &mut host);
+}
+
+#[test]
+fn native_process_term_allows_partial_result_and_confirms_cleanup() {
+    let f = Fixture::with_execution("", false, None, Some(TaskExecution::Script {
+        interpreter: "/bin/sh".into(), args: vec![],
+        script: "trap 'printf partial > \"$IDK_RESULT_PATH\"; exit 0' TERM\nprintf ready > ready\nwhile :; do sleep 0.05; done\n".into(), env: BTreeMap::new(),
+    }));
+    let (mut host, mut client) = f.host();
+    let job = f.start(&mut client, &new_id());
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !f.root.join("ready").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    request(
+        &mut client,
+        RunRequest::Cancel {
+            run_id: started.run.run_id.clone(),
+            force: false,
+        },
+    );
+    let run = finished(&mut client, &started.run.run_id);
+    assert_eq!(run.state, RunState::Cancelled);
+    assert!(run.cleanup_confirmed);
+    assert_eq!(
+        std::fs::read_to_string(
+            f.store
+                .runtime_dir
+                .join(format!("run-{}/result.json", run.run_id))
+        )
+        .unwrap(),
+        "partial"
+    );
+    shutdown(&mut client, &mut host);
+}
+
+#[test]
+fn native_process_timeout_escalates_ignored_term() {
+    let f = Fixture::with_execution(
+        "",
+        false,
+        Some(1),
+        Some(TaskExecution::Script {
+            interpreter: "/bin/sh".into(),
+            args: vec![],
+            script: "trap '' TERM\nwhile :; do sleep 0.05; done\n".into(),
+            env: BTreeMap::new(),
+        }),
+    );
+    let (mut host, mut client) = f.host();
+    let job = f.start(&mut client, &new_id());
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let run = finished(&mut client, &started.run.run_id);
+    assert_eq!(run.state, RunState::Cancelled);
+    assert!(run.timeout_requested && run.cleanup_confirmed);
+    assert!(run.signal.is_some());
+    shutdown(&mut client, &mut host);
+}
+
+#[test]
+#[ignore = "requires a separately installed ici; set IDK_TEST_ICI and run explicitly"]
+fn native_actual_ici_term_preserves_partial_report() {
+    let ici = std::env::var("IDK_TEST_ICI").expect("set IDK_TEST_ICI to the ici executable");
+    let f = Fixture::with_execution("", false, None, Some(TaskExecution::Script {
+        interpreter: "/bin/sh".into(), args: vec![],
+        script: "exec \"$ICI_EXECUTABLE\" next verify --profile deep --result \"$IDK_RESULT_PATH\" --events \"$IDK_EVENTS_PATH\"\n".into(),
+        env: BTreeMap::from([("ICI_EXECUTABLE".into(), ici)]),
+    }));
+    std::fs::create_dir_all(f.root.join("app/src")).unwrap();
+    std::fs::create_dir_all(f.root.join("app/.venv/bin")).unwrap();
+    std::os::unix::fs::symlink("/usr/bin/python3", f.root.join("app/.venv/bin/python3")).unwrap();
+    std::fs::write(f.root.join("app/src/main.py"), "x = 1\n").unwrap();
+    std::fs::write(f.root.join("ici.toml"), r#"schema_version = 1
+[workspace]
+name = "idk-integration"
+[[components]]
+id = "app"
+root = "app"
+languages = ["python"]
+sources = ["src/**/*.py"]
+[components.python]
+executable = "app/.venv/bin/python3"
+[[components.integrations]]
+name = "long-running"
+argv = ["{python:declared}", "-c", "from pathlib import Path; import time; Path('ici-ready').write_text('ready'); time.sleep(60)"]
+expected_exit = 0
+"#).unwrap();
+    let (mut host, mut client) = f.host();
+    let job = f.start(&mut client, &new_id());
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !f.root.join("app/ici-ready").exists() && !f.root.join("ici-ready").exists() {
+        assert!(
+            Instant::now() < deadline,
+            "ici did not start integration: {}",
+            native_log(&mut client, &started.run)
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    request(
+        &mut client,
+        RunRequest::Cancel {
+            run_id: started.run.run_id.clone(),
+            force: false,
+        },
+    );
+    let run = finished(&mut client, &started.run.run_id);
+    assert_eq!(run.state, RunState::Cancelled);
+    assert!(run.cleanup_confirmed);
+    let path = f
+        .store
+        .runtime_dir
+        .join(format!("run-{}/result.json", run.run_id));
+    let report: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(report["execution"]["cancelled"], true);
+    assert_eq!(report["gate"]["selected"], "INCOMPLETE");
+    assert_eq!(run.exit_code, Some(130));
+    assert!(matches!(
+        run.structured_result,
+        Some(idk_workspace::structured_result::StructuredResult::Available { .. })
+    ));
+    shutdown(&mut client, &mut host);
+}
+
+#[test]
+fn native_interactive_script_uses_pty_and_never_persists_echoed_input() {
+    let f = Fixture::with_execution("", true, None, Some(TaskExecution::Script {
+        interpreter: "/bin/sh".into(), args: vec![],
+        script: "test -t 0 && test -t 1 && test -t 2 || exit 91\nprintf tty > interactive-proof\nprintf private-output\n".into(), env: BTreeMap::new(),
+    }));
+    let (mut host, mut client) = f.host();
+    let job = f.start(&mut client, &new_id());
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let run = finished(&mut client, &started.run.run_id);
+    assert_eq!(run.state, RunState::Succeeded);
+    assert_eq!(run.log.state, LogState::Disabled);
+    assert_eq!(
+        std::fs::read_to_string(f.root.join("interactive-proof")).unwrap(),
+        "tty"
+    );
+    shutdown(&mut client, &mut host);
+}
+
+#[test]
+fn native_process_cancel_cleans_term_ignoring_descendant_after_leader_exit() {
+    let f = Fixture::with_execution("", false, None, Some(TaskExecution::Script {
+        interpreter: "/bin/sh".into(), args: vec![],
+        script: "trap 'exit 0' TERM\n/bin/sh -c 'trap \"\" TERM; echo ready > child-ready; while :; do sleep 0.05; done' &\nwait\n".into(), env: BTreeMap::new(),
+    }));
+    let (mut host, mut client) = f.host();
+    let job = f.start(&mut client, &new_id());
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !f.root.join("child-ready").exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    request(
+        &mut client,
+        RunRequest::Cancel {
+            run_id: started.run.run_id.clone(),
+            force: false,
+        },
+    );
+    let run = finished(&mut client, &started.run.run_id);
+    assert_eq!(run.state, RunState::Cancelled);
+    assert!(run.cleanup_confirmed);
+    shutdown(&mut client, &mut host);
+}
+
+#[test]
+fn native_project_rejects_legacy_csh_task_before_any_execution() {
+    let f = Fixture::with_execution(
+        "",
+        false,
+        None,
+        Some(TaskExecution::Process {
+            program: "/bin/true".into(),
+            args: vec![],
+            env: BTreeMap::new(),
+        }),
+    );
+    let mut workspace = f.store.load().unwrap();
+    let mut legacy = workspace.projects[0].tasks[0].clone();
+    legacy.execution = None;
+    legacy.command = "touch SHOULD-NOT-EXECUTE".into();
+    let error = TaskService { store: &f.store }
+        .save(workspace.revision, &f.project, legacy.clone())
+        .unwrap_err();
+    assert!(error.to_string().contains("legacy csh project"));
+    // A hand-written definition is also rejected during review/launch.
+    workspace.projects[0].tasks[0] = legacy;
+    let revision = workspace.revision;
+    f.store.save(&mut workspace, revision).unwrap();
+    let environment = LaunchEnvironment::from_variables(f.env.clone()).unwrap();
+    let error = TaskService { store: &f.store }
+        .review(&f.project, &f.task, &environment)
+        .unwrap_err();
+    assert!(error.to_string().contains("legacy csh project"));
+    assert!(!f.root.join("SHOULD-NOT-EXECUTE").exists());
 }

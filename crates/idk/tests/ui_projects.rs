@@ -455,7 +455,10 @@ fn transient_trust_is_explicit_in_memory_and_changed_startup_requires_review() {
         "set IDK_TEST_SHELL to a real tcsh for trust inspection"
     );
     let mut app = fixture.app();
-    connect(&mut app, &fixture, "Trust");
+    connect_form(&mut app, &fixture, "Trust");
+    tabs(&mut app, 1);
+    key(&mut app, KeyCode::Char(' ')); // Explicit legacy csh login contract.
+    save(&mut app);
     key(&mut app, KeyCode::Char('t'));
     key(&mut app, KeyCode::F(2));
     assert!(fixture.store.load().unwrap().projects[0]

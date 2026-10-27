@@ -9,6 +9,27 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-28
+
+### Added
+- native 셸의 실행 파일·literal argv·cwd·환경을 보존하는 프로젝트 터미널을 추가한다.
+  기존 csh 초기화 정의는 별도 호환 경로로 남으며 재접속 시 startup을 다시 실행하지 않는다.
+- 등록 작업에 직접 process와 명시적 interpreter/script 실행을 추가한다. 비대화형 실행은
+  pipes를 사용하고 interactive 작업은 전용 PTY를 사용한다. 취소는 소유 프로세스에 SIGTERM을
+  보내 partial result 마감을 기다린 뒤 필요할 때 강제 정리하며 실제 종료와 cleanup을 기록한다.
+- `package verify-url`·`install-url` HTTPS 취득과 배포 target 목록을 추가한다. 온라인/로컬
+  설치는 같은 SHA-256·archive 검증과 generation 활성화/복구 경로를 사용한다.
+- ici v2와 Lens v1 구조화 결과의 producer/schema/run identity·파일 digest·findings를
+  실제 process exit와 별도로 보관한다. 미완료·손상·미지원 스키마를 성공으로 해석하지 않는다.
+
+### Compatibility
+- configuration schema 2와 host protocol 2를 사용한다. schema 1은 읽고 최초 이행 시 보관한다.
+  기존 host·셸·Run을 자동 종료하지 않는다. 처음 v0.4에서 업데이트할 때는 검증한 새 binary로
+  설치하고, 기존 live host는 이전 generation client로 사용·종료한다.
+- 검증된 배포는 Linux x86_64 musl이며 Linux/WSL을 우선한다. macOS/native Windows/ARM64와
+  NFS host state/runtime 지원은 추가하지 않는다. RHEL·폐쇄망 사용자 실기는 미실행으로 남는다.
+- 온라인 취득에만 curl이 선택적으로 필요하다. 기본 로컬 사용에 사외 서비스는 필요하지 않다.
+
 ## [0.4.3] - 2026-10-23
 
 ### Fixed
@@ -345,7 +366,8 @@
 [Native release promotion](docs/native-release.md)을 따른다. 공개 전 검사 완료와 대상
 RHEL·폐쇄망 실기는 별도이며 실기는 공개 후 사용자 후속으로 남긴다.
 
-[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/jihoon22-lee/idk/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/jihoon22-lee/idk/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/jihoon22-lee/idk/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/jihoon22-lee/idk/compare/v0.4.0...v0.4.1

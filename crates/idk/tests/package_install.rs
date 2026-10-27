@@ -183,6 +183,7 @@ fn actual_packaged_install_update_and_uninstall_preserve_live_shell_run_and_logs
             name: "Package fixture".into(),
             root: source.clone(),
             shell: ShellConfig {
+                native: None,
                 executable: shell,
                 login: false,
                 init_cwd: source.clone(),
@@ -205,7 +206,7 @@ fn actual_packaged_install_update_and_uninstall_preserve_live_shell_run_and_logs
     service
         .approve_initialization(review.revision, review)
         .unwrap();
-    let task=TaskDefinition{id:new_id(),name:"Package live Run".into(),command:"echo PACKAGE_RUN_READY_$package_local\nwhile (! -e run-release)\n echo PACKAGE_RUN_TICK\n sleep 0.1\nend\necho PACKAGE_RUN_DONE".into(),cwd:source.clone(),sources:Vec::new(),artifact:None,approved_digest:None,steps:Vec::new(),failure_policy:FailurePolicy::Stop,logging:TaskLogging::Raw,interactive:false,build_outputs:Vec::new(),artifact_from_task:None,timeout_seconds:Some(60)};
+    let task=TaskDefinition{execution:None,id:new_id(),name:"Package live Run".into(),command:"echo PACKAGE_RUN_READY_$package_local\nwhile (! -e run-release)\n echo PACKAGE_RUN_TICK\n sleep 0.1\nend\necho PACKAGE_RUN_DONE".into(),cwd:source.clone(),sources:Vec::new(),artifact:None,approved_digest:None,steps:Vec::new(),failure_policy:FailurePolicy::Stop,logging:TaskLogging::Raw,interactive:false,build_outputs:Vec::new(),artifact_from_task:None,timeout_seconds:Some(60)};
     let tasks = TaskService { store: &store };
     tasks
         .save(store.load().unwrap().revision, &project.id, task.clone())

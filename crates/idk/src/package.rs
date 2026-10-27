@@ -10,6 +10,7 @@ use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{Cursor, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 pub const BINARY: &str = "idk-linux-x86_64";
 pub const MANIFEST: &str = "idk-linux-x86_64.manifest.json";
@@ -17,6 +18,21 @@ pub const CHECKSUMS: &str = "idk-native-SHA256SUMS";
 pub const INVENTORY: &str = "idk-third-party-licenses.json";
 pub const NOTICES: &str = "idk-THIRD-PARTY-NOTICES.txt";
 const FILES: [&str; 5] = [BINARY, MANIFEST, CHECKSUMS, INVENTORY, NOTICES];
+/// Verified distribution targets, not a promise of platform parity.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct DistributionTarget {
+    pub triple: &'static str,
+    pub artifact: &'static str,
+    pub os: &'static str,
+    pub architecture: &'static str,
+}
+pub const SUPPORTED_TARGETS: &[DistributionTarget] = &[DistributionTarget {
+    triple: "x86_64-unknown-linux-musl",
+    artifact: BINARY,
+    os: "linux",
+    architecture: "x86_64",
+}];
+
 const MAX_COMPRESSED: u64 = 64 * 1024 * 1024;
 const MAX_UNPACKED: u64 = 128 * 1024 * 1024;
 
@@ -76,6 +92,15 @@ pub struct VerifiedBundle {
 }
 
 impl VerifiedBundle {
+    /// Fetch only on explicit request. No startup, update checks or telemetry use this path.
+    /// curl uses the host CA/proxy configuration; its user config is disabled.
+    pub fn download(url: &str, expected_sha256: &str) -> Result<Self> {
+        valid_digest(expected_sha256)?;
+        validate_download_url(url)?;
+        let compressed = download_bytes(Command::new("curl"), url, MAX_COMPRESSED)?;
+        Self::from_bytes(&compressed, expected_sha256)
+    }
+
     pub fn read(path: &Path, expected_sha256: &str) -> Result<Self> {
         ensure!(path.is_absolute(), "bundle path must be absolute");
         valid_digest(expected_sha256)?;
@@ -302,7 +327,12 @@ fn validate_manifest(manifest: &BundleManifest, files: &BTreeMap<String, Vec<u8>
         "unsupported bundle manifest schema; no files installed"
     );
     ensure!(
-        manifest.artifact == BINARY && manifest.target == "x86_64-unknown-linux-musl",
+        SUPPORTED_TARGETS.iter().any(|target| {
+            manifest.artifact == target.artifact
+                && manifest.target == target.triple
+                && std::env::consts::OS == target.os
+                && std::env::consts::ARCH == target.architecture
+        }),
         "bundle target is not supported by this Linux x86_64 installer"
     );
     valid_version(&manifest.version)?;
@@ -585,4 +615,109 @@ fn verify_static_elf(bytes: &[u8]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn validate_download_url(url: &str) -> Result<()> {
+    let authority = url
+        .strip_prefix("https://")
+        .context("package URL must use https://; use package install for a local archive")?
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    ensure!(
+        !authority.is_empty()
+            && !authority.contains('@')
+            && !url.chars().any(|c| c.is_control() || c.is_whitespace())
+            && !url.contains('\\'),
+        "package URL must have a host and no credentials, whitespace or backslashes"
+    );
+    Ok(())
+}
+
+fn download_bytes(mut command: Command, url: &str, limit: u64) -> Result<Vec<u8>> {
+    // -q must be first: a .curlrc must not disable TLS verification or redirect policy.
+    let mut child = command
+        .args([
+            "-q",
+            "--fail",
+            "--silent",
+            "--location",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--globoff",
+            "--connect-timeout",
+            "15",
+            "--max-time",
+            "120",
+            "--max-redirs",
+            "5",
+            "--url",
+            url,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("start curl for HTTPS download; install curl or use a local archive")?;
+    let mut bytes = Vec::new();
+    let read = child
+        .stdout
+        .take()
+        .context("download stdout unavailable")?
+        .take(limit + 1)
+        .read_to_end(&mut bytes);
+    if read.is_err() || bytes.len() as u64 > limit {
+        let _ = child.kill();
+        let _ = child.wait();
+        read.context("read package download")?;
+        anyhow::bail!("download exceeds package size limit");
+    }
+    let status = child.wait().context("wait for package download")?;
+    ensure!(
+        status.success(),
+        "HTTPS package download failed ({status}); check URL, network, CA and proxy configuration"
+    );
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod online_tests {
+    use super::*;
+
+    #[test]
+    fn https_url_policy_rejects_unsafe_inputs() {
+        for url in [
+            "http://host/a",
+            "file:///a",
+            "https://",
+            "https://u:p@host/a",
+            "https://host/a\n",
+            "https://host\\other/a",
+        ] {
+            assert!(validate_download_url(url).is_err(), "{url}");
+        }
+        assert!(validate_download_url("https://example.org/a?token=x").is_ok());
+    }
+
+    fn fixture(script: &str) -> (tempfile::TempDir, Command) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("curl");
+        fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        (dir, Command::new(path))
+    }
+
+    #[test]
+    fn download_is_bounded_and_failures_do_not_become_archives() {
+        let (_dir, command) = fixture("printf partial; exit 22");
+        assert!(download_bytes(command, "https://example.org/a", 64).is_err());
+        let (_dir, command) = fixture("printf 123456789");
+        assert!(download_bytes(command, "https://example.org/a", 8).is_err());
+        let (_dir, command) = fixture("printf archive");
+        let bytes = download_bytes(command, "https://example.org/a", 64).unwrap();
+        assert_eq!(bytes, b"archive");
+        assert!(VerifiedBundle::from_bytes(&bytes, &"0".repeat(64)).is_err());
+    }
 }

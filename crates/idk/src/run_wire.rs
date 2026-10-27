@@ -88,6 +88,8 @@ pub struct RunInfo {
     pub exit_code: Option<u32>,
     pub signal: Option<String>,
     pub steps: Vec<StepResult>,
+    #[serde(default)]
+    pub structured_result: Option<crate::structured_result::StructuredResult>,
     pub source_start: SourceObservation,
     pub source_end: Option<SourceObservation>,
     pub source_changed: Option<bool>,
@@ -147,7 +149,7 @@ pub enum RunRequest {
     SaveTask {
         revision: u64,
         project_id: String,
-        task: crate::model::TaskDefinition,
+        task: Box<crate::model::TaskDefinition>,
     },
     Start {
         project_id: String,

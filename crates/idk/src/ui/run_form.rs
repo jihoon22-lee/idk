@@ -1,7 +1,7 @@
 //! Local task/editor drafts; saving a definition never launches it.
 use super::git_draft::CommitDraft;
 use crate::model::{
-    EditorConfig, FailurePolicy, SourceSpec, TaskDefinition, TaskLogging, TaskStep,
+    EditorConfig, FailurePolicy, SourceSpec, TaskDefinition, TaskExecution, TaskLogging, TaskStep,
 };
 use anyhow::{ensure, Result};
 use std::path::{Path, PathBuf};
@@ -36,7 +36,7 @@ pub(super) struct RunForm {
 }
 impl RunForm {
     pub fn task(project: String, revision: u64, task: TaskDefinition) -> Self {
-        let fields = vec![
+        let mut fields = vec![
             DraftField::new("Name", task.name.clone()),
             DraftField::new(
                 "csh command (multiline; used when no steps)",
@@ -89,6 +89,36 @@ impl RunForm {
                 task.artifact_from_task.clone().unwrap_or_default(),
             ),
         ];
+        if let Some(execution) = &task.execution {
+            let (program, args, env, script) = match execution {
+                TaskExecution::Process { program, args, env } => (program, args, env, None),
+                TaskExecution::Script {
+                    interpreter,
+                    args,
+                    env,
+                    script,
+                } => (interpreter, args, env, Some(script)),
+            };
+            fields[1] = DraftField::new(
+                if script.is_some() {
+                    "Script interpreter"
+                } else {
+                    "Program executable"
+                },
+                program.to_string_lossy(),
+            );
+            fields.push(DraftField::new(
+                "Literal arguments (JSON array; no shell expansion)",
+                serde_json::to_string(args).unwrap(),
+            ));
+            fields.push(DraftField::new(
+                "Environment overrides (JSON object)",
+                serde_json::to_string(env).unwrap(),
+            ));
+            if let Some(script) = script {
+                fields.push(DraftField::new("Script body", script));
+            }
+        }
         let mut form = Self {
             project,
             revision,
@@ -107,6 +137,37 @@ impl RunForm {
         }
         form.selected = 0;
         form
+    }
+    /// Explicitly choose a different execution contract in the local draft.
+    /// Existing script/source text must be cleared by the user before switching.
+    pub fn cycle_execution(&mut self) -> Result<()> {
+        let mut task = self.build_task()?;
+        ensure!(
+            task.command.is_empty() && task.sources.is_empty() && task.steps.is_empty(),
+            "Clear legacy command, sources and steps before changing execution type"
+        );
+        task.execution = match &task.execution {
+            Some(TaskExecution::Process { program, args, env }) => Some(TaskExecution::Script {
+                interpreter: program.clone(),
+                args: args.clone(),
+                env: env.clone(),
+                script: String::new(),
+            }),
+            Some(TaskExecution::Script { script, .. }) => {
+                ensure!(
+                    script.is_empty(),
+                    "Clear script text before changing execution type"
+                );
+                None
+            }
+            None => Some(TaskExecution::Process {
+                program: PathBuf::new(),
+                args: vec![],
+                env: Default::default(),
+            }),
+        };
+        *self = Self::task(self.project.clone(), self.revision, task);
+        Ok(())
     }
     pub fn editor(project: String, revision: u64, config: Option<EditorConfig>) -> Self {
         let config = config.unwrap_or(EditorConfig {
@@ -139,6 +200,13 @@ impl RunForm {
         }
     }
     pub fn add_source(&mut self, source: SourceSpec) {
+        if self
+            .task
+            .as_ref()
+            .is_some_and(|task| task.execution.is_some())
+        {
+            return;
+        }
         let at = 10 + self.source_count * 2;
         self.source_count += 1;
         self.fields.splice(
@@ -157,6 +225,13 @@ impl RunForm {
         self.selected = at;
     }
     pub fn add_step(&mut self, step: TaskStep) {
+        if self
+            .task
+            .as_ref()
+            .is_some_and(|task| task.execution.is_some())
+        {
+            return;
+        }
         self.step_count += 1;
         self.selected = self.fields.len();
         self.fields.extend([
@@ -173,7 +248,25 @@ impl RunForm {
     pub fn build_task(&self) -> Result<TaskDefinition> {
         let mut task = self.task.clone().expect("task form");
         task.name = self.value(0).into();
-        task.command = self.value(1).into();
+        if let Some(execution) = &mut task.execution {
+            let (program, args, env) = match execution {
+                TaskExecution::Process { program, args, env } => (program, args, env),
+                TaskExecution::Script {
+                    interpreter,
+                    args,
+                    env,
+                    script,
+                } => {
+                    *script = self.value(12).into();
+                    (interpreter, args, env)
+                }
+            };
+            *program = path_value(self.value(1), program);
+            *args = serde_json::from_str(self.value(10))?;
+            *env = serde_json::from_str(self.value(11))?;
+        } else {
+            task.command = self.value(1).into();
+        }
         task.cwd = path_value(self.value(2), &task.cwd);
         task.failure_policy = match self.value(3) {
             "stop" => FailurePolicy::Stop,
@@ -296,6 +389,7 @@ mod tests {
     fn unchanged_path_and_literal_argument_boundaries_survive_unrelated_edit() {
         let path = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/nonutf8-\xff".to_vec()));
         let mut task = TaskDefinition {
+            execution: None,
             id: "task".into(),
             name: "Name".into(),
             command: "echo okay".into(),

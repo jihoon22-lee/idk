@@ -25,3 +25,5 @@ pub mod problems;
 pub mod run;
 pub mod run_wire;
 pub mod task;
+
+pub mod structured_result;

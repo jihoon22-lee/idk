@@ -69,6 +69,7 @@ pub fn run(shell: &Path) -> Result<Value> {
         ("LANG".into(), "C.UTF-8".into()),
     ]);
     let mut plan = ShellPlan {
+        native: None,
         shell: shell.clone(),
         login: false,
         init_cwd: init.clone(),
@@ -88,7 +89,7 @@ pub fn run(shell: &Path) -> Result<Value> {
                 let _ = session.terminate();
                 bail!("synthetic shell initialization failed");
             }
-            InitializationState::Initializing => {}
+            InitializationState::Initializing | InitializationState::Unobserved => {}
         }
         if session.try_wait()?.is_some() || Instant::now() > deadline {
             let _ = session.terminate();

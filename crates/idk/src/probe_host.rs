@@ -173,6 +173,7 @@ fn synthetic_project(
         name: "Synthetic packaged host proof".into(),
         root: project_root.clone(),
         shell: ShellConfig {
+            native: None,
             executable: shell.into(),
             login: false,
             init_cwd: project_root,

@@ -33,6 +33,7 @@ fn plan(tmp: &TempDir) -> ShellPlan {
         std::fs::create_dir(p).unwrap();
     }
     ShellPlan {
+        native: None,
         shell: shell(),
         login: false,
         init_cwd: init,

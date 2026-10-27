@@ -89,7 +89,7 @@ impl LaunchEnvironment {
 #[derive(Clone, Debug, Serialize)]
 pub struct ShellCandidate {
     pub path: PathBuf,
-    pub kind: ShellKind,
+    pub kind: Option<ShellKind>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct TerminalDraft {
@@ -427,7 +427,8 @@ impl ProjectService<'_> {
     ) -> Result<DefinitionImpact> {
         self.change(expected, |workspace| {
             let project = workspace.project_mut(project_id)?;
-            if shell.executable != project.shell.executable
+            if shell.native != project.shell.native
+                || shell.executable != project.shell.executable
                 || shell.login != project.shell.login
                 || shell.init_cwd != project.shell.init_cwd
                 || shell.sources != project.shell.sources
@@ -762,7 +763,7 @@ impl ProjectService<'_> {
             matches!(
                 path_availability(&project.shell.init_cwd),
                 PathAvailability::Ready { .. }
-            ),
+            ) || project.shell.native.is_some(),
             "initialization directory is unavailable"
         );
         ensure!(
@@ -776,13 +777,14 @@ impl ProjectService<'_> {
             matches!(
                 path_availability(environment.home()),
                 PathAvailability::Ready { .. }
-            ),
+            ) || project.shell.native.is_some(),
             "launch HOME is unavailable"
         );
         let mut sources = project.shell.sources.clone();
         sources.extend(terminal.sources.clone());
         Ok(TerminalLaunchPlan {
             shell: ShellPlan {
+                native: project.shell.native.clone(),
                 shell: project.shell.executable.clone(),
                 login: project.shell.login,
                 init_cwd: project.shell.init_cwd.clone(),
@@ -829,41 +831,35 @@ pub fn new_terminal(project: &Project, draft: TerminalDraft) -> Result<TerminalD
 }
 
 pub fn discover_shells(environment: &LaunchEnvironment) -> Vec<ShellCandidate> {
+    use std::os::unix::fs::PermissionsExt;
     let mut paths = Vec::new();
     if let Some(shell) = environment.variables.get("SHELL") {
         paths.push(PathBuf::from(shell));
     }
     if let Some(search) = environment.variables.get("PATH") {
         for directory in std::env::split_paths(search).filter(|p| p.is_absolute()) {
-            paths.extend([directory.join("tcsh"), directory.join("csh")]);
+            paths.extend(["bash", "zsh", "sh", "tcsh", "csh"].map(|name| directory.join(name)));
         }
     }
-    paths.extend(["/bin/tcsh", "/usr/bin/tcsh", "/bin/csh", "/usr/bin/csh"].map(PathBuf::from));
+    paths.extend(["/bin/sh", "/bin/bash", "/bin/zsh"].map(PathBuf::from));
     let mut seen = HashSet::new();
-    let mut candidates = Vec::new();
-    for path in paths {
-        if !path.is_absolute()
-            || !matches!(
-                path.file_name().and_then(|s| s.to_str()),
-                Some("csh" | "tcsh" | "bsd-csh")
-            )
-        {
-            continue;
-        }
-        let Ok(canonical) = path.canonicalize() else {
-            continue;
-        };
-        if !seen.insert(canonical) {
-            continue;
-        }
-        if let Ok(inspection) = inspect_shell(&path, &environment.variables) {
-            candidates.push(ShellCandidate {
-                path,
-                kind: inspection.kind,
-            });
-        }
-    }
-    candidates
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            if !path.is_absolute() {
+                return None;
+            }
+            let canonical = path.canonicalize().ok()?;
+            let metadata = canonical.metadata().ok()?;
+            if !metadata.is_file()
+                || metadata.permissions().mode() & 0o111 == 0
+                || !seen.insert(canonical)
+            {
+                return None;
+            }
+            Some(ShellCandidate { path, kind: None })
+        })
+        .collect()
 }
 
 /// Only ~/, absolute paths, and a relative base are interpreted. Dollar signs,
@@ -1198,6 +1194,14 @@ fn scope_result(
     }
 }
 pub(crate) fn common_scope(project: &Project, environment: &LaunchEnvironment) -> TrustScopeReview {
+    if project.shell.native.is_some() {
+        let result = project.validate().and_then(|()| framed_digest("idk-native-terminal-v1", &serde_json::json!({"shell": project.shell.executable, "native": project.shell.native})));
+        let mut review = scope_result(None, None, Vec::new(), result);
+        // A saved user terminal definition uses native startup, not project script injection.
+        review.trusted = review.digest.is_some();
+        return review;
+    }
+
     let mut files = Vec::new();
     let result = (|| {
         let inspection = inspect_shell(&project.shell.executable, &environment.variables)?;
@@ -1249,6 +1253,21 @@ fn terminal_scope(
     environment: &LaunchEnvironment,
     common: &TrustScopeReview,
 ) -> TrustScopeReview {
+    if project.shell.native.is_some() {
+        let result = if terminal.sources.is_empty() {
+            framed_digest(
+                "idk-native-terminal-instance-v1",
+                &serde_json::json!({"common": common.digest, "terminal": terminal.id, "cwd": terminal.cwd}),
+            )
+        } else {
+            Err(anyhow::anyhow!(
+                "native terminals do not inject source files"
+            ))
+        };
+        let mut review = scope_result(Some(terminal.id.clone()), None, Vec::new(), result);
+        review.trusted = common.trusted && review.digest.is_some();
+        return review;
+    }
     let mut files = common.files.clone();
     let result = (|| {
         let common_digest = common.digest.as_ref().with_context(|| {

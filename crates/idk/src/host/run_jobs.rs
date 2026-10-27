@@ -625,7 +625,7 @@ fn execute(
             revision,
             project_id,
             task,
-        } => Ok(RunResult::Task(tasks.save(revision, &project_id, task)?)),
+        } => Ok(RunResult::Task(tasks.save(revision, &project_id, *task)?)),
         RunRequest::SaveEditor {
             revision,
             project_id,
@@ -812,6 +812,51 @@ fn spawn_start(
             !cancel.load(Ordering::Acquire),
             "task cancelled before shell preparation"
         );
+        if let Some(plan) = registry.process_plan(&id)? {
+            ensure!(
+                !cancel.load(Ordering::Acquire),
+                "task cancelled before process creation"
+            );
+            let output = registry.output_sink(&id)?;
+            let resource_dir = resources.join(format!("process-{}", new_id()));
+            ensure_private_dir(&resource_dir)?;
+            let created = if plan.interactive {
+                let mut command = portable_pty::CommandBuilder::new(&plan.program);
+                command.args(&plan.args);
+                command.cwd(&plan.cwd);
+                command.env_clear();
+                for (key, value) in &plan.env {
+                    command.env(key, value);
+                }
+                TerminalSession::spawn_with_output(command, rows, cols, 2000, Some(output.clone()))
+            } else {
+                let mut command = std::process::Command::new(&plan.program);
+                command
+                    .args(&plan.args)
+                    .current_dir(&plan.cwd)
+                    .env_clear()
+                    .envs(&plan.env);
+                TerminalSession::spawn_process(command, rows, cols, Some(output.clone()))
+            };
+            let mut terminal = match created {
+                Ok(value) => value,
+                Err(error) => {
+                    let _ = std::fs::remove_dir_all(&resource_dir);
+                    return Err(error);
+                }
+            };
+            terminal.set_close_signal(libc::SIGTERM);
+            terminal.defer_reaping();
+            return Ok(Runtime {
+                terminal,
+                state_path: PathBuf::new(),
+                resource_dir,
+                bootstrap: Vec::new(),
+                revision: started.run.definition_revision,
+                digest: started.run.launch_digest.clone(),
+                output: Some(output),
+            });
+        }
         let shell = registry.shell_plan(&id)?;
         let prepared = shell.prepare(resources, launcher)?;
         if cancel.load(Ordering::Acquire) {

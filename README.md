@@ -1,14 +1,17 @@
 # idk — Integrated Developer Kit
 
-idk는 프로젝트의 개발 터미널, 외부 테스트 터미널, Git 작업과 빌드 결과를 한 CLI/TUI에서
-다루는 도구다. 실제 csh/tcsh를 초기화한 뒤 유지하므로 alias·셸 변수·작업 상태를 계속 사용할
-수 있다. 화면을 닫아도 호스트와 셸은 남고, 다시 접속할 때 초기화 명령을 반복하지 않는다.
+idk는 주어진 셸과 개발 도구를 그대로 사용하는 프로젝트 중심 CLI/TUI 작업 공간이다.
+개발 터미널, 프로젝트 밖의 테스트 터미널, Git 작업과 빌드·테스트 결과를 함께 다룬다.
+화면을 닫아도 사용자 host와 셸은 남으며, 다시 접속할 때 startup이나 명령을 반복하지 않는다.
 
-WSL/Linux에서 개발하며 RHEL 8.10 폐쇄망 사용을 목표로 한다. 정적 Linux x86_64 실행 파일과
-검증 정보·라이선스가 든 오프라인 번들로 배포한다. 제품 실행에 Python·Rust compiler·사외
-서비스·root 권한이 필요하지 않다. 기존 csh/tcsh와 Git은 해당 환경에 준비되어 있어야 한다.
-대상 RHEL·폐쇄망 정책 실기는 공개 후 사용자가 수행하며
-[후속 #53](https://github.com/jihoon22-lee/idk/issues/53)(closed)에 미실행으로 추적한다.
+기본 터미널은 executable·argv·cwd·환경을 PTY로 실행하고 startup을 실제 셸에 맡긴다.
+bash, zsh, sh, csh/tcsh나 명시한 wrapper를 사용할 수 있다. 기존 csh 초기화 정의는
+별도 호환 경로로 유지한다. 등록 작업은 일반 process, 명시 script 또는 대화형 PTY로 실행한다.
+
+현재 배포는 Linux x86_64 정적 musl 실행 파일과 검증 정보·라이선스가 든 archive다.
+Linux/WSL의 일반 사용과 네트워크가 없는 환경을 함께 다루며, 제품 기본 실행에
+Python·Rust compiler·외부 서비스·root 권한이 필요하지 않다. 온라인 archive 취득에는
+시스템 curl을 사용한다. Git·셸·빌드 도구는 사용 환경에 설치된 것을 사용한다.
 
 **host state/runtime은 NFS를 지원하지 않는다.** NFS home을 사용하는 경우 정책상 허용된 로컬
 `XDG_STATE_HOME`·`XDG_RUNTIME_DIR` 또는 명시적 `--data-dir`를 선택한다. 소스·설정·기존 상태를
@@ -16,10 +19,10 @@ WSL/Linux에서 개발하며 RHEL 8.10 폐쇄망 사용을 목표로 한다. 정
 
 ## 사용하는 흐름
 
-1. 프로젝트 소스 경로와 기존 `.csh` 초기화를 등록하고 실행할 내용을 검토한다.
+1. 프로젝트 소스 경로를 등록한다. 기본 셸 후보를 사용하거나 실행 파일과 인자를 지정한다.
 2. 개발용 터미널과 프로젝트 밖의 테스트 터미널을 열어 각각의 셸 상태를 유지한다.
 3. Git 화면에서 프로젝트의 저장소를 확인하고 diff·stage·commit과 명시적 원격 작업을 수행한다.
-4. 빌드·테스트를 등록 작업으로 실행해 실제 종료 결과, 원문 로그와 Problems를 확인한다.
+4. 빌드·테스트의 실행 파일과 argv 또는 script를 등록해 실제 종료 결과·로그·진단을 확인한다.
 5. 진단 위치를 설정한 외부 편집기로 열고 다시 실행한다. 화면 종료와 작업 취소는 별개다.
 
 터미널 cwd와 Git 대상 저장소를 구분하며, 전체 index를 검토한 뒤 commit한다. 소스를 사용하는
@@ -30,16 +33,22 @@ idle로 추정하지 않는다. 사용자 소스·`.csh`·기존 설정과 무�
 ## 설치와 시작
 
 [릴리스](https://github.com/jihoon22-lee/idk/releases)의
-`idk-0.4.3-x86_64-unknown-linux-musl.tar.gz`와 **별도의 신뢰할 수 있는 경로로 확인한 SHA-256**을
+`idk-0.5.0-x86_64-unknown-linux-musl.tar.gz`와 **별도의 신뢰할 수 있는 경로로 확인한 SHA-256**을
 사용한다. archive와 checksum이 서로 맞는 것만으로 publisher 신뢰가 생기는 것은 아니다.
-[반입·첫 실행 안내](docs/closed-network-setup.md)에 따라 실행 파일을 준비한 뒤 설치를 검토한다.
+[설치·첫 실행 안내](docs/offline-workspace.md)에 따라 실행 파일을 준비한 뒤 설치를 검토한다.
 
 ```text
-./idk-linux-x86_64 package verify /absolute/path/idk-0.4.3-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
-./idk-linux-x86_64 package install /absolute/path/idk-0.4.3-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256> --prefix /absolute/user/path/idk-workspace
+./idk-linux-x86_64 package verify /absolute/path/idk-0.5.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
+./idk-linux-x86_64 package install /absolute/path/idk-0.5.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256> --prefix /absolute/user/path/idk-workspace
 ```
 
-검토한 설치 명령에 `--yes`를 붙여 활성화한다. 이후 지정 prefix의 `idk`로 실행한다.
+새 버전 idk에서는 `package verify-url <https-url> --sha256 <trusted-SHA256>`과
+`package install-url <https-url> --sha256 <trusted-SHA256> --prefix <absolute-prefix>`로
+같은 archive를 직접 취득할 수 있다. 로컬 설치와 동일한 bytes 검증·generation 전환을 사용한다.
+`idk package targets`는 현재 배포 target을 JSON으로 표시한다.
+
+v0.4에서 처음 전환할 때는 검증한 새 archive에서 꺼낸 **새 실행 파일**로 설치한다.
+구 installer는 새 schema/protocol을 거부한다. 이후 검토한 설치 명령에 `--yes`를 붙여 활성화한다. 이후 지정 prefix의 `idk`로 실행한다.
 기존 호스트가 있다면 업데이트 뒤에도 원래 generation과 같은 data 경로로 다시 접속한다.
 살아 있는 셸과 등록 Run, 해당 호스트의 로그 수집은 설치·제거 때문에 자동으로 중단되지 않는다.
 
@@ -50,7 +59,21 @@ idk
 ```
 
 `idk`는 실제 터미널에서 TUI를 연다. `doctor`는 경고가 있어도 기본 exit 0이며 검사에서 실패로
-다루려면 `--strict`를 사용한다. 요약 결과도 폐쇄망의 반출 정책을 따라야 한다.
+다루려면 `--strict`를 사용한다. 폐쇄망에서는 [반입·운영 안내](docs/closed-network-setup.md)의
+현지 정책을 적용한다. 진단 요약도 반출 권한을 대신하지 않는다.
+
+## 지원 범위
+
+| 환경·기능 | 지원 경계 |
+|---|---|
+| Linux x86_64 / WSL Linux | 현재 실행·배포 기준. 사용자 host, PTY, Git, 등록 작업 |
+| CI 컨테이너 | CLI 사용 가능. TUI는 실제 터미널 필요, 작업 도구는 환경에서 제공 |
+| 폐쇄망 / RHEL 8.10 | 로컬 archive 설치·기존 셸 호환 유지. 현장 정책·실기 수용은 별도 |
+| NFS state/runtime | 미지원. 허용된 로컬 XDG 또는 `--data-dir` 지정 |
+| Linux ARM64 / macOS / native Windows | 현재 공개 target 아님. WSL과 native Windows 지원은 다름 |
+
+RHEL·폐쇄망 현장 실기는 기존 [후속 #53](https://github.com/jihoon22-lee/idk/issues/53)의
+미실행 기록으로 보존한다. 일반 Linux 검증을 해당 현장의 PASS로 바꾸지 않는다.
 
 ## 문서와 v0.3 전환
 

@@ -138,6 +138,7 @@ pub(crate) fn run(
         name: "Synthetic packaged Run proof".into(),
         root: root.clone(),
         shell: ShellConfig {
+            native: None,
             executable: shell.into(),
             login: false,
             init_cwd: root.clone(),
@@ -157,6 +158,7 @@ pub(crate) fn run(
     );
     service.approve_initialization(review.revision, review)?;
     let definition = |name: &str, command: &str| TaskDefinition {
+        execution: None,
         id: new_id(),
         name: name.into(),
         command: command.into(),
@@ -186,7 +188,7 @@ pub(crate) fn run(
                     RunRequest::SaveTask {
                         revision,
                         project_id: project.id.clone(),
-                        task: task.clone()
+                        task: Box::new(task.clone())
                     }
                 )?,
                 RunResult::Task(_)

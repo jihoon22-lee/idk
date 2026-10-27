@@ -1,4 +1,4 @@
-# idk v0.4 구조
+# idk 구조
 
 제품은 `crates/idk/`의 Rust CLI/TUI와 사용자별 백그라운드 host로 구성한다. 기본 실행에
 Python, Zellij, GUI 서버나 사외 서비스가 필요하지 않다. 선택 근거와 측정 예산은
@@ -9,9 +9,9 @@ Python, Zellij, GUI 서버나 사외 서비스가 필요하지 않다. 선택 �
 ```mermaid
 flowchart LR
     UI[CLI / TUI client] -->|같은 사용자·protocol·binary 확인| Host[사용자별 host]
-    Host --> Terminal[터미널 PTY / 실제 csh]
+    Host --> Terminal[터미널 PTY / native executable]
     Host --> Git[Git worker / 전용 작업 PTY]
-    Host --> Run[Run worker / 전용 task PTY]
+    Host --> Run[Run worker / pipes 또는 전용 PTY]
     Run --> Log[별도 bounded raw log]
     Log --> Problem[Problems / 위치 검토]
     Problem --> Editor[명시 설정 편집기 / 별도 PTY]
@@ -20,12 +20,30 @@ flowchart LR
 ```
 
 UI의 수명과 host/셸의 수명은 다르다. client를 닫아도 host가 실제 셸과 출력 수집을 유지하며,
-재접속은 기존 runtime identity와 화면을 사용한다. 같은 csh/tcsh에서 source한 상태를 계속
-사용하고, 접속 때문에 초기화를 반복하지 않는다. 종료한 터미널은 명시적으로 다시 열 때만
+재접속은 기존 runtime identity와 화면을 사용한다. native startup 또는 legacy csh에서
+초기화한 상태를 계속 사용하며, 접속 때문에 startup/source를 반복하지 않는다. 종료한 터미널은 명시적으로 다시 열 때만
 새 셸로 초기화한다.
 
-프로젝트는 Git 대상과 초기화 정의를 소유한다. 터미널은 프로젝트 소속을 유지하면서 프로젝트
+프로젝트는 Git 대상과 실행 정의를 소유한다. 터미널은 프로젝트 소속을 유지하면서 프로젝트
 밖의 테스트 cwd를 가질 수 있다. 현재 terminal cwd가 바뀌었다고 Git 작업 대상을 바꾸지 않는다.
+
+기본 터미널은 executable/argv/cwd/environment를 직접 PTY에 전달한다. 셸의 rc 처리와 login
+semantics를 다른 셸로 복제하지 않는다. native 실행에서는 사용자 rc 전체를 해시해 매번
+승인시키지 않고 프로젝트 실행 정의의 검토와 구분한다. 기존 csh source/login 정의는 별도
+호환 실행기로 남는다. 환경은 현재 client 요청과 명시 override로 구성하며 오래된 host 환경을
+암묵적으로 쓰지 않는다.
+
+process 시작 관찰과 shell readiness는 독립적이다. native 실행은 준비 관찰이 없으면
+`Unobserved`로 표시하고 batch-open을 진행한다. legacy 초기화는 기존 state 파일의
+Initializing/Ready/Failed 관찰을 유지한다. 침묵이나 hook 부재를 Ready로 바꾸지 않는다.
+Linux cwd 관찰은 소유한 process의 `/proc/<pid>/cwd`에 한정하며 중첩·원격 셸 cwd까지
+알았다고 표시하지 않는다.
+
+등록 process task는 executable+argv와 pipes를 사용하고 script task는 명시 interpreter와
+등록한 script bytes를 실행한다. interactive 작업은 별도 PTY다. 별도 process 단계는 alias,
+셸 변수나 cwd 변경을 공유하지 않으며 같은 셸 상태가 필요하면 하나의 script로 표현한다.
+기존 csh steps의 같은 셸 source 의미는 호환 경로에서 유지한다. process 취소의 SIGTERM·유예·
+SIGKILL과 일반 터미널의 SIGHUP은 구분하고, 어느 경우든 cleanup 전 SourceGate를 해제하지 않는다.
 
 ## 주요 모듈
 
@@ -34,7 +52,7 @@ UI의 수명과 host/셸의 수명은 다르다. client를 닫아도 host가 실
 | `main.rs`, `cli_project.rs`, `cli_session.rs`, `cli_run.rs`, `cli_package.rs` | 명령 파싱과 명시적 작업 진입 |
 | `ui/`, `client.rs`, `protocol.rs` | TUI, 제한된 요청/응답, peer와 binary identity, 입력 소유권/epoch |
 | `model.rs`, `project.rs`, `store.rs` | 저장 정의·검토 revision·SourceGate·private 상태와 원자적 파일 교체 |
-| `shell.rs`, `terminal.rs`, `host/` | 실제 csh startup/source, PTY, 비동기 준비, 출력 수집, 관찰한 exit/cleanup |
+| `shell.rs`, `terminal.rs`, `host/` | native 실행·legacy csh startup/source, PTY, 준비 관찰, 출력 수집, 실제 exit/cleanup |
 | `git/`, `git_wire.rs`, `host/git_*` | 실제 저장소 binding, immutable review/plan, index와 Git 작업 수명 |
 | `task.rs`, `run.rs`, `run_wire.rs`, `host/run_jobs.rs` | 등록 실행 의도, 결과·취소, source lease, 로그·retention |
 | `problems.rs`, `editor.rs` | raw-log 기반 진단, provenance, 승인된 현재/기록 root와 편집기 인자 |
@@ -83,14 +101,25 @@ v0.4는 XDG의 `idk/v0.4` namespace와 private host-local runtime을 사용한�
 사용하지 않는다. state/runtime에서 NFS를 확인하면 시작을 거부한다. 사용자가 허용된 로컬
 XDG 경로나 `--data-dir`를 명시적으로 선택하며, 소스/config나 기존 state를 자동 이주하지 않는다.
 statfs 조회 실패도 거부하고, 다른 파일시스템의 잠금·rename·fsync 지원까지 추정하지 않는다.
-경로·schema·설치 수명 상세는 [오프라인 운영 안내](offline-workspace.md)에 있다.
+경로·schema·설치 수명 상세는 [설치·운영 안내](offline-workspace.md)에 있다.
 
-정적 musl binary, manifest, checksum, 라이선스 inventory와 원문을 다섯 파일의 USTAR/gzip
+현재 Linux x86_64 배포는 정적 musl binary, manifest, checksum, 라이선스 inventory와 원문을
+다섯 파일의 USTAR/gzip
 bundle로 만든다. 설치는 새 generation을 검증하고 journal로 managed link를 전환한다.
 기존 host와 generation, 살아 있는 셸·Run·로그 writer, 실행 중 바뀐 사용자 데이터는
 복구 시에도 보존한다. 업데이트의 health 검사는 typed host/Git/Run metadata를 읽고 검증하며
 등록 작업을 실행하거나 live 상태의 이전 snapshot을 복원하지 않는다. 설치 schema 2의
 committed version floor는 uninstall 뒤에도 유지하며 stage/건강 검사 실패로 올라가지 않는다.
+
+온라인 취득은 명시 `package verify-url`/`install-url`에서만 시스템 curl로 HTTPS를 사용한다.
+TLS와 redirect protocol을 검증하고 크기·시간을 제한한 bytes를 로컬 archive와 동일한 검증기로
+전달한다. 자동 업데이트 조회는 없다. 지원 target 목록은 실제 executable 검증과 함께
+확장하며 현재 macOS/native Windows/Linux ARM64는 공개 지원 범위가 아니다. `/proc`, Unix
+peer credential, signal·자손 추적 등의 플랫폼 의존은 단순 파일명 변경으로 해결되지 않는다.
+
+설정 schema 1은 기존 실행 의미를 유지해서 읽는다. 새 native 실행 정의의 schema 2 이행과
+설치 inventory schema 2는 별개의 계약이다. 구 설정을 보존하고 future/손상 schema를 거부하며,
+기존 live host와 generation을 새 실행기로 자동 이전하지 않는다.
 
 공개 빌드 도구의 Python과 제품 런타임을 구분한다. 릴리스는 성공한 exact-main native CI의
 artifact를 재빌드하지 않고 승격하며 [릴리스 프로토콜](native-release.md)로 검증한다.

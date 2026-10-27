@@ -24,6 +24,24 @@ pub enum PackageCommand {
         #[arg(long)]
         yes: bool,
     },
+    /// Verify an HTTPS archive using curl and an independently trusted SHA-256.
+    VerifyUrl {
+        url: String,
+        #[arg(long)]
+        sha256: String,
+    },
+    /// Download, verify and review an installation/update; --yes activates it.
+    InstallUrl {
+        url: String,
+        #[arg(long)]
+        sha256: String,
+        #[arg(long)]
+        prefix: PathBuf,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// List distribution targets supported by this package format.
+    Targets,
     /// Inspect the committed installation and preserved generations.
     Status {
         #[arg(long)]
@@ -66,21 +84,26 @@ pub fn execute(data_dir: Option<&std::path::Path>, command: PackageCommand) -> R
         } => {
             ensure!(prefix.is_absolute(), "installation prefix must be absolute");
             let verified = VerifiedBundle::read(&bundle, &sha256)?;
-            if !yes {
-                let previous = if prefix.try_exists()? {
-                    Some(Installer::open(&prefix)?.status()?)
-                } else {
-                    None
-                };
-                json!({"review":verified.review(), "prefix":prefix, "previous":previous,
-                    "activation":"not performed; repeat with --yes after reviewing the trusted digest and target",
-                    "preserved":"all existing generations, workspace data, terminal/run hosts and user files",
-                    "compatibility":"no schema migration or committed-release downgrade; existing hosts keep their original generation"})
-            } else {
-                let store = Store::open(data_dir)?;
-                json!(Installer::open(&prefix)?.install(&verified, &store)?)
-            }
+            install_verified(data_dir, verified, prefix, yes)?
         }
+        PackageCommand::VerifyUrl { url, sha256 } => {
+            json!(VerifiedBundle::download(&url, &sha256)?.review())
+        }
+        PackageCommand::InstallUrl {
+            url,
+            sha256,
+            prefix,
+            yes,
+        } => {
+            ensure!(prefix.is_absolute(), "installation prefix must be absolute");
+            install_verified(
+                data_dir,
+                VerifiedBundle::download(&url, &sha256)?,
+                prefix,
+                yes,
+            )?
+        }
+        PackageCommand::Targets => json!(idk_workspace::package::SUPPORTED_TARGETS),
         PackageCommand::Status { prefix } => {
             ensure!(prefix.is_dir(), "installation prefix does not exist");
             json!(Installer::open(&prefix)?.status()?)
@@ -113,4 +136,28 @@ pub fn execute(data_dir: Option<&std::path::Path>, command: PackageCommand) -> R
     };
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
+}
+
+fn install_verified(
+    data_dir: Option<&std::path::Path>,
+    verified: VerifiedBundle,
+    prefix: PathBuf,
+    yes: bool,
+) -> Result<serde_json::Value> {
+    if !yes {
+        let previous = if prefix.try_exists()? {
+            Some(Installer::open(&prefix)?.status()?)
+        } else {
+            None
+        };
+        Ok(
+            json!({"review":verified.review(), "prefix":prefix, "previous":previous,
+            "activation":"not performed; repeat with --yes after reviewing the trusted digest and target",
+            "preserved":"all existing generations, workspace data, terminal/run hosts and user files",
+            "compatibility":"existing hosts keep their original generation; activation checks saved schema compatibility"}),
+        )
+    } else {
+        let store = Store::open(data_dir)?;
+        Ok(json!(Installer::open(&prefix)?.install(&verified, &store)?))
+    }
 }

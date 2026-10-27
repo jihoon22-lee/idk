@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-pub const SCHEMA: u32 = 1;
-pub const PROTOCOL: u32 = 1;
+pub const SCHEMA: u32 = 2;
+pub const PROTOCOL: u32 = 2;
 pub const MAX_PROJECTS: usize = 128;
 pub const MAX_TERMINALS: usize = 64;
 pub const MAX_MESSAGE: usize = 4 * 1024 * 1024;
@@ -61,9 +61,85 @@ pub struct Project {
     pub editor: Option<EditorConfig>,
 }
 
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeShell {
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TaskExecution {
+    Process {
+        program: PathBuf,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+    },
+    Script {
+        interpreter: PathBuf,
+        #[serde(default)]
+        args: Vec<String>,
+        script: String,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+    },
+}
+
+impl std::fmt::Debug for NativeShell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeShell")
+            .field("args", &self.args)
+            .field("env", &"[redacted]")
+            .finish()
+    }
+}
+impl std::fmt::Debug for TaskExecution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Process { program, args, .. } => f
+                .debug_struct("Process")
+                .field("program", program)
+                .field("args", args)
+                .field("env", &"[redacted]")
+                .finish(),
+            Self::Script {
+                interpreter, args, ..
+            } => f
+                .debug_struct("Script")
+                .field("interpreter", interpreter)
+                .field("args", args)
+                .field("script", &"[redacted]")
+                .field("env", &"[redacted]")
+                .finish(),
+        }
+    }
+}
+
+pub fn validate_execution_arguments(args: &[String], env: &BTreeMap<String, String>) -> Result<()> {
+    if args.len() > 1024
+        || args
+            .iter()
+            .any(|arg| arg.len() > 65536 || arg.contains('\0'))
+        || env.len() > 1024
+        || env
+            .iter()
+            .any(|(key, value)| key.is_empty() || key.contains(['=', '\0']) || value.contains('\0'))
+    {
+        bail!("invalid execution arguments or environment");
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ShellConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<NativeShell>,
     pub executable: PathBuf,
     pub login: bool,
     pub init_cwd: PathBuf,
@@ -137,9 +213,12 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskDefinition {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<TaskExecution>,
     pub id: String,
     pub name: String,
     /// An explicitly reviewed csh program. Paths supplied by the UI are quoted separately.
+    #[serde(default)]
     pub command: String,
     pub cwd: PathBuf,
     #[serde(default)]
@@ -193,12 +272,20 @@ pub struct EditorConfig {
 
 impl Workspace {
     pub fn validate(&self) -> Result<()> {
-        if self.schema != SCHEMA {
+        if self.schema != 1 && self.schema != SCHEMA {
             bail!(
                 "unsupported configuration schema {}; supported {} (file preserved)",
                 self.schema,
                 SCHEMA
             );
+        }
+        if self.schema == 1
+            && self
+                .projects
+                .iter()
+                .any(|p| p.shell.native.is_some() || p.tasks.iter().any(|t| t.execution.is_some()))
+        {
+            bail!("native/process execution requires configuration schema 2");
         }
         if self.projects.len() > MAX_PROJECTS {
             bail!("too many projects (limit {MAX_PROJECTS})");
@@ -266,6 +353,15 @@ impl Project {
         absolute_path(&self.shell.executable)?;
         absolute_path(&self.shell.init_cwd)?;
         validate_sources(&self.shell.sources)?;
+        if let Some(native) = &self.shell.native {
+            validate_execution_arguments(&native.args, &native.env)?;
+            if self.shell.login
+                || !self.shell.sources.is_empty()
+                || self.terminals.iter().any(|t| !t.sources.is_empty())
+            {
+                bail!("native terminals use explicit argv and native startup; login/source require legacy csh mode");
+            }
+        }
         if self.terminals.len() > MAX_TERMINALS || self.tasks.len() > 128 {
             bail!("project definition exceeds limits");
         }
@@ -293,7 +389,30 @@ impl Project {
             valid_name(&task.name)?;
             absolute_path(&task.cwd)?;
             validate_sources(&task.sources)?;
-            if (task.steps.is_empty() && task.command.trim().is_empty())
+            if let Some(execution) = &task.execution {
+                if !task.command.is_empty() || !task.steps.is_empty() || !task.sources.is_empty() {
+                    bail!(
+                        "process/script tasks cannot also contain legacy command, steps or sources"
+                    );
+                }
+                let (program, args, env) = match execution {
+                    TaskExecution::Process { program, args, env } => (program, args, env),
+                    TaskExecution::Script {
+                        interpreter,
+                        args,
+                        script,
+                        env,
+                    } => {
+                        if script.is_empty() || script.len() > 65536 || script.contains('\0') {
+                            bail!("invalid task script");
+                        }
+                        (interpreter, args, env)
+                    }
+                };
+                absolute_path(program)?;
+                validate_execution_arguments(args, env)?;
+            }
+            if (task.execution.is_none() && task.steps.is_empty() && task.command.trim().is_empty())
                 || task.command.len() > 65536
                 || task.command.contains('\0')
             {
@@ -364,6 +483,9 @@ impl Project {
             &mut digest,
             self.shell.init_cwd.as_os_str().as_encoded_bytes(),
         );
+        if let Some(native) = &self.shell.native {
+            hash_field(&mut digest, &serde_json::to_vec(native)?);
+        }
         hash_sources(&mut digest, &self.shell.sources)?;
         Ok(format!("{:x}", digest.finalize()))
     }
@@ -371,7 +493,9 @@ impl Project {
     pub fn task_digest(&self, task: &TaskDefinition) -> Result<String> {
         let mut digest = Sha256::new();
         hash_field(&mut digest, b"idk-task-definition-v3");
-        hash_field(&mut digest, self.source_digest()?.as_bytes());
+        if task.execution.is_none() {
+            hash_field(&mut digest, self.source_digest()?.as_bytes());
+        }
         let mut definition = task.clone();
         definition.approved_digest = None;
         hash_field(&mut digest, &serde_json::to_vec(&definition)?);

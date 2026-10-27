@@ -1,12 +1,19 @@
-# v0.4 프로젝트 작업 공간
+# 프로젝트 작업 공간
 
 개발 중인 네이티브 실행 파일은 `cargo run --bin idk --` 또는 `dist/idk-linux-x86_64`다.
 기존 Python 설정은 자동으로 가져오지 않는다. 다음 안내는 구현된 기능에 맞춰 갱신한다.
 
 ## 프로젝트 연결과 환경
 
-인수 없이 실행하면 프로젝트 화면이 열린다. `n`으로 기존 폴더를 연결하고 이름, 실제 csh/tcsh,
-초기화 폴더, source 목록을 입력한다. `Tab`으로 필드를 이동하고 `F2`로 검토한 뒤 저장한다.
+native 셸은 사용자가 지정한 executable/argv/cwd/env로 시작하고 셸 자체 startup 규칙을 따른다.
+별도 readiness hook이 없는 셸의 준비 상태는 `Unobserved`로 남는다. 이는 초기화 성공 판정이
+아니며 여러 터미널 열기는 계속 진행한다. 셸 후보 목록 밖의 wrapper 절대 경로도 사용할 수 있다.
+`project connect example /path/to/source --shell /bin/bash`가 native 연결 예다.
+기존 csh 초기화 계약은 아래와 같으며 `--legacy-csh`를 명시해 새로 등록할 수 있다.
+
+
+인수 없이 실행하면 프로젝트 화면이 열린다. `n`으로 기존 폴더를 연결하고 이름, 실제 셸 실행 파일, 시작 폴더와 native argv를 입력한다.
+새 프로젝트는 native 방식이며 기존 csh 정의는 호환 방식으로 유지한다. `Tab`으로 필드를 이동하고 `F2`로 검토한 뒤 저장한다.
 `Esc`는 입력 초안을 보존하며 돌아간다. 전체 동작은 `F1` 도움말에서 확인한다.
 
 연결은 `.csh`를 실행하거나 Git 저장소를 만들지 않는다. `t`로 초기화 검토를 열고 승인한 뒤
@@ -16,7 +23,8 @@
 
 초기화 폴더는 공통 startup과 source를 수행하는 위치다. 터미널 시작 폴더는 그 뒤 이동할 위치이며
 프로젝트 루트 밖 테스트 폴더도 사용할 수 있다. 현재 셸의 cwd와 프로젝트/Git 대상은 별개다.
-프로젝트마다 필요한 접속 환경을 메모리에서 전달하며 환경 값은 설정·일반 로그에 저장하지 않는다.
+접속에서 상속한 환경은 메모리에서 전달하고 설정·일반 로그에 저장하지 않는다.
+사용자가 명시한 native 셸/작업 env override는 실행 정의로 저장하므로 비밀을 넣지 않는다.
 셸 안에서 바꾼 임시 변수와 alias를 다른 셸에 자동 복제하지 않는다.
 
 source 편집은 경로와 각 인수를 별도 필드로 받는다. tcsh는 입력한 인수를 그대로 전달한다.
@@ -45,7 +53,7 @@ managed startup의 history 저장 등 차이는 [ADR](adr/0001-native-terminal-f
 CLI도 같은 검증과 revision 저장을 사용한다. 결과는 JSON이다.
 
 ```console
-idk project connect example /path/to/source --shell /usr/bin/tcsh --source /path/to/setup.csh
+idk project connect example /path/to/source --shell /usr/bin/tcsh --legacy-csh --source /path/to/setup.csh
 idk terminal add example dev2 /path/to/source
 idk terminal add example test1 /path/to/external/test1
 idk project trust example
@@ -239,3 +247,19 @@ idk run problems <run-id>
 idk run editor <run-id> <problem-id>
 idk run editor <run-id> <problem-id> --yes
 ```
+
+## 직접 process·script 작업과 구조화 결과
+
+새 TUI 작업의 기본 실행 방식은 process다. `F8`로 process/script/legacy csh 방식을 선택하고,
+process는 실행 파일과 JSON argv를, script는 명시 interpreter와 script 내용을 검토한다.
+CLI는 `task add example check --program /usr/bin/make --arg test` 또는
+`--interpreter /bin/sh --script-file /absolute/check.sh`를 사용한다. argv는 shell 확장 없이 전달한다.
+비대화형 process/script는 pipe 출력과 닫힌 stdin을 사용하며 `--interactive`만 전용 PTY를 연다.
+process 작업은 프로젝트 셸이나 rc 초기화를 요구하지 않는다. legacy `--command`/`--step`은
+legacy csh 프로젝트에서 사용한다. 기존 단계 실행은 같은 초기화된 csh 안에서 순서대로 수행한다.
+
+일반 취소는 native 작업에 SIGTERM을 보내 결과 마감을 기다리고, 2초 뒤 살아 있는 소유 자손을
+강제 정리한다. 취소 요청·실제 exit·cleanup 확인은 독립적으로 기록한다. 원시 pipe 로그는
+stdout/stderr를 관찰 순서로 합친 것이며 두 스트림 간 순서나 개별 출처를 보증하지 않는다.
+[구조화 결과](structured-results.md)는 raw-log Problems와 별개이며 producer의 미완료/범위와
+실제 종료를 함께 확인한다.

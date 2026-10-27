@@ -18,6 +18,15 @@ pub enum ProjectCommand {
         root: PathBuf,
         #[arg(long)]
         shell: Option<PathBuf>,
+        /// Use the historical csh source/login initialization contract.
+        #[arg(long)]
+        legacy_csh: bool,
+        /// Literal native shell argument; repeat for each argument.
+        #[arg(long, allow_hyphen_values = true)]
+        shell_arg: Vec<String>,
+        /// Native shell environment override, KEY=VALUE.
+        #[arg(long)]
+        shell_env: Vec<String>,
         #[arg(long)]
         init_cwd: Option<PathBuf>,
         #[arg(long)]
@@ -63,6 +72,14 @@ pub enum ProjectCommand {
     /// Update common initialization for future shells only.
     Environment {
         project: String,
+        #[arg(long, conflicts_with = "legacy_csh")]
+        native: bool,
+        #[arg(long)]
+        legacy_csh: bool,
+        #[arg(long, allow_hyphen_values = true)]
+        shell_arg: Vec<String>,
+        #[arg(long)]
+        shell_env: Vec<String>,
         #[arg(long)]
         shell: Option<PathBuf>,
         #[arg(long)]
@@ -139,6 +156,18 @@ pub fn absolute(path: &Path) -> Result<PathBuf> {
     }
 }
 
+fn parse_environment(values: Vec<String>) -> Result<std::collections::BTreeMap<String, String>> {
+    values
+        .into_iter()
+        .map(|value| {
+            let (key, value) = value
+                .split_once('=')
+                .context("--shell-env requires KEY=VALUE")?;
+            Ok((key.to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
 fn sources(paths: Vec<PathBuf>, args: Vec<String>) -> Result<Vec<SourceSpec>> {
     if !args.is_empty() && paths.len() != 1 {
         bail!("--source-arg requires exactly one --source; use the TUI for arguments on multiple sources");
@@ -167,12 +196,20 @@ pub fn project(store: &Store, command: ProjectCommand) -> Result<()> {
             name,
             root,
             shell,
+            legacy_csh,
+            shell_arg,
+            shell_env,
             init_cwd,
             login,
             source,
             source_arg,
             allow_duplicate_root,
         } => {
+            if (legacy_csh || login || !source.is_empty())
+                && (!shell_arg.is_empty() || !shell_env.is_empty())
+            {
+                bail!("native shell args/env cannot be combined with legacy csh login/source");
+            }
             let root = absolute(&root)?;
             let environment = LaunchEnvironment::capture()?;
             let shell = match shell {
@@ -180,12 +217,20 @@ pub fn project(store: &Store, command: ProjectCommand) -> Result<()> {
                 None => idk_workspace::project::discover_shells(&environment)
                     .first()
                     .map(|s| s.path.clone())
-                    .context("no verified csh/tcsh found; provide --shell /absolute/path")?,
+                    .context("no executable shell found; provide --shell /absolute/path")?,
             };
             let mut preview = service.preview_connect(ConnectDraft {
                 name,
                 root: root.clone(),
                 shell: ShellConfig {
+                    native: if legacy_csh || login || !source.is_empty() {
+                        None
+                    } else {
+                        Some(idk_workspace::model::NativeShell {
+                            args: shell_arg,
+                            env: parse_environment(shell_env)?,
+                        })
+                    },
                     executable: shell,
                     login,
                     init_cwd: init_cwd
@@ -253,6 +298,10 @@ pub fn project(store: &Store, command: ProjectCommand) -> Result<()> {
         }
         ProjectCommand::Environment {
             project,
+            native,
+            legacy_csh,
+            shell_arg,
+            shell_env,
             shell,
             init_cwd,
             login,
@@ -263,6 +312,26 @@ pub fn project(store: &Store, command: ProjectCommand) -> Result<()> {
             let id = service.resolve_project_id(&project)?;
             let workspace = store.load()?;
             let mut config = workspace.project(&id)?.shell.clone();
+            if legacy_csh {
+                config.native = None;
+            }
+            if native {
+                config.native = Some(Default::default());
+                config.login = false;
+                config.sources.clear();
+            }
+            if !shell_arg.is_empty() || !shell_env.is_empty() {
+                let definition = config
+                    .native
+                    .as_mut()
+                    .context("shell args/env require --native or an existing native terminal")?;
+                if !shell_arg.is_empty() {
+                    definition.args = shell_arg;
+                }
+                if !shell_env.is_empty() {
+                    definition.env = parse_environment(shell_env)?;
+                }
+            }
             if let Some(path) = shell {
                 config.executable = absolute(&path)?;
             }

@@ -292,6 +292,15 @@ fn details(run: &RunInfo) -> Vec<String> {
             run.log.limit_bytes
         ),
     ];
+    use crate::structured_result::StructuredResult;
+    lines.push(match &run.structured_result {
+        None => "Structured result: not observed".into(),
+        Some(StructuredResult::Missing) => "Structured result: no result file".into(),
+        Some(StructuredResult::Invalid { error }) => format!("Structured result invalid: {error}"),
+        Some(StructuredResult::Available { schema_id, schema_version, producer_version, sha256, document, .. }) => {
+            format!("Structured result: {schema_id} v{schema_version} · producer {producer_version} · {} findings · SHA256 {sha256}", document.get("findings").and_then(serde_json::Value::as_array).map_or(0, Vec::len))
+        }
+    });
     for step in &run.steps {
         lines.push(format!(
             "Step {} {} · exit {:?}",
@@ -312,7 +321,9 @@ pub(super) fn render_dialog(_app: &App<'_>, dialog: &RunDialog, frame: &mut Fram
     let title = match dialog {
         RunDialog::Form(form) => {
             lines.push("Tab / Shift+Tab Field · Enter New line · F2 Save · Esc Keep draft".into());
-            lines.push("F4 Refresh revision (keeps draft) · F6 Add source · F7 Add step".into());
+            lines.push(
+                "F4 Refresh · F6 Source · F7 Step (legacy) · F8 Process / Script / Legacy".into(),
+            );
             lines.push(format!(
                 "Project {} · revision {} · saving never runs a command",
                 form.project, form.revision
@@ -394,7 +405,12 @@ pub(super) fn render_dialog(_app: &App<'_>, dialog: &RunDialog, frame: &mut Fram
                 "Build outputs {:?} · artifact {:?} · from task {:?}",
                 review.task.build_outputs, review.task.artifact, review.task.artifact_from_task
             ));
-            if review.task.steps.is_empty() {
+            if let Some(execution) = &review.task.execution {
+                lines.push(format!(
+                    "Execution {}",
+                    serde_json::to_string(execution).unwrap_or_default()
+                ));
+            } else if review.task.steps.is_empty() {
                 lines.push(review.task.command.clone());
             } else {
                 for step in &review.task.steps {

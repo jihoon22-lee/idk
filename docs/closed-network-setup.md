@@ -1,9 +1,11 @@
 # 폐쇄망 반입과 첫 실행
 
-v0.4 반입물은 `idk-0.4.3-x86_64-unknown-linux-musl.tar.gz`이며 내부에 정적 실행 파일과
-manifest·구성요소 checksum·라이선스 inventory/원문이 들어 있다. 기존 csh/tcsh와 Git을
-사용한다. 제품 실행을 위해 Python/compiler, Zellij/xclip vendor, root나 시스템 서비스를
+현재 반입물은 `idk-0.5.0-x86_64-unknown-linux-musl.tar.gz`이며 내부에 정적 실행 파일과
+manifest·구성요소 checksum·라이선스 inventory/원문이 들어 있다. 기존 셸과 Git을 사용한다. 제품 실행을 위해 Python/compiler, Zellij/xclip vendor, root나 시스템 서비스를
 추가 설치하지 않는다.
+
+이 문서는 네트워크 반입·반출 제약이 있는 환경에 적용한다. 일반 Linux/WSL의 온라인 설치와
+업데이트는 [설치 안내](offline-workspace.md#온라인-설치와-업데이트)를 따른다.
 
 ## 1. 승인받은 bytes 확인
 
@@ -17,8 +19,8 @@ manifest·구성요소 checksum·라이선스 inventory/원문이 들어 있다.
 엄격하게 검증하고 설치하는 최초 진입점이다.
 
 ```text
-./idk-linux-x86_64 package verify /absolute/path/idk-0.4.3-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
-./idk-linux-x86_64 package install /absolute/path/idk-0.4.3-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256> --prefix /absolute/user/path/idk-workspace
+./idk-linux-x86_64 package verify /absolute/path/idk-0.5.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
+./idk-linux-x86_64 package install /absolute/path/idk-0.5.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256> --prefix /absolute/user/path/idk-workspace
 ```
 
 검토한 설치 명령에 `--yes`를 붙이면 새 generation을 쓰고 검증한 뒤 entrypoint를 활성화한다.

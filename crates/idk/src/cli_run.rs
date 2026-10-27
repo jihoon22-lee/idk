@@ -3,8 +3,8 @@ use clap::Subcommand;
 use idk_workspace::client::Client;
 use idk_workspace::editor::EditorService;
 use idk_workspace::model::{
-    new_id, valid_id, EditorConfig, FailurePolicy, SourceSpec, TaskDefinition, TaskLogging,
-    TaskStep,
+    new_id, valid_id, EditorConfig, FailurePolicy, SourceSpec, TaskDefinition, TaskExecution,
+    TaskLogging, TaskStep,
 };
 use idk_workspace::project::{LaunchEnvironment, ProjectService};
 use idk_workspace::run_wire::{RunInfo, RunJobState, RunRequest, RunResult, RunState};
@@ -16,41 +16,58 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+#[derive(clap::Args)]
+pub struct AddTaskArgs {
+    project: String,
+    name: String,
+    #[arg(long)]
+    cwd: Option<PathBuf>,
+    #[arg(long, conflicts_with_all = ["steps", "program", "interpreter"], required_unless_present_any = ["steps", "program", "interpreter"])]
+    command: Option<String>,
+    /// Repeat NAME=CSH_PROGRAM; every step runs in the same initialized csh.
+    #[arg(long = "step")]
+    steps: Vec<String>,
+    /// Execute directly, with literal arguments and pipe output by default.
+    #[arg(long, conflicts_with_all = ["steps", "interpreter", "source", "source_arg"])]
+    program: Option<PathBuf>,
+    /// Explicit interpreter for --script-file; no implicit shell initialization.
+    #[arg(long, requires = "script_file", conflicts_with_all = ["steps", "source", "source_arg"])]
+    interpreter: Option<PathBuf>,
+    #[arg(long, requires = "interpreter")]
+    script_file: Option<PathBuf>,
+    /// Repeat for each literal program/interpreter argument.
+    #[arg(long = "arg", allow_hyphen_values = true)]
+    args: Vec<String>,
+    /// Explicit environment override, repeated NAME=VALUE.
+    #[arg(long = "env")]
+    env: Vec<String>,
+    #[arg(long)]
+    source: Vec<PathBuf>,
+    #[arg(long, allow_hyphen_values = true)]
+    source_arg: Vec<String>,
+    #[arg(long)]
+    artifact: Option<PathBuf>,
+    #[arg(long)]
+    artifact_from_task: Option<String>,
+    #[arg(long)]
+    build_output: Vec<PathBuf>,
+    #[arg(long)]
+    timeout_seconds: Option<u64>,
+    #[arg(long)]
+    continue_on_error: bool,
+    /// Use a dedicated interactive TTY; persistent output logging is disabled.
+    #[arg(long)]
+    interactive: bool,
+    #[arg(long)]
+    no_log: bool,
+}
+
 #[derive(Subcommand)]
 pub enum TaskCommand {
     /// List registered definitions; never execute their commands.
     List { project: String },
-    /// Register a csh program (or named steps) without executing it.
-    Add {
-        project: String,
-        name: String,
-        #[arg(long)]
-        cwd: Option<PathBuf>,
-        #[arg(long, conflicts_with = "steps", required_unless_present = "steps")]
-        command: Option<String>,
-        /// Repeat NAME=CSH_PROGRAM; every step runs in the same initialized csh.
-        #[arg(long = "step")]
-        steps: Vec<String>,
-        #[arg(long)]
-        source: Vec<PathBuf>,
-        #[arg(long, allow_hyphen_values = true)]
-        source_arg: Vec<String>,
-        #[arg(long)]
-        artifact: Option<PathBuf>,
-        #[arg(long)]
-        artifact_from_task: Option<String>,
-        #[arg(long)]
-        build_output: Vec<PathBuf>,
-        #[arg(long)]
-        timeout_seconds: Option<u64>,
-        #[arg(long)]
-        continue_on_error: bool,
-        /// Use a dedicated interactive TTY; persistent output logging is disabled.
-        #[arg(long)]
-        interactive: bool,
-        #[arg(long)]
-        no_log: bool,
-    },
+    /// Register a process, explicit script, or legacy csh program without executing it.
+    Add(Box<AddTaskArgs>),
     /// Save a complete TOML task definition, replacing only its matching ID.
     Save { project: String, file: PathBuf },
     /// Review the exact task and common initialization before first/changed execution.
@@ -180,22 +197,28 @@ pub fn task(store: &Store, command: TaskCommand) -> Result<()> {
             let id = project(store, &selector)?;
             output(&store.load()?.project(&id)?.tasks)
         }
-        TaskCommand::Add {
-            project: selector,
-            name,
-            cwd,
-            command,
-            steps,
-            source,
-            source_arg,
-            artifact,
-            artifact_from_task,
-            build_output,
-            timeout_seconds,
-            continue_on_error,
-            interactive,
-            no_log,
-        } => {
+        TaskCommand::Add(arguments) => {
+            let AddTaskArgs {
+                project: selector,
+                name,
+                cwd,
+                command,
+                steps,
+                program,
+                interpreter,
+                script_file,
+                args,
+                env,
+                source,
+                source_arg,
+                artifact,
+                artifact_from_task,
+                build_output,
+                timeout_seconds,
+                continue_on_error,
+                interactive,
+                no_log,
+            } = *arguments;
             let id = project(store, &selector)?;
             let workspace = store.load()?;
             ensure!(
@@ -226,7 +249,33 @@ pub fn task(store: &Store, command: TaskCommand) -> Result<()> {
                 .map(|selector| task_definition(store, &id, selector).map(|task| task.id))
                 .transpose()?;
             let project_root = workspace.project(&id)?.root.clone();
+            ensure!(
+                program.is_some() || interpreter.is_some() || (args.is_empty() && env.is_empty()),
+                "--arg/--env require --program or --interpreter"
+            );
+            let env = env
+                .into_iter()
+                .map(|entry| {
+                    let (key, value) = entry.split_once('=').context("--env must be NAME=VALUE")?;
+                    Ok((key.to_owned(), value.to_owned()))
+                })
+                .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
+            let execution = if let Some(program) = program {
+                Some(TaskExecution::Process { program, args, env })
+            } else if let Some(interpreter) = interpreter {
+                let path = script_file.context("--interpreter requires --script-file")?;
+                let script = std::fs::read_to_string(path).context("read explicit task script")?;
+                Some(TaskExecution::Script {
+                    interpreter,
+                    args,
+                    script,
+                    env,
+                })
+            } else {
+                None
+            };
             let definition = TaskDefinition {
+                execution,
                 id: new_id(),
                 name,
                 command: command.unwrap_or_default(),

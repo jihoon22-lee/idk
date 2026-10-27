@@ -90,6 +90,7 @@ impl Fixture {
                 name: name.into(),
                 root,
                 shell: ShellConfig {
+                    native: None,
                     executable: self.shell.clone(),
                     login: false,
                     init_cwd: external.clone(),
