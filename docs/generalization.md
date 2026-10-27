@@ -42,5 +42,17 @@ ici `ici.next.run` v2 / event v1 / exits 0,1,2,3,130을 읽는다. Lens canonica
 - 실제 ici cancellation: 실행 파일 `.venv/bin/ici`, source HEAD `4cc8e8b8290426d8437b099f9f0f6fed91748bc4`의 진행 중 worktree.
   실행 전후 Python 소스 경로+bytes 집계 SHA-256 `5a0dd0227924d92d53bd48bac50ac64ea4a9f328fa359748a69764b34ceca882` 동일.
   이 시험은 clean HEAD/공개 ici release의 검증이 아니다. exit 130·cancelled·INCOMPLETE·partial 결과·cleanup 확인 PASS.
-- Lens v1 합성 fixture는 계약 보존 검증이다. 실제 Lens 실행 결과 검증과 구분한다.
+- Lens v1 합성 fixture는 계약 보존 검증이다. 실제 개발 binary 교차 시험도 수행했다:
+  HEAD `278f0dde71214a8f4e046215ade59a26955e11bb`의 dirty 개발 build(producer 0.9.0), binary SHA-256
+  `ec2ab8227d38a3ebc416dd4aad4d618df5ac4037451b59e5d55440544d8774c0` 전후 동일.
+  직접 script 작업에서 exit 1·complete=false·findings 2·idk/Lens run ID 일치·cleanup PASS.
+  idk 개발 binary SHA-256 `f8cfcde468f7e5adb21ba8d5a7cd5e815f7f9c69b8ab89f795166d0434b19dc3` 전후 동일.
+  공개 Lens release의 검증으로 취급하지 않는다.
 - 로컬 셸: 시스템 변경 없이 Ubuntu tcsh/csh 패키지를 작업 임시 경로에 풀어 사용. bash/zsh native, tcsh/BSD csh 호환 경로를 별도로 검사한다.
+
+- v0.4.3 공개 binary/archive를 digest 검증한 뒤 별도 임시 prefix에 설치하고 live csh를 시작했다.
+  v0.5.0 개발 후보로 업데이트해 기존 generation·host·child PID·source 1회 실행을 보존했다.
+  새 client의 protocol mismatch 거부, 이전 client의 기존 host 연결/정상 종료, 이후 schema1 backup과
+  구 reader의 schema2 거부를 실제 확인했다. 사용자 설치·데이터는 변경하지 않았다.
+- Python 3.10/3.14 packaging(10)·release(13), Ruff, actionlint PASS.
+  실제 tcsh/BSD csh, native pipes/PTY와 UI 회귀를 수행했으며 최신 PR CI에서도 전체 gate를 실행한다.

@@ -21,7 +21,7 @@ fn native_startup_is_owned_by_shell_and_rc_changes_do_not_require_script_approva
     std::fs::create_dir(&home).unwrap();
     std::fs::write(
         home.join(rc_name),
-        "echo startup >> \"$HOME/count\"\nexport NATIVE_RC=loaded\n",
+        "echo startup >> \"$HOME/count\"\nexport NATIVE_RC=loaded\nPS1=\"IDK_NATIVE_PROMPT> \"\n",
     )
     .unwrap();
     let store = Store::open(Some(&temp.path().join("data"))).unwrap();
@@ -72,20 +72,34 @@ fn native_startup_is_owned_by_shell_and_rc_changes_do_not_require_script_approva
     assert!(prepared.bootstrap_bytes.is_empty());
     assert_eq!(prepared.state().unwrap(), InitializationState::Unobserved);
     let mut terminal = TerminalSession::spawn(prepared.command, 24, 100, 200).unwrap();
+    // Process creation is intentionally not shell readiness. In particular, zsh
+    // may flush input while entering its line editor. Only this test fixture's
+    // native prompt tells the test when it is safe to type; idk installs no hook.
+    let prompt_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let screen = terminal.snapshot().unwrap().text();
+        if screen.contains("IDK_NATIVE_PROMPT> ") {
+            break;
+        }
+        assert!(
+            Instant::now() < prompt_deadline,
+            "native prompt did not appear; screen: {screen:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
     terminal
         .input(b"printf 'RESULT:%s:%s\\n' \"$NATIVE_RC\" \"$REQUEST_VALUE\"\r")
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if terminal
-            .snapshot()
-            .unwrap()
-            .text()
-            .contains("RESULT:loaded:override")
-        {
+        let screen = terminal.snapshot().unwrap().text();
+        if screen.contains("RESULT:loaded:override") {
             break;
         }
-        assert!(Instant::now() < deadline);
+        assert!(
+            Instant::now() < deadline,
+            "native command output did not appear; screen: {screen:?}"
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(
@@ -101,8 +115,13 @@ fn native_startup_is_owned_by_shell_and_rc_changes_do_not_require_script_approva
         )
         .unwrap();
     terminal.input(b"exit\r").unwrap();
+    let exit_deadline = Instant::now() + Duration::from_secs(5);
     while terminal.try_wait().unwrap().is_none() {
-        assert!(Instant::now() < deadline);
+        assert!(
+            Instant::now() < exit_deadline,
+            "native shell did not exit; screen: {:?}",
+            terminal.snapshot().unwrap().text()
+        );
         std::thread::sleep(Duration::from_millis(20));
     }
 }
