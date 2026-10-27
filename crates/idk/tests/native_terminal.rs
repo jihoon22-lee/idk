@@ -78,7 +78,7 @@ fn native_startup_is_owned_by_shell_and_rc_changes_do_not_require_script_approva
     let prompt_deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let screen = terminal.snapshot().unwrap().text();
-        if screen.contains("IDK_NATIVE_PROMPT> ") {
+        if screen.contains("IDK_NATIVE_PROMPT>") {
             break;
         }
         assert!(
@@ -93,7 +93,10 @@ fn native_startup_is_owned_by_shell_and_rc_changes_do_not_require_script_approva
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let screen = terminal.snapshot().unwrap().text();
-        if screen.contains("RESULT:loaded:override") {
+        if screen
+            .rsplit_once("RESULT:loaded:override")
+            .is_some_and(|(_, tail)| tail.contains("IDK_NATIVE_PROMPT>"))
+        {
             break;
         }
         assert!(
