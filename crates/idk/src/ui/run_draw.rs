@@ -4,6 +4,7 @@ use super::{
     App,
 };
 use crate::run_wire::RunInfo;
+use base64::Engine;
 use ratatui::{
     layout::Rect,
     text::Line,
@@ -27,7 +28,8 @@ pub(super) fn render(app: &App<'_>, frame: &mut Frame<'_>, area: Rect) {
     let mut scroll = app.runs.scroll;
     let title = if app.tab == 2 {
         lines.push(
-            "n New task · e Edit · Enter Review / approve / start · E Editor settings".into(),
+            "d Discover tasks · n New task · e Edit · Enter Review and run · E Editor settings"
+                .into(),
         );
         if let Some((revision, tasks)) = app.current_id().and_then(|id| app.runs.tasks.get(&id)) {
             lines.push(format!("Saved revision {revision} · {} tasks", tasks.len()));
@@ -105,7 +107,168 @@ pub(super) fn render(app: &App<'_>, frame: &mut Frame<'_>, area: Rect) {
                     "k Cancel · K Force cancel · u Reconcile Unknown · E Editor settings".into(),
                 );
                 if let Some(run) = app.current_run() {
-                    lines.extend(details(run));
+                    lines.push(format!(
+                        "{} · {:?} · exit {:?} · cleanup confirmed {} · pinned {}",
+                        run.name, run.state, run.exit_code, run.cleanup_confirmed, run.pinned
+                    ));
+                    if let Some(result) = &run.structured_result {
+                        lines.push(format!("Result: {}", result.status_label()));
+                        if let Some(diagnostic) = result.diagnostic() {
+                            lines.push(diagnostic);
+                        }
+                        if let Some(summary) = result.summary() {
+                            lines.push(format!("{} {} · {} findings · complete {:?} · selected {:?} / workspace {:?}", summary.producer,summary.producer_version,summary.findings_count,summary.complete,summary.selected_gate,summary.workspace_gate));
+                        }
+                    }
+                    lines.push("s Findings · v Raw result · o Export · P Pin/unpin · b Set baseline · c Compare · i Progress · A Advanced".into());
+                    if let Some(baseline) = &app.runs.baseline {
+                        lines.push(format!("Baseline: {baseline}"));
+                    }
+                    if let Some(snapshot) = &run.artifact.snapshot {
+                        lines.push(format!("Artifact observed: {} bytes · SHA-256 {} · observed at {:?} · predecessor bytes matched {}",snapshot.size,snapshot.sha256,run.artifact.observed_at_ms,run.artifact.verified_bytes));
+                    }
+                    if let Some(error) = &run.artifact.snapshot_error {
+                        lines.push(format!("Artifact unverified: {error}"));
+                    }
+                    if app.runs.advanced_details {
+                        lines.extend(details(run));
+                    }
+                }
+            }
+            Page::Findings => {
+                lines.push("↑↓ Select · Enter Review file in editor · [ Previous · ] Next · v Raw result · o Export · z Runs".into());
+                if let Some(page) = &app.runs.findings {
+                    lines.push(format!(
+                        "Findings {}–{} of {} · {}",
+                        page.offset + usize::from(!page.findings.is_empty()),
+                        page.next_offset,
+                        page.total,
+                        page.result.status_label()
+                    ));
+                    if let Some(diagnostic) = page.result.diagnostic() {
+                        lines.push(diagnostic);
+                    }
+                    let mut selected_line = 0;
+                    for (index, finding) in page.findings.iter().enumerate() {
+                        if index == app.runs.finding_index {
+                            selected_line = lines.len();
+                        }
+                        lines.push(format!(
+                            "{} {} {} · {}",
+                            if index == app.runs.finding_index {
+                                "▶"
+                            } else {
+                                " "
+                            },
+                            finding.severity,
+                            finding.code.as_deref().unwrap_or(""),
+                            finding.message
+                        ));
+                        if let Some(location) = &finding.location {
+                            lines.push(format!(
+                                "    {}:{}:{}",
+                                location.path,
+                                location.start_line.unwrap_or(0),
+                                location.start_column.unwrap_or(0)
+                            ));
+                        } else {
+                            lines.push("    No file location".into());
+                        }
+                        if let Some(evidence) = &finding.evidence_object {
+                            lines.push(format!("    Evidence: {evidence}"));
+                        }
+                        if let Some(pointer) = &finding.data_pointer {
+                            lines.push(format!("    Data: {pointer}"));
+                        }
+                        if finding.truncated {
+                            lines.push(
+                                "    Display shortened; raw/export retains original bytes.".into(),
+                            );
+                        }
+                    }
+                    if page.findings.is_empty() {
+                        lines.push("No findings in this page. The result status and completeness still apply.".into());
+                    }
+                    scroll = selected_line
+                        .saturating_sub(area.height.saturating_sub(7) as usize)
+                        .min(u16::MAX as usize) as u16;
+                } else {
+                    lines.push("Reading verified result body…".into());
+                }
+            }
+            Page::RawResult => {
+                lines.push(
+                    "[ Previous · ] Next · ↑↓ Scroll · s Findings · o Export · z Runs".into(),
+                );
+                if let Some(page) = &app.runs.result_raw {
+                    lines.push(format!(
+                        "Bytes {}–{} · end {} · {}",
+                        page.offset,
+                        page.next_offset,
+                        page.eof,
+                        page.result.status_label()
+                    ));
+                    if let Some(diagnostic) = page.result.diagnostic() {
+                        lines.push(diagnostic);
+                    }
+                    if let Ok(bytes) =
+                        base64::engine::general_purpose::STANDARD.decode(&page.data_base64)
+                    {
+                        lines.extend(String::from_utf8_lossy(&bytes).lines().map(str::to_owned));
+                    }
+                } else {
+                    lines.push("Reading verified raw result…".into());
+                }
+            }
+            Page::Comparison => {
+                lines.push("b Set baseline from Run details · c Compare · z Runs".into());
+                if let Some(value) = &app.runs.comparison {
+                    lines.push(format!("{:?}: {}", value.state, value.reason));
+                    lines.push(format!(
+                        "Baseline {} → {}",
+                        value.baseline_run_id, value.run_id
+                    ));
+                    lines.push(format!(
+                        "New {} · unchanged {} · resolved {} · carried {}",
+                        value.new_count,
+                        value.unchanged_count,
+                        value.resolved_count,
+                        value.carried_count
+                    ));
+                    lines.extend(value.new_sample.iter().map(|v| format!("New: {v}")));
+                    lines.extend(
+                        value
+                            .resolved_sample
+                            .iter()
+                            .map(|v| format!("Resolved: {v}")),
+                    );
+                } else {
+                    lines.push("Checking producer, identity, scope and completeness…".into());
+                }
+            }
+            Page::Events => {
+                lines.push("i Refresh progress · z Runs. Progress does not determine actual exit or cleanup.".into());
+                if let Some(value) = &app.runs.events {
+                    lines.push(format!(
+                        "{:?} · {} events · {} bytes · {} invalid · {} gaps · truncated tail {}",
+                        value.state,
+                        value.events_observed,
+                        value.bytes_observed,
+                        value.invalid_events,
+                        value.sequence_gaps,
+                        value.truncated_tail
+                    ));
+                    if let Some(latest) = &value.latest {
+                        lines.push(format!(
+                            "{} · {} · {}",
+                            latest.seq, latest.event_type, latest.message
+                        ));
+                    }
+                    if let Some(error) = &value.error {
+                        lines.push(error.clone());
+                    }
+                } else {
+                    lines.push("Reading bounded progress observation…".into());
                 }
             }
             Page::Log => {
@@ -292,13 +455,17 @@ fn details(run: &RunInfo) -> Vec<String> {
             run.log.limit_bytes
         ),
     ];
-    use crate::structured_result::StructuredResult;
     lines.push(match &run.structured_result {
         None => "Structured result: not observed".into(),
-        Some(StructuredResult::Missing) => "Structured result: no result file".into(),
-        Some(StructuredResult::Invalid { error }) => format!("Structured result invalid: {error}"),
-        Some(StructuredResult::Available { schema_id, schema_version, producer_version, sha256, document, .. }) => {
-            format!("Structured result: {schema_id} v{schema_version} · producer {producer_version} · {} findings · SHA256 {sha256}", document.get("findings").and_then(serde_json::Value::as_array).map_or(0, Vec::len))
+        Some(result) => {
+            if let Some(summary) = result.summary() {
+                format!("Result: {} v{} · {} {} · {} findings · complete {:?} · selected {:?} / workspace {:?}",
+                    summary.schema_id, summary.schema_version, summary.producer,
+                    summary.producer_version, summary.findings_count, summary.complete,
+                    summary.selected_gate, summary.workspace_gate)
+            } else {
+                format!("Structured result: {}", result.status_label())
+            }
         }
     });
     for step in &run.steps {
@@ -320,7 +487,7 @@ pub(super) fn render_dialog(_app: &App<'_>, dialog: &RunDialog, frame: &mut Fram
     let mut scroll = 0;
     let title = match dialog {
         RunDialog::Form(form) => {
-            lines.push("Tab / Shift+Tab Field · Enter New line · F2 Save · Esc Keep draft".into());
+            lines.push("Tab / Shift+Tab Field · Enter New line · F2 Save · F9 Clear field · F10 Advanced · Esc Keep draft".into());
             lines.push(
                 "F4 Refresh · F6 Source · F7 Step (legacy) · F8 Process / Script / Legacy".into(),
             );
@@ -368,7 +535,7 @@ pub(super) fn render_dialog(_app: &App<'_>, dialog: &RunDialog, frame: &mut Fram
                 if review.approved {
                     "F2 Start reviewed task · F3 Toggle explicit parallel Run · Esc Cancel"
                 } else {
-                    "F2 Approve task (does not start) · Esc Cancel"
+                    "F2 Approve and start this exact task · Esc Cancel"
                 }
                 .into(),
             );
@@ -435,10 +602,18 @@ pub(super) fn render_dialog(_app: &App<'_>, dialog: &RunDialog, frame: &mut Fram
         } => {
             scroll = *s;
             lines.push("F2 Open this exact reviewed location · Esc Cancel".into());
-            lines.push(format!(
-                "Run {} · Problem {} · project {}",
-                review.run_id, review.problem_id, review.project_id
-            ));
+            if let Some(finding) = &review.finding {
+                lines.push(format!(
+                    "Run {} · structured finding {} · project {}",
+                    review.run_id, finding.index, review.project_id
+                ));
+                lines.push(format!("Result body SHA-256 {}", finding.body_sha256));
+            } else {
+                lines.push(format!(
+                    "Run {} · Problem {} · project {}",
+                    review.run_id, review.problem_id, review.project_id
+                ));
+            }
             lines.push(format!(
                 "File {} · line {:?} · column {:?}",
                 review.file.display(),
@@ -459,6 +634,78 @@ pub(super) fn render_dialog(_app: &App<'_>, dialog: &RunDialog, frame: &mut Fram
             ));
             lines.push("Editor starts directly in its own terminal using the current launcher environment and reviewed project folder. Existing shells keep their state; their temporary aliases are not copied.".into());
             "Review editor launch"
+        }
+        RunDialog::Configuration {
+            root,
+            expected,
+            draft,
+        } => {
+            lines.push("Project idk.toml · F2 Save and sync · Esc Keep local draft. External edits are checked before replacement.".into());
+            lines.push(format!(
+                "{} · {}",
+                root.display(),
+                if expected.is_some() {
+                    "existing declaration"
+                } else {
+                    "new optional declaration"
+                }
+            ));
+            lines.extend(draft.text.split('\n').map(str::to_owned));
+            let (row, column) = draft.position();
+            let inner = area.inner(ratatui::layout::Margin::new(1, 1));
+            scroll = (row + 2)
+                .saturating_sub(inner.height.saturating_sub(1) as usize)
+                .min(u16::MAX as usize) as u16;
+            if column < inner.width as usize
+                && row + 2 >= scroll as usize
+                && row + 2 - (scroll as usize) < inner.height as usize
+            {
+                frame.set_cursor_position((
+                    inner.x + column as u16,
+                    inner.y + (row + 2 - scroll as usize) as u16,
+                ));
+            }
+            "Project settings"
+        }
+        RunDialog::Discovery { report, selected } => {
+            lines.push("↑↓ Select · F2 Register draft · Esc Cancel. Discovery reads files; it executes no project command.".into());
+            for (index, candidate) in report.candidates.iter().enumerate() {
+                lines.push(format!(
+                    "{} {} · {}",
+                    if index == *selected { "▶" } else { " " },
+                    candidate.name,
+                    if candidate.available {
+                        "available"
+                    } else {
+                        "missing tool"
+                    }
+                ));
+                if index == *selected {
+                    lines.push(format!(
+                        "Program: {} → {:?}",
+                        candidate.program, candidate.resolved_program
+                    ));
+                    lines.push(format!(
+                        "Arguments: {:?} · cwd {}",
+                        candidate.args,
+                        candidate.cwd.display()
+                    ));
+                    lines.push(format!("From: {}", candidate.origin.display()));
+                }
+            }
+            lines.extend(report.warnings.iter().cloned());
+            if report.candidates.is_empty() {
+                lines.push("No task candidates. Esc then n creates a process draft.".into());
+            }
+            "Discover tasks"
+        }
+        RunDialog::Export(input) => {
+            lines.push(
+                "New destination file (existing files are preserved). F2 Export · Esc Cancel"
+                    .into(),
+            );
+            lines.push(input.text.clone());
+            "Export original result bytes"
         }
         RunDialog::Search(input) => {
             lines.push("Enter / F2 Search available raw bytes · Esc Cancel".into());

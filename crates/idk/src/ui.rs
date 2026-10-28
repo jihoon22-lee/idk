@@ -129,6 +129,8 @@ pub struct App<'a> {
     runs: runs::RunUi,
     viewport: ratatui::layout::Rect,
     clipboard_request: Option<String>,
+    entry_pending: bool,
+    entry_after_trust: bool,
 }
 
 impl<'a> App<'a> {
@@ -172,6 +174,8 @@ impl<'a> App<'a> {
             runs: runs::RunUi::default(),
             viewport: ratatui::layout::Rect::default(),
             clipboard_request: None,
+            entry_pending: false,
+            entry_after_trust: false,
         };
         app.restore_terminal_selection();
         Ok(app)
@@ -288,6 +292,12 @@ impl<'a> App<'a> {
             return Ok(UiOutcome::ForwardTerminalKey(key));
         }
         self.menu_from_terminal = false;
+        if key.code == KeyCode::Char('C') {
+            if let Err(error) = self.open_configuration() {
+                self.error(format!("{error:#}"));
+            }
+            return Ok(UiOutcome::Continue);
+        }
         if matches!(
             key.code,
             KeyCode::Char('1' | '2')
@@ -553,7 +563,7 @@ impl<'a> App<'a> {
                 let cwd = std::env::current_dir()?.to_string_lossy().into_owned();
                 let shell = discover_shells(&self.environment).first().map(|candidate| candidate.path.to_string_lossy().into_owned()).unwrap_or_default();
                 ("Connect project", vec![
-                    Field::text("Project name", "", "A label for this project; the folder name does not identify it."),
+                    Field::text("Project name", std::path::Path::new(&cwd).file_name().unwrap_or_default().to_string_lossy(), "Defaults to the folder name; change it when needed."),
                     Field::text("Project folder", &cwd, "Choose an existing folder. Git is detected without changing the repository."),
                     Field::text("Shell executable", shell, "Absolute path to the shell you already use."),
                     Field::toggle("Legacy csh login", false, "Enables the historical csh login initialization contract."),
@@ -575,6 +585,10 @@ impl<'a> App<'a> {
                     Field::sources(),
                     Field::toggle("Native startup", shell.native.is_some(), "On delegates startup to the executable; remove legacy login and sources first."),
                     Field::text("Native argv (JSON)", serde_json::to_string(&shell.native.as_ref().map(|n| n.args.clone()).unwrap_or_default())?, "Literal executable arguments; existing environment overrides are preserved."),
+                    Field::text("Environment key", "", "Blank preserves all keys. Enter one key to set or remove."),
+                    Field::text("Environment value", "", "Literal value for the selected key; an empty value is valid."),
+                    Field::toggle("Remove this environment key", false, "Removes only the selected key."),
+                    Field::toggle("Clear all environment overrides", false, "Explicitly clear the saved override map before the key edit."),
                 ])
             }
             FormKey::Reconnect(id) => ("Reconnect moved project", vec![Field::text("New project folder", self.project(id)?.root.to_string_lossy(), "Review every changed definition path before reconnecting.")]),
@@ -765,7 +779,14 @@ impl<'a> App<'a> {
                             if let Err(error) = self.reload(Some(&id)) {
                                 self.error(format!("Approval saved; refresh failed: {error}"));
                             } else {
-                                self.info("Readable initialization groups approved. No shell or task was started.");
+                                if self.entry_after_trust {
+                                    self.entry_after_trust = false;
+                                    if let Err(error) = self.open_live_selected() {
+                                        self.error(format!("{error:#}"));
+                                    }
+                                } else {
+                                    self.info("Readable initialization groups approved. No shell or task was started.");
+                                }
                             }
                         }
                         Err(error) => {
@@ -782,6 +803,8 @@ impl<'a> App<'a> {
                         review,
                         scroll: offset,
                     });
+                } else {
+                    self.entry_after_trust = false;
                 }
             }
             Dialog::TransientTrust(mut review) => {
@@ -885,13 +908,26 @@ impl<'a> App<'a> {
                         Some(crate::model::NativeShell {
                             args: serde_json::from_str(form.text(5))
                                 .context("native argv must be a JSON string array")?,
-                            env: self
-                                .project(id)?
-                                .shell
-                                .native
-                                .as_ref()
-                                .map(|n| n.env.clone())
-                                .unwrap_or_default(),
+                            env: {
+                                let mut env = self
+                                    .project(id)?
+                                    .shell
+                                    .native
+                                    .as_ref()
+                                    .map(|n| n.env.clone())
+                                    .unwrap_or_default();
+                                if form.toggle(9) {
+                                    env.clear();
+                                }
+                                if !form.text(6).is_empty() {
+                                    if form.toggle(8) {
+                                        env.remove(form.text(6));
+                                    } else {
+                                        env.insert(form.text(6).into(), form.text(7).into());
+                                    }
+                                }
+                                env
+                            },
                         })
                     } else {
                         None
@@ -1070,6 +1106,38 @@ impl<'a> App<'a> {
             )),
         }
         Ok(())
+    }
+
+    fn open_entry_terminal(&mut self) {
+        self.entry_pending = false;
+        self.focus = Focus::Content;
+        self.tab = 0;
+        // Attach first, even when a saved initialization has changed. A live shell retains its original state.
+        if self
+            .selected_live()
+            .is_some_and(|session| session.state.is_live())
+        {
+            if let Err(error) = self.open_live_selected() {
+                self.error(format!("{error:#}"));
+            }
+            return;
+        }
+        let Some(project) = self.current_id() else {
+            return;
+        };
+        let Some(terminal) = self.current_terminal() else {
+            return;
+        };
+        if self
+            .service
+            .terminal_launch_plan(&project, &terminal, self.environment.clone())
+            .is_err()
+        {
+            self.entry_after_trust = true;
+            self.open_trust();
+        } else if let Err(error) = self.open_live_selected() {
+            self.error(format!("{error:#}"));
+        }
     }
 
     fn open_selected(&mut self) {
@@ -1349,25 +1417,30 @@ fn project_summary(project: &Project) -> Vec<String> {
 }
 
 pub fn run(store: &Store) -> Result<()> {
-    run_screen(store, None, None)
+    run_screen(store, None, None, None)
 }
 
 /// Attach a host session by identity, including shells whose definitions were removed.
 pub fn run_attached(store: &Store, session: &str, takeover: bool) -> Result<()> {
     crate::model::valid_id(session)?;
-    run_screen(store, Some((session, takeover)), None)
+    run_screen(store, Some((session, takeover)), None, None)
 }
 
 /// Attach a recorded Run by identity, including Runs with removed task definitions.
 pub fn run_attached_run(store: &Store, run_id: &str, takeover: bool) -> Result<()> {
     crate::model::valid_id(run_id)?;
-    run_screen(store, None, Some((run_id, takeover)))
+    run_screen(store, None, Some((run_id, takeover)), None)
+}
+
+pub fn run_project(store: &Store, project_id: &str) -> Result<()> {
+    run_screen(store, None, None, Some(project_id))
 }
 
 fn run_screen(
     store: &Store,
     attached: Option<(&str, bool)>,
     attached_run: Option<(&str, bool)>,
+    project_entry: Option<&str>,
 ) -> Result<()> {
     use base64::Engine;
     use crossterm::{
@@ -1379,6 +1452,10 @@ fn run_screen(
         bail!("The project screen needs an interactive terminal.");
     }
     let mut app = App::load(store)?;
+    if let Some(id) = project_entry {
+        app.reload(Some(id))?;
+        app.entry_pending = true;
+    }
     app.enable_terminal_runtime(std::env::current_exe()?)?;
     if let Some((session, takeover)) = attached {
         app.attach_session(session, takeover)?;

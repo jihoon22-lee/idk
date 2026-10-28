@@ -1,6 +1,6 @@
 # 폐쇄망 반입과 첫 실행
 
-현재 반입물은 `idk-0.5.0-x86_64-unknown-linux-musl.tar.gz`이며 내부에 정적 실행 파일과
+현재 반입물은 `idk-0.6.0-x86_64-unknown-linux-musl.tar.gz`이며 내부에 정적 실행 파일과
 manifest·구성요소 checksum·라이선스 inventory/원문이 들어 있다. 기존 셸과 Git을 사용한다. 제품 실행을 위해 Python/compiler, Zellij/xclip vendor, root나 시스템 서비스를
 추가 설치하지 않는다.
 
@@ -19,11 +19,14 @@ manifest·구성요소 checksum·라이선스 inventory/원문이 들어 있다.
 엄격하게 검증하고 설치하는 최초 진입점이다.
 
 ```text
-./idk-linux-x86_64 package verify /absolute/path/idk-0.5.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
-./idk-linux-x86_64 package install /absolute/path/idk-0.5.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256> --prefix /absolute/user/path/idk-workspace
+./idk-linux-x86_64 package verify /absolute/path/idk-0.6.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
+./idk-linux-x86_64 package install /absolute/path/idk-0.6.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
 ```
 
-검토한 설치 명령에 `--yes`를 붙이면 새 generation을 쓰고 검증한 뒤 entrypoint를 활성화한다.
+v0.4/v0.5에서 v0.6으로 전환할 때도 위 **새 binary**로 설치한다. 구 installer는 workspace schema 3·
+host protocol 3을 거부한다. 검토한 설치 명령에 `--yes`를 붙이면 새 generation을 검증하고 활성화한다.
+기본 설치 위치는 `$HOME/.local/share/idk`이다. 정책상 다른 위치가 필요하면
+`--prefix /absolute/approved/installation`을 명시하고 이후 조회·복구에도 같은 prefix를 사용한다.
 PATH·shell startup 파일은 자동 변경하지 않는다. 실행이 허용된 현지 위치를 사용하며 noexec나
 권한 정책을 우회하기 위해 다른 실행 경로·마운트 옵션을 자동 적용하지 않는다.
 
@@ -35,23 +38,26 @@ PATH·shell startup 파일은 자동 변경하지 않는다. 실행이 허용된
 설정·Run·로그를 자동 이주하는 명령이 아니다. 이 경로는 실제 승인된 위치로 바꿔야 한다.
 소스/config의 NFS 사용은 해당 파일시스템의 잠금·rename·fsync 조건과 현지 정책을 별도로 확인한다.
 
-지정 prefix의 `idk`를 같은 data 경로로 사용한다.
+기본 설치의 `"$HOME/.local/share/idk/idk"` 또는 지정 prefix의 `idk`를 같은 data 경로로 사용한다.
 
 ```bash
 idk --version
 idk doctor --brief
-idk
+idk .
 ```
 
-[프로젝트 안내](workspace-guide.md)에 따라 소스와 기존 `.csh`, 개발/외부 테스트 터미널을
-등록한다. v0.3 설정은 별도 원본이며 자동 변환하거나 덮어쓰지 않는다. 일반 셸 상태와 등록
+[프로젝트 안내](workspace-guide.md)에 따라 폴더를 열고 필요한 작업·추가 터미널을 등록한다.
+기존 `.csh` 초기화는 선택적인 legacy 호환 설정이다. v0.3 설정은 별도 원본이며 자동 변환하거나 덮어쓰지 않는다. 일반 셸 상태와 등록
 Run의 로그·결과를 구분한다. `doctor`는 기본 exit 0이며 실패 gate에는 `--strict`를 지정한다.
 
 ## 3. 업데이트·복구·후속 실기
 
 [오프라인 운영 안내](offline-workspace.md)는 저장 경로, 활성 host 보존, generation 검증,
 중단 복구와 entrypoint 제거의 상세 절차다. 업데이트 뒤 기존 host에 연결하려면 그 host를
-시작한 원래 generation binary를 사용한다. 버전 문자열이 같아도 binary identity가 다르면
+시작한 원래 generation binary를 사용한다. 새 client의 `package compatible-client`는 실제 socket peer와
+보존 generation의 bytes를 검증하고 같은 data 경로의 `session list` 명령을 안내한다. 먼저 그 읽기 전용
+명령과 `session snapshot SESSION_ID`로 상태를 확인한다. 구 TUI 접속은 workspace schema가 호환될 때만
+가능하며 새 설정을 구 schema로 자동 되돌리지 않는다. 버전 문자열이 같아도 binary identity가 다르면
 자동으로 같은 host로 연결하지 않는다. 살아 있는 셸·등록 Run과 로그 writer는 이전 host에서
 계속되며 업데이트/제거가 해당 작업을 취소하거나 로그를 되돌리지 않는다.
 

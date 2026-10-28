@@ -19,11 +19,11 @@ Python·Rust compiler·외부 서비스·root 권한이 필요하지 않다. 온
 
 ## 사용하는 흐름
 
-1. 프로젝트 소스 경로를 등록한다. 기본 셸 후보를 사용하거나 실행 파일과 인자를 지정한다.
+1. 프로젝트 폴더에서 `idk .`을 실행한다. 폴더명과 기본 셸을 사용하며 기존 live 셸에는 다시 접속한다.
 2. 개발용 터미널과 프로젝트 밖의 테스트 터미널을 열어 각각의 셸 상태를 유지한다.
 3. Git 화면에서 프로젝트의 저장소를 확인하고 diff·stage·commit과 명시적 원격 작업을 수행한다.
-4. 빌드·테스트의 실행 파일과 argv 또는 script를 등록해 실제 종료 결과·로그·진단을 확인한다.
-5. 진단 위치를 설정한 외부 편집기로 열고 다시 실행한다. 화면 종료와 작업 취소는 별개다.
+4. Tasks의 `d`로 발견한 빌드·테스트 후보를 등록하고, `Enter` 검토에서 `F2`로 승인하고 실행한다.
+5. Results의 `s`로 findings, `p`로 로그 진단을 보고 편집기로 연다. `r`로 수정 후 다시 실행한다.
 
 터미널 cwd와 Git 대상 저장소를 구분하며, 전체 index를 검토한 뒤 commit한다. 소스를 사용하는
 등록 작업과 Git의 source 변경은 같은 호스트에서 조정한다. 호스트 장애 뒤의 결과를 성공이나
@@ -33,32 +33,32 @@ idle로 추정하지 않는다. 사용자 소스·`.csh`·기존 설정과 무�
 ## 설치와 시작
 
 [릴리스](https://github.com/jihoon22-lee/idk/releases)의
-`idk-0.5.0-x86_64-unknown-linux-musl.tar.gz`와 **별도의 신뢰할 수 있는 경로로 확인한 SHA-256**을
+`idk-0.6.0-x86_64-unknown-linux-musl.tar.gz`와 **별도의 신뢰할 수 있는 경로로 확인한 SHA-256**을
 사용한다. archive와 checksum이 서로 맞는 것만으로 publisher 신뢰가 생기는 것은 아니다.
 [설치·첫 실행 안내](docs/offline-workspace.md)에 따라 실행 파일을 준비한 뒤 설치를 검토한다.
 
 ```text
-./idk-linux-x86_64 package verify /absolute/path/idk-0.5.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
-./idk-linux-x86_64 package install /absolute/path/idk-0.5.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256> --prefix /absolute/user/path/idk-workspace
+./idk-linux-x86_64 package verify /absolute/path/idk-0.6.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
+./idk-linux-x86_64 package install /absolute/path/idk-0.6.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
 ```
 
 새 버전 idk에서는 `package verify-url <https-url> --sha256 <trusted-SHA256>`과
-`package install-url <https-url> --sha256 <trusted-SHA256> --prefix <absolute-prefix>`로
+`package install-url <https-url> --sha256 <trusted-SHA256>`로
 같은 archive를 직접 취득할 수 있다. 로컬 설치와 동일한 bytes 검증·generation 전환을 사용한다.
 `idk package targets`는 현재 배포 target을 JSON으로 표시한다.
 
-v0.4에서 처음 전환할 때는 검증한 새 archive에서 꺼낸 **새 실행 파일**로 설치한다.
-구 installer는 새 schema/protocol을 거부한다. 이후 검토한 설치 명령에 `--yes`를 붙여 활성화한다. 이후 지정 prefix의 `idk`로 실행한다.
+v0.4/v0.5에서 v0.6으로 처음 전환할 때는 검증한 새 archive에서 꺼낸 **새 실행 파일**로 설치한다.
+구 installer는 새 schema/protocol을 거부한다. 이후 검토한 설치 명령에 `--yes`를 붙여 활성화한다. 기본 설치 위치는 `$HOME/.local/share/idk`이며 이 위치의 `idk`를 PATH에 연결한다. `--prefix`로 다른 절대 경로를 지정할 수도 있다.
 기존 호스트가 있다면 업데이트 뒤에도 원래 generation과 같은 data 경로로 다시 접속한다.
 살아 있는 셸과 등록 Run, 해당 호스트의 로그 수집은 설치·제거 때문에 자동으로 중단되지 않는다.
 
 ```bash
 idk doctor --brief
 idk --help
-idk
+idk .
 ```
 
-`idk`는 실제 터미널에서 TUI를 연다. `doctor`는 경고가 있어도 기본 exit 0이며 검사에서 실패로
+`idk .`은 저장소에 파일을 만들지 않고 프로젝트를 연다. 팀 작업을 선언하려면 `idk config init`으로 선택적 `idk.toml`을 만들고 예외만 적는다. [설정 안내](docs/portable-settings.md)와 [작업 발견](docs/task-discovery.md)을 참고한다. `idk`는 프로젝트 목록 TUI를 연다. `doctor`는 경고가 있어도 기본 exit 0이며 검사에서 실패로
 다루려면 `--strict`를 사용한다. 폐쇄망에서는 [반입·운영 안내](docs/closed-network-setup.md)의
 현지 정책을 적용한다. 진단 요약도 반출 권한을 대신하지 않는다.
 

@@ -57,6 +57,7 @@ fn start(
     let RunResult::Started(started) = job(
         client,
         RunRequest::Start {
+            expected_digest: None,
             project_id: project.into(),
             task_id: task.into(),
             operation_id: new_id(),

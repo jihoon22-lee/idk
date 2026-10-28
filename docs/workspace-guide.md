@@ -172,11 +172,11 @@ Git 전용 터미널의 입력·원문 출력은 일반 결과 JSON이나 자동
 
 ## 등록 작업과 Run
 
-`3`은 Tasks다. `n`으로 새 작업을 만들고 `e`로 선택 작업을 편집한다. 이름, csh 명령, 작업 폴더,
+`3`은 Tasks다. `d`로 읽기 기반 후보를 발견하고 `F2`로 선택 등록한다. `n`으로 새 작업을 만들고 `e`로 선택 작업을 편집한다. 이름, csh 명령, 작업 폴더,
 실패 정책(`stop`/`continue`), 로그(`raw`/`disabled`), 대화형 여부(`yes`/`no`), 제한 시간,
 빌드 출력 폴더와 artifact 관계를 저장한다. artifact 관계는 파일의 동일 bytes를 증명하지 않는다.
 
-작업 폼에서는 `Tab`/`Shift+Tab`으로 필드를 옮기고 `Enter`로 줄을 나눈다. `F6`으로 source의 경로와
+기본 작업 폼은 이름·실행 파일·literal 인수·cwd를 보여주고 `F10`으로 고급 필드를 펼친다. 인수는 보통 한 줄에 하나씩 쓰며 빈 인수/내부 줄바꿈이 있는 기존 argv는 JSON 모드로 보존한다. `F11`로 인수 편집 모드를 명시적으로 바꾸고 `F9`로 현재 필드 전체를 지운다. 빈/여러 줄 인수를 잃는 모드 전환은 거부한다. 작업 폼에서는 `Tab`/`Shift+Tab`으로 필드를 옮기고 `Enter`로 줄을 나눈다. `F6`으로 source의 경로와
 literal 인수 목록을 추가하고 `F7`로 이름이 있는 실행 단계를 추가한다. source 인수는 한 줄에 하나씩
 쓰며 빈 필드에서 `Enter`만 입력하면 빈 인수 하나가 된다. source는 최대 32개, 단계는 최대 64개다.
 단계가 있으면 순서대로 실행하며, 없으면 주 명령을 실행한다. 실제 셸은 공통 초기화 → 작업 source →
@@ -186,8 +186,7 @@ literal 인수 목록을 추가하고 `F7`로 이름이 있는 실행 단계를 
 `F2`는 정의만 저장한다. `Esc`는 현재 UI에 초안을 남기고 돌아간다. 다른 편집으로 revision이 바뀌어
 저장에 실패하면 초안을 유지하며, `F4`로 최신 revision을 읽은 뒤 현재 초안으로 저장할지 결정한다.
 목록의 `Enter`는 작업·폴더·source·단계·로그·제한 시간 검토를 연다. 처음이거나 입력이 변경되었으면
-`F2`로 작업을 승인한다. 공통 초기화 승인이 필요하면 검토를 닫고 `t`에서 먼저 승인한다. 승인 후
-다시 `Enter`로 검토하고 `F2`로 시작한다. 이미 승인된 동일 내용은 재승인하지 않는다.
+`F2`로 검토한 같은 digest를 승인하고 곧바로 실행한다. 공통 초기화 승인이 필요하면 검토를 닫고 `t`에서 먼저 승인한다. 승인 후 정의가 바뀌거나 화면 맥락이 바뀌면 자동 시작하지 않는다. 이미 승인된 동일 내용은 재승인하지 않는다.
 
 실행 검토의 `F3`는 같은 작업을 병렬로 새로 실행할지 명시적으로 선택한다. 기본 시작은 같은 작업의
 살아 있는 Run에 다시 접속하며 명령·source를 반복하지 않는다. 실행은 기존 개발/테스트 셸과 분리된
@@ -223,9 +222,13 @@ Problems는 Run과 log/source generation, 원문 위치, 진단 종류·메시�
 실행 성공/실패를 결정하지 않는다. 누락·제한·소스 변경·미확인은 그대로 남긴다. 파일이 있는 항목의
 `Enter`는 편집기 실행 검토를 열며 파일이 없는 항목은 원문 로그로 이동한다.
 
+구조화 결과는 `s` findings, `v` raw body, `[`/`]` 이전/다음 페이지, `o` export로 조회한다. 원문은 private body의 digest로 확인하며 finding 위치와 log offset은 별개다. `P`로 pin/unpin하고 기준 Run에서 `b`, 비교 대상 Run에서 `c`를 누른다. incomplete·다른 범위·도구 identity는 resolved로 합치지 않는다. `i` 진행 events는 실제 exit와 별도다. 세부 한도와 CLI는 [결과 보관](result-storage.md)에 있다.
+
+artifact가 있으면 cleanup 뒤 별도 worker가 최대 16 MiB를 측정한다. 관찰 SHA-256·크기·시각을 표시하며 retained predecessor의 경로·task·확인된 bytes가 모두 일치할 때만 historical equality를 표시한다. 더 큰 artifact나 측정 실패는 unverified이고 exit를 바꾸지 않는다. 현재 경로의 파일이 이후에도 같은 bytes라고 보증하지 않는다.
+
 ## 편집기 연결
 
-Tasks/Results의 `E`에서 실행 파일의 절대 경로, literal argv 목록, 외부 GUI 허용 여부를 설정한다.
+새 프로젝트는 VISUAL/EDITOR와 설치 후보에서 편집기를 발견한다. 명시한 설정이 사용할 수 없으면 자동 대체하지 않는다. Tasks/Results의 `E`에서 실행 파일의 절대 경로, literal argv 목록, 외부 GUI 허용 여부를 설정한다.
 인수는 한 줄에 하나씩 입력한다. `{file}`은 `--` 뒤의 독립된 인수여야 하며 `{line}`/`{column}`은
 검토한 숫자 위치로 치환한다. 예를 들어 vi 계열은 `+{line}`, `--`, `{file}`의 세 줄을 사용할 수 있다.
 `F2`로 설정을 저장해도 편집기를 실행하지 않는다.
@@ -251,7 +254,7 @@ idk run editor <run-id> <problem-id> --yes
 ## 직접 process·script 작업과 구조화 결과
 
 새 TUI 작업의 기본 실행 방식은 process다. `F8`로 process/script/legacy csh 방식을 선택하고,
-process는 실행 파일과 JSON argv를, script는 명시 interpreter와 script 내용을 검토한다.
+process는 실행 파일과 한 줄에 하나씩 입력한 literal argv를, script는 명시 interpreter와 script 내용을 검토한다.
 CLI는 `task add example check --program /usr/bin/make --arg test` 또는
 `--interpreter /bin/sh --script-file /absolute/check.sh`를 사용한다. argv는 shell 확장 없이 전달한다.
 비대화형 process/script는 pipe 출력과 닫힌 stdin을 사용하며 `--interactive`만 전용 PTY를 연다.

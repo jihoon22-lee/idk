@@ -272,6 +272,7 @@ fn actual_packaged_install_update_and_uninstall_preserve_live_shell_run_and_logs
     let RunResult::Started(started) = run_job(
         &mut client,
         RunRequest::Start {
+            expected_digest: None,
             project_id: project.id.clone(),
             task_id: task.id.clone(),
             operation_id: new_id(),

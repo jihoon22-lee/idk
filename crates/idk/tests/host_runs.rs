@@ -182,6 +182,7 @@ impl Fixture {
     fn start(&self, client: &mut Client, op: &str) -> RunJob {
         client
             .run(RunRequest::Start {
+                expected_digest: None,
                 project_id: self.project.clone(),
                 task_id: self.task.clone(),
                 operation_id: op.into(),
@@ -1639,7 +1640,7 @@ expected_exit = 0
     assert_eq!(run.exit_code, Some(130));
     assert!(matches!(
         run.structured_result,
-        Some(idk_workspace::structured_result::StructuredResult::Available { .. })
+        Some(idk_workspace::structured_result::StructuredResult::Stored { .. })
     ));
     shutdown(&mut client, &mut host);
 }
@@ -1724,4 +1725,295 @@ fn native_project_rejects_legacy_csh_task_before_any_execution() {
         .unwrap_err();
     assert!(error.to_string().contains("legacy csh project"));
     assert!(!f.root.join("SHOULD-NOT-EXECUTE").exists());
+}
+
+#[test]
+fn native_large_body_paging_pin_export_comparison_and_bad_events_preserve_actual_exit() {
+    use idk_workspace::result_store::{ComparisonState, EventState};
+    use idk_workspace::structured_result::StructuredResult;
+    let f = Fixture::with_execution("", false, None, Some(TaskExecution::Script {
+        interpreter: "/bin/sh".into(), args: vec![], env: BTreeMap::new(),
+        script: "cp report-fixture.json \"$IDK_RESULT_PATH\"\nprintf 'invalid-event\\n{cut' > \"$IDK_EVENTS_PATH\"\nprintf executed > executed\nexit 7\n".into(),
+    }));
+    let mut document: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/lens-result-100-cases.json")).unwrap();
+    document["large_extension"] = serde_json::json!("x".repeat(1024 * 1024 + 256));
+    let original = serde_json::to_vec(&document).unwrap();
+    std::fs::write(f.root.join("report-fixture.json"), &original).unwrap();
+    let (mut host, mut client) = f.host();
+    let rejected = client
+        .run(RunRequest::Start {
+            project_id: f.project.clone(),
+            task_id: f.task.clone(),
+            operation_id: new_id(),
+            expected_digest: Some("f".repeat(64)),
+            environment: f.env.clone(),
+            parallel: false,
+            rows: 24,
+            cols: 80,
+        })
+        .unwrap();
+    assert_eq!(settled(&mut client, rejected).state, RunJobState::Failed);
+    assert!(!f.root.join("executed").exists());
+    let job = f.start(&mut client, &new_id());
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let run = finished(&mut client, &started.run.run_id);
+    assert_eq!(
+        (run.state, run.exit_code, run.cleanup_confirmed),
+        (RunState::Failed, Some(7), true)
+    );
+    assert!(matches!(
+        run.structured_result,
+        Some(StructuredResult::Stored { .. })
+    ));
+    let RunResult::Events(events) = request(
+        &mut client,
+        RunRequest::Events {
+            run_id: run.run_id.clone(),
+        },
+    ) else {
+        panic!()
+    };
+    assert!(matches!(events.state, EventState::Partial));
+    assert_eq!(events.invalid_events, 1);
+    assert!(events.truncated_tail);
+    let RunResult::ResultRaw(page) = request(
+        &mut client,
+        RunRequest::ResultRaw {
+            run_id: run.run_id.clone(),
+            offset: 0,
+            limit: 65536,
+        },
+    ) else {
+        panic!()
+    };
+    assert_eq!(page.next_offset, 65536);
+    assert!(!page.eof);
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(page.data_base64)
+            .unwrap(),
+        original[..65536]
+    );
+    let RunResult::Findings(page) = request(
+        &mut client,
+        RunRequest::Findings {
+            run_id: run.run_id.clone(),
+            offset: 0,
+            limit: 100,
+        },
+    ) else {
+        panic!()
+    };
+    assert_eq!(page.findings.len(), 100);
+    let RunResult::ResultPinned(pinned) = request(
+        &mut client,
+        RunRequest::ResultPin {
+            run_id: run.run_id.clone(),
+            pinned: true,
+        },
+    ) else {
+        panic!()
+    };
+    assert!(pinned.pinned);
+    let destination = f.root.join("export-result.json");
+    request(
+        &mut client,
+        RunRequest::ResultExport {
+            run_id: run.run_id.clone(),
+            path: destination.clone(),
+        },
+    );
+    assert_eq!(std::fs::read(&destination).unwrap(), original);
+    let rejected = client
+        .run(RunRequest::ResultExport {
+            run_id: run.run_id.clone(),
+            path: destination.clone(),
+        })
+        .unwrap();
+    assert_eq!(settled(&mut client, rejected).state, RunJobState::Failed);
+    assert_eq!(std::fs::read(&destination).unwrap(), original);
+    let RunResult::Compared(compared) = request(
+        &mut client,
+        RunRequest::Compare {
+            baseline_run_id: run.run_id.clone(),
+            run_id: run.run_id.clone(),
+        },
+    ) else {
+        panic!()
+    };
+    assert!(matches!(compared.state, ComparisonState::Comparable));
+    assert_eq!(compared.unchanged_count, 100);
+    assert!(
+        std::fs::metadata(f.store.state_dir.join("runs.json"))
+            .unwrap()
+            .len()
+            < 16384
+    );
+    shutdown(&mut client, &mut host);
+}
+
+#[test]
+fn artifact_observations_compare_actual_predecessor_bytes_and_preserve_mismatch() {
+    let f = Fixture::with_execution(
+        "",
+        false,
+        None,
+        Some(TaskExecution::Script {
+            interpreter: "/bin/sh".into(),
+            args: vec![],
+            env: BTreeMap::new(),
+            script: "printf measured-artifact > artifact.bin\n".into(),
+        }),
+    );
+    let artifact = f.root.join("artifact.bin");
+    f.store
+        .update(|workspace| {
+            workspace.project_mut(&f.project)?.tasks[0].artifact = Some(artifact.clone());
+            Ok(())
+        })
+        .unwrap();
+    f.approve();
+    let (mut host, mut client) = f.host();
+    let job = f.start(&mut client, &new_id());
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let producer = finished(&mut client, &started.run.run_id);
+    assert_eq!(producer.state, RunState::Succeeded);
+    assert!(!producer.artifact.verified_bytes);
+    assert_eq!(producer.artifact.snapshot.as_ref().unwrap().size, 17);
+    let service = TaskService { store: &f.store };
+    let mut consumer = f.store.load().unwrap().project(&f.project).unwrap().tasks[0].clone();
+    consumer.id = new_id();
+    consumer.name = "inspect artifact".into();
+    consumer.artifact_from_task = Some(f.task.clone());
+    consumer.execution = Some(TaskExecution::Process {
+        program: "/bin/true".into(),
+        args: vec![],
+        env: BTreeMap::new(),
+    });
+    let consumer = service
+        .save(f.store.load().unwrap().revision, &f.project, consumer)
+        .unwrap();
+    let environment = LaunchEnvironment::from_variables(f.env.clone()).unwrap();
+    let review = service
+        .review(&f.project, &consumer.id, &environment)
+        .unwrap();
+    service
+        .approve(
+            review.revision,
+            &f.project,
+            &consumer.id,
+            &review.digest,
+            &environment,
+        )
+        .unwrap();
+    let begin = |client: &mut Client| {
+        request(
+            client,
+            RunRequest::Start {
+                project_id: f.project.clone(),
+                task_id: consumer.id.clone(),
+                operation_id: new_id(),
+                expected_digest: Some(review.digest.clone()),
+                environment: f.env.clone(),
+                parallel: false,
+                rows: 24,
+                cols: 80,
+            },
+        )
+    };
+    let RunResult::Started(started) = begin(&mut client) else {
+        panic!()
+    };
+    let matching = finished(&mut client, &started.run.run_id);
+    assert!(matching.artifact.verified_bytes);
+    assert_eq!(
+        matching.artifact.from_run.as_deref(),
+        Some(producer.run_id.as_str())
+    );
+    std::fs::write(&artifact, b"changed artifact").unwrap();
+    let RunResult::Started(started) = begin(&mut client) else {
+        panic!()
+    };
+    let changed = finished(&mut client, &started.run.run_id);
+    assert_eq!(changed.state, RunState::Succeeded);
+    assert!(!changed.artifact.verified_bytes);
+    assert_ne!(
+        changed.artifact.snapshot.unwrap().sha256,
+        producer.artifact.snapshot.unwrap().sha256
+    );
+    std::fs::File::create(&artifact)
+        .unwrap()
+        .set_len(idk_workspace::run::MAX_AUTO_ARTIFACT_BYTES + 1)
+        .unwrap();
+    let RunResult::Started(started) = begin(&mut client) else {
+        panic!()
+    };
+    let oversized = finished(&mut client, &started.run.run_id);
+    assert_eq!(oversized.state, RunState::Succeeded);
+    assert!(oversized.artifact.snapshot.is_none());
+    assert!(oversized.artifact.snapshot_error.is_some());
+    assert!(!oversized.artifact.verified_bytes);
+    shutdown(&mut client, &mut host);
+}
+
+#[test]
+fn legacy_same_shell_task_receives_all_owned_result_environment_paths() {
+    let document = serde_json::json!({"schema_id":"lens.result","schema_version":1,"producer":{"name":"lens","version":"0.10.0"},"run_id":null,"execution":{"cwd":"/fixture","exit_code":9},"source":{"kind":"command","identity":["fixture"]},"complete":false,"findings":[]});
+    let event = serde_json::json!({"schema_id":"ici.next.event","schema_version":1,"run_id":"producer","seq":0,"timestamp":"2026-10-28T00:00:00Z","event_type":"run.started"});
+    let command=format!("printf '%s' \"$IDK_RUN_ID\" > legacy-id\nprintf '%s' '{}' > \"$IDK_RESULT_PATH\"\nprintf '%s\\n' '{}' > \"$IDK_EVENTS_PATH\"\nexit 9",document,event);
+    let f = Fixture::new(&command, false);
+    let (mut host, mut client) = f.host();
+    let job = f.start(&mut client, &new_id());
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let run = finished(&mut client, &started.run.run_id);
+    assert_eq!(run.state, RunState::Failed);
+    assert_eq!(run.exit_code, Some(9));
+    assert!(run.cleanup_confirmed);
+    assert_eq!(
+        std::fs::read_to_string(f.root.join("legacy-id")).unwrap(),
+        run.run_id
+    );
+    assert_eq!(
+        run.structured_result.unwrap().summary().unwrap().producer,
+        "lens"
+    );
+    assert_eq!(run.events.unwrap().events_observed, 1);
+    shutdown(&mut client, &mut host);
+}
+
+#[test]
+fn oversized_event_file_never_changes_actual_native_success() {
+    let f = Fixture::with_execution(
+        "",
+        false,
+        None,
+        Some(TaskExecution::Script {
+            interpreter: "/bin/sh".into(),
+            args: vec![],
+            env: BTreeMap::new(),
+            script: "truncate -s 8388609 \"$IDK_EVENTS_PATH\"\nexit 0\n".into(),
+        }),
+    );
+    let (mut host, mut client) = f.host();
+    let job = f.start(&mut client, &new_id());
+    let RunResult::Started(started) = result(&mut client, job) else {
+        panic!()
+    };
+    let run = finished(&mut client, &started.run.run_id);
+    assert_eq!(
+        (run.state, run.exit_code, run.cleanup_confirmed),
+        (RunState::Succeeded, Some(0), true)
+    );
+    assert!(matches!(
+        run.events.unwrap().state,
+        idk_workspace::result_store::EventState::Oversize
+    ));
+    shutdown(&mut client, &mut host);
 }

@@ -25,6 +25,15 @@ const HISTORY_LIMIT: usize = crate::saved_state::RUN_RECORD_LIMIT;
 const LOG_LIMIT: u64 = crate::saved_state::LOG_BYTE_LIMIT;
 const CHUNK_LIMIT: usize = 64 * 1024;
 const LEDGER: &str = "runs.json";
+/// Automatic finalization is deliberately smaller than the explicit 1 GiB helper.
+pub const MAX_AUTO_ARTIFACT_BYTES: u64 = 16 * 1024 * 1024;
+#[derive(Clone)]
+struct ArtifactMeasurement {
+    snapshot: Option<crate::discovery::ArtifactSnapshot>,
+    error: Option<String>,
+    observed_at_ms: u64,
+}
+type SharedArtifact = Arc<Mutex<Option<ArtifactMeasurement>>>;
 
 pub struct ProcessLaunch {
     pub program: PathBuf,
@@ -184,6 +193,9 @@ struct Active {
     /// The host has reported the execution's end. Source observation and
     /// durable finalization may still be pending, with the lease retained.
     finishing: bool,
+    result_snapshot: Option<crate::structured_result::StructuredResult>,
+    events_snapshot: Option<crate::result_store::EventProgress>,
+    artifact_measurement: SharedArtifact,
 }
 struct PendingResources {
     directory: PathBuf,
@@ -202,8 +214,10 @@ pub struct RunRegistry {
     store: Store,
     gate: SourceGate,
     runs: Vec<RunInfo>,
+    retired: Vec<crate::saved_state::RetiredRun>,
     active: BTreeMap<String, Active>,
     logs: PathBuf,
+    results: crate::result_store::ResultStore,
     published: RefCell<HashSet<PathBuf>>,
     /// Reserved starts whose source observation is still off-thread. They hold
     /// source leases, so dedup and output-conflict checks must see them.
@@ -221,10 +235,15 @@ struct PendingStart {
 pub struct SourceProbe {
     repository: Option<crate::git::Repository>,
     gate: SourceGate,
+    artifact: Option<(PathBuf, SharedArtifact)>,
 }
 impl SourceProbe {
     pub(crate) fn from_parts(repository: Option<crate::git::Repository>, gate: SourceGate) -> Self {
-        Self { repository, gate }
+        Self {
+            repository,
+            gate,
+            artifact: None,
+        }
     }
     pub fn into_parts(self) -> (Option<crate::git::Repository>, SourceGate) {
         (self.repository, self.gate)
@@ -235,17 +254,51 @@ impl SourceProbe {
             .as_ref()
             .map(|repository| repository.identity().into())
     }
-    /// Synchronous fallback when the observation cannot be dispatched.
+    pub fn has_artifact(&self) -> bool {
+        self.artifact.is_some()
+    }
+    /// A saturated/dead worker must not move artifact hashing to the registry
+    /// actor. Keep a precise unavailable observation and finish the real Run.
+    pub fn skip_artifact(mut self, reason: &str) -> Self {
+        if let Some((_, shared)) = self.artifact.take() {
+            if let Ok(mut value) = shared.lock() {
+                *value = Some(ArtifactMeasurement {
+                    snapshot: None,
+                    error: Some(reason.into()),
+                    observed_at_ms: now_ms(),
+                });
+            }
+        }
+        self
+    }
+    /// Explicit synchronous API; the host dispatches artifact work off-thread.
     pub fn observe_now(self) -> SourceObservation {
-        let (repository, gate) = self.into_parts();
-        observe_source(repository.as_ref(), &gate)
+        if let Some((path, shared)) = &self.artifact {
+            let result = crate::discovery::snapshot_artifact(path, MAX_AUTO_ARTIFACT_BYTES);
+            let measurement = match result {
+                Ok(snapshot) => ArtifactMeasurement {
+                    snapshot: Some(snapshot),
+                    error: None,
+                    observed_at_ms: now_ms(),
+                },
+                Err(error) => ArtifactMeasurement {
+                    snapshot: None,
+                    error: Some(crate::structured_result::safe(error, 512)),
+                    observed_at_ms: now_ms(),
+                },
+            };
+            if let Ok(mut value) = shared.lock() {
+                *value = Some(measurement);
+            }
+        }
+        observe_source(self.repository.as_ref(), &self.gate)
     }
 }
 pub enum BeginReservation {
     /// An identical or non-parallel execution already exists; no lease held.
-    Existing(RunStartReply),
+    Existing(Box<RunStartReply>),
     /// Lease reserved; commit once the source observation arrives.
-    Fresh(BeginTicket),
+    Fresh(Box<BeginTicket>),
 }
 /// A reserved start whose observation is in flight. Dropping it releases the
 /// source lease; the registry's pending record is removed by commit/abandon.
@@ -259,10 +312,7 @@ pub struct BeginTicket {
 }
 impl BeginTicket {
     pub fn probe(&self, gate: &SourceGate) -> SourceProbe {
-        SourceProbe {
-            repository: self.plan.repository.clone(),
-            gate: gate.clone(),
-        }
+        SourceProbe::from_parts(self.plan.repository.clone(), gate.clone())
     }
     pub fn probe_identity(&self) -> Option<PathBuf> {
         self.plan
@@ -278,6 +328,9 @@ impl BeginTicket {
     }
     pub fn operation_id(&self) -> &str {
         &self.operation_id
+    }
+    pub fn launch_digest(&self) -> &str {
+        &self.plan.launch_digest
     }
     /// Whether a second request refers to the same execution intent.
     pub fn same_intent(&self, plan: &TaskLaunchPlan) -> bool {
@@ -296,13 +349,52 @@ impl RunRegistry {
         let logs = store.state_dir.join("run-logs");
         ensure_private_dir(&logs)?;
         let ledger = store.read_state::<Ledger>(LEDGER)?.unwrap_or(Ledger {
-            schema: 1,
+            schema: 2,
             runs: vec![],
+            retired: vec![],
         });
         ledger.validate()?;
+        let results = crate::result_store::ResultStore::open(&store.state_dir)?;
+        if ledger.schema == 1 {
+            let bytes = read_private(&store.state_dir.join(LEDGER), crate::model::MAX_MESSAGE)?;
+            let backup = store.state_dir.join("runs.previous-v1.json");
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                .open(&backup)
+            {
+                Ok(mut file) => {
+                    file.write_all(&bytes)?;
+                    file.sync_all()?;
+                    File::open(&store.state_dir)?.sync_all()?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    ensure!(
+                        read_private(&backup, crate::model::MAX_MESSAGE)? == bytes,
+                        "prior v1 Run backup differs; preserve both before migration"
+                    );
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        let retired = ledger.retired;
         let mut runs = ledger.runs;
         let mut ids = std::collections::HashSet::new();
         for run in &mut runs {
+            if let Some(old) = &run.structured_result {
+                let migrated = results.migrate(&run.run_id, old);
+                ensure!(
+                    !matches!(
+                        migrated,
+                        crate::structured_result::StructuredResult::Limited { .. }
+                            | crate::structured_result::StructuredResult::StorageFailed { .. }
+                    ),
+                    "cannot snapshot legacy result; original ledger preserved"
+                );
+                run.structured_result = Some(migrated);
+            }
             valid_id(&run.run_id)?;
             valid_id(&run.operation_id)?;
             valid_id(&run.project_id)?;
@@ -334,16 +426,20 @@ impl RunRegistry {
                 run.log.state = LogState::Partial;
             }
         }
-        let result = Self {
+        let mut result = Self {
             store,
             gate,
             runs,
+            retired,
             active: BTreeMap::new(),
             logs,
+            results,
             published: RefCell::new(HashSet::new()),
             pending_starts: Vec::new(),
         };
         result.persist()?;
+        result.cleanup_retired()?;
+        result.expire_history()?;
         Ok(result)
     }
     pub fn gate(&self) -> &SourceGate {
@@ -382,7 +478,7 @@ impl RunRegistry {
         parallel: bool,
     ) -> Result<RunStartReply> {
         match self.begin_reserve(plan, operation_id, parallel)? {
-            BeginReservation::Existing(reply) => Ok(reply),
+            BeginReservation::Existing(reply) => Ok(*reply),
             BeginReservation::Fresh(ticket) => {
                 let source_start = observe_source(ticket.plan.repository.as_ref(), &self.gate);
                 self.begin_commit(ticket, source_start)
@@ -411,10 +507,10 @@ impl RunRegistry {
                     && run.launch_digest == plan.launch_digest,
                 "operation ID already refers to a different execution intent"
             );
-            return Ok(BeginReservation::Existing(RunStartReply {
+            return Ok(BeginReservation::Existing(Box::new(RunStartReply {
                 run: self.info(&run.run_id)?,
                 existing: true,
-            }));
+            })));
         }
         // Root reconnection takes this same workspace-wide lock exclusively.
         // Acquire it before trusting a captured plan or recording a pending
@@ -443,10 +539,10 @@ impl RunRegistry {
             run.project_id == plan.project_id && run.task_id == plan.task.id && run.state.is_live()
         }) {
             if !parallel {
-                return Ok(BeginReservation::Existing(RunStartReply {
+                return Ok(BeginReservation::Existing(Box::new(RunStartReply {
                     run: self.info(&run.run_id)?,
                     existing: true,
-                }));
+                })));
             }
         }
         ensure!(
@@ -481,29 +577,17 @@ impl RunRegistry {
         }
         // Each deferred ticket will add one record when its observation
         // completes. Reserve that capacity now, alongside committed history.
-        while self.runs.len() + self.pending_starts.len() >= HISTORY_LIMIT {
+        self.cleanup_retired()?;
+        self.expire_history()?;
+        while self.runs.iter().filter(|run| !run.pinned).count() + self.pending_starts.len()
+            >= HISTORY_LIMIT
+        {
             let index = self
                 .runs
                 .iter()
-                .position(|run| {
-                    !run.state.is_live()
-                        && (run.state != RunState::Unknown || run.cleanup_confirmed)
-                        && !self
-                            .active
-                            .get(&run.run_id)
-                            .is_some_and(|active| active.finishing)
-                })
+                .position(|run| self.can_rotate(run))
                 .context("run history full of active, unknown or unfinalized executions")?;
-            let old = self.runs.remove(index);
-            self.active.remove(&old.run_id);
-            let path = self.logs.join(format!("{}.log", old.run_id));
-            if path.exists() {
-                std::fs::remove_file(path)?;
-            }
-            let directory = self.store.runtime_dir.join(format!("run-{}", old.run_id));
-            if directory.exists() {
-                std::fs::remove_dir_all(directory)?;
-            }
+            self.remove_history(index)?;
         }
         let run_id = new_id();
         let lease = if let Some(repository) = &plan.repository {
@@ -523,27 +607,29 @@ impl RunRegistry {
             operation_id: operation_id.into(),
             build_outputs: outputs.clone(),
         });
-        Ok(BeginReservation::Fresh(BeginTicket {
+        Ok(BeginReservation::Fresh(Box::new(BeginTicket {
             run_id,
             plan,
             operation_id: operation_id.into(),
             outputs,
             lease,
             run_use,
-        }))
+        })))
     }
     /// Releases a reserved start that will never commit (cancelled or failed
     /// before observation completed). The lease is dropped with the ticket.
-    pub fn begin_abandon(&mut self, ticket: BeginTicket) {
+    pub fn begin_abandon(&mut self, ticket: impl Into<Box<BeginTicket>>) {
+        let ticket = ticket.into();
         self.pending_starts
             .retain(|pending| pending.run_id != ticket.run_id);
     }
     /// Persists a reserved start after its source observation arrived.
     pub fn begin_commit(
         &mut self,
-        ticket: BeginTicket,
+        ticket: impl Into<Box<BeginTicket>>,
         source_start: SourceObservation,
     ) -> Result<RunStartReply> {
+        let ticket = ticket.into();
         self.pending_starts
             .retain(|pending| pending.run_id != ticket.run_id);
         let BeginTicket {
@@ -553,7 +639,7 @@ impl RunRegistry {
             outputs,
             lease,
             run_use,
-        } = ticket;
+        } = *ticket;
         let directory = self.store.runtime_dir.join(format!("run-{run_id}"));
         ensure_private_dir(&directory)?;
         let mut pending = PendingResources {
@@ -561,7 +647,8 @@ impl RunRegistry {
             log: self.logs.join(format!("{run_id}.log")),
             retained: false,
         };
-        let shell = create_steps(&plan, &directory)?;
+        let mut shell = create_steps(&plan, &directory)?;
+        run_environment(&mut shell.env, &run_id, &directory);
         let log = LogDescriptor {
             run_id: run_id.clone(),
             generation: 1,
@@ -592,6 +679,8 @@ impl RunRegistry {
         });
         let run = RunInfo {
             structured_result: None,
+            pinned: false,
+            events: None,
             run_id: run_id.clone(),
             operation_id,
             project_id: plan.project_id.clone(),
@@ -630,6 +719,9 @@ impl RunRegistry {
                 from_task: plan.task.artifact_from_task.clone(),
                 from_run,
                 verified_bytes: false,
+                snapshot: None,
+                snapshot_error: None,
+                observed_at_ms: None,
             },
             log,
             error: None,
@@ -651,6 +743,9 @@ impl RunRegistry {
                 directory,
                 started: Instant::now(),
                 finishing: false,
+                result_snapshot: None,
+                events_snapshot: None,
+                artifact_measurement: Arc::new(Mutex::new(None)),
             },
         );
         pending.retained = true;
@@ -710,23 +805,7 @@ impl RunRegistry {
         };
         let mut env = active.plan.shell.env.clone();
         env.extend(overrides.clone());
-        env.insert("IDK_RUN_ID".into(), run_id.into());
-        env.insert(
-            "IDK_RESULT_PATH".into(),
-            active
-                .directory
-                .join("result.json")
-                .to_string_lossy()
-                .into_owned(),
-        );
-        env.insert(
-            "IDK_EVENTS_PATH".into(),
-            active
-                .directory
-                .join("events.jsonl")
-                .to_string_lossy()
-                .into_owned(),
-        );
+        run_environment(&mut env, run_id, &active.directory);
         Ok(Some(ProcessLaunch {
             program,
             args: std::mem::take(&mut args),
@@ -835,6 +914,12 @@ impl RunRegistry {
         Ok(SourceProbe {
             repository: active.plan.repository.clone(),
             gate: self.gate.clone(),
+            artifact: active
+                .plan
+                .task
+                .artifact
+                .as_ref()
+                .map(|path| (path.clone(), active.artifact_measurement.clone())),
         })
     }
     pub fn finish(
@@ -845,8 +930,7 @@ impl RunRegistry {
         error: Option<String>,
     ) -> Result<RunInfo> {
         let probe = self.finish_probe(run_id)?;
-        let (repository, gate) = probe.into_parts();
-        let source_end = observe_source(repository.as_ref(), &gate);
+        let source_end = probe.observe_now();
         self.finish_observed(run_id, exit, cleanup_confirmed, error, source_end)
     }
     /// Completes a run once its end observation arrived. The lease is still
@@ -881,11 +965,63 @@ impl RunRegistry {
         };
         active.sink.finish();
         let log = active.sink.descriptor();
-        let structured_result = cleanup_confirmed.then(|| {
-            crate::structured_result::inspect(&active.directory.join("result.json"), run_id)
+        if cleanup_confirmed && active.result_snapshot.is_none() {
+            let result = self
+                .results
+                .capture(run_id, &active.directory.join("result.json"));
+            active.events_snapshot = Some(
+                self.results.events(
+                    run_id,
+                    &active.directory.join("events.jsonl"),
+                    result
+                        .summary()
+                        .and_then(|summary| summary.producer_run_id.as_deref()),
+                    true,
+                ),
+            );
+            active.result_snapshot = Some(result);
+        }
+        let structured_result = active.result_snapshot.clone();
+        let events = active.events_snapshot.clone();
+        let measurement = active
+            .artifact_measurement
+            .lock()
+            .ok()
+            .and_then(|value| value.clone());
+        let existing = self.info(run_id)?;
+        let predecessor = existing.artifact.from_run.as_ref().and_then(|id| {
+            self.runs.iter().find(|run| {
+                &run.run_id == id
+                    && run.project_id == existing.project_id
+                    && Some(&run.task_id) == existing.artifact.from_task.as_ref()
+                    && run.state == RunState::Succeeded
+                    && run.cleanup_confirmed
+                    && run.artifact.path == existing.artifact.path
+            })
         });
+        let verified_bytes = cleanup_confirmed
+            && measurement
+                .as_ref()
+                .and_then(|value| value.snapshot.as_ref())
+                .zip(predecessor.and_then(|run| run.artifact.snapshot.as_ref()))
+                .is_some_and(|(current, previous)| {
+                    current.sha256 == previous.sha256 && current.size == previous.size
+                });
         let run = self.run_mut(run_id)?;
+        if run.artifact.path.is_some() && cleanup_confirmed {
+            if let Some(measurement) = measurement {
+                run.artifact.snapshot = measurement.snapshot;
+                run.artifact.snapshot_error = measurement.error;
+                run.artifact.observed_at_ms = Some(measurement.observed_at_ms);
+            } else {
+                run.artifact.snapshot_error = Some(
+                    "artifact measurement did not complete within the observation budget".into(),
+                );
+            }
+            run.artifact.verified_bytes = verified_bytes;
+        }
         run.structured_result = structured_result;
+        run.events = events;
         run.source_changed = if run.source_start.error.is_none()
             && source_end.error.is_none()
             && run.source_start.identity.is_some()
@@ -1097,10 +1233,278 @@ impl RunRegistry {
         }
         Ok(reply)
     }
+    fn can_rotate(&self, run: &RunInfo) -> bool {
+        !run.pinned
+            && !run.state.is_live()
+            && run.cleanup_confirmed
+            && !self
+                .active
+                .get(&run.run_id)
+                .is_some_and(|active| active.finishing)
+    }
+    fn cleanup_retired(&mut self) -> Result<()> {
+        while let Some(retired) = self.retired.first().cloned() {
+            if let Some(body) = &retired.result {
+                self.results.remove(body, false)?;
+            }
+            if let Some(body) = &retired.events {
+                self.results.remove(body, true)?;
+            }
+            let log = self.logs.join(format!("{}.log", retired.run_id));
+            match log.symlink_metadata() {
+                Ok(meta) => {
+                    ensure!(
+                        meta.is_file()
+                            && Some((meta.dev(), meta.ino())) == retired.log_identity
+                            && meta.uid() == unsafe { libc::geteuid() },
+                        "retired log was replaced or has unknown identity; preserved"
+                    );
+                    std::fs::remove_file(&log)?;
+                    File::open(&self.logs)?.sync_all()?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            let directory = self
+                .store
+                .runtime_dir
+                .join(format!("run-{}", retired.run_id));
+            match directory.symlink_metadata() {
+                Ok(meta) => {
+                    ensure!(
+                        meta.is_dir()
+                            && Some((meta.dev(), meta.ino())) == retired.runtime_identity
+                            && meta.uid() == unsafe { libc::geteuid() },
+                        "retired runtime directory was replaced or has unknown identity; preserved"
+                    );
+                    std::fs::remove_dir_all(&directory)?;
+                    File::open(&self.store.runtime_dir)?.sync_all()?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+            self.retired.remove(0);
+            if let Err(error) = self.persist() {
+                self.retired.insert(0, retired);
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+    fn remove_history(&mut self, index: usize) -> Result<()> {
+        ensure!(
+            self.can_rotate(&self.runs[index]),
+            "run retention cannot remove live, pinned or unconfirmed work"
+        );
+        ensure!(
+            self.retired.len() < HISTORY_LIMIT,
+            "retention cleanup journal full; inspect pending cleanup before continuing"
+        );
+        let old = self.runs[index].clone();
+        let directory = self.store.runtime_dir.join(format!("run-{}", old.run_id));
+        let runtime_identity = match directory.symlink_metadata() {
+            Ok(meta) => {
+                ensure!(
+                    meta.is_dir() && meta.uid() == unsafe { libc::geteuid() },
+                    "unexpected Run runtime directory; preserved"
+                );
+                Some((meta.dev(), meta.ino()))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        self.retired.push(crate::saved_state::RetiredRun {
+            run_id: old.run_id.clone(),
+            result: old
+                .structured_result
+                .as_ref()
+                .and_then(|value| value.body())
+                .cloned(),
+            events: old.events.as_ref().and_then(|events| events.body.clone()),
+            log_identity: old.log.file_identity,
+            runtime_identity,
+        });
+        self.runs.remove(index);
+        if let Err(error) = self.persist() {
+            self.runs.insert(index, old);
+            self.retired.pop();
+            return Err(error);
+        }
+        self.active.remove(&old.run_id);
+        self.cleanup_retired()
+    }
+    fn expire_history(&mut self) -> Result<()> {
+        loop {
+            let now = now_ms();
+            let oldest = self.runs.iter().position(|run| {
+                self.can_rotate(run)
+                    && run.finished_at_ms.is_some_and(|finished| {
+                        now.saturating_sub(finished) > crate::result_store::RETENTION_MS
+                    })
+            });
+            let Some(index) = oldest else { break };
+            self.remove_history(index)?;
+        }
+        Ok(())
+    }
+    fn result(&self, run_id: &str) -> Result<crate::structured_result::StructuredResult> {
+        Ok(self
+            .info(run_id)?
+            .structured_result
+            .unwrap_or(crate::structured_result::StructuredResult::Missing))
+    }
+    pub fn result_raw(
+        &self,
+        run_id: &str,
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::result_store::RawResultPage> {
+        self.results.raw(&self.result(run_id)?, offset, limit)
+    }
+    pub fn findings(
+        &self,
+        run_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<crate::result_store::FindingPage> {
+        self.results.findings(&self.result(run_id)?, offset, limit)
+    }
+    /// Editor callers bind their review to the immutable body digest and exact
+    /// producer index. Resolving the path is a separate project-root review.
+    pub fn structured_finding(
+        &self,
+        run_id: &str,
+        sha256: &str,
+        index: usize,
+    ) -> Result<crate::result_store::StructuredFinding> {
+        let page = self.findings(run_id, index, 1)?;
+        ensure!(
+            page.result.body().is_some_and(|body| body.sha256 == sha256),
+            "result body changed since finding review"
+        );
+        page.findings
+            .into_iter()
+            .next()
+            .context("finding is missing, expired or unavailable")
+    }
+    pub fn pin_result(&mut self, run_id: &str, pinned: bool) -> Result<RunInfo> {
+        let current = self.info(run_id)?;
+        ensure!(
+            !current.state.is_live() && current.cleanup_confirmed,
+            "pin requires confirmed process cleanup"
+        );
+        if current.pinned == pinned {
+            return Ok(current);
+        }
+        if pinned {
+            if let Some(result) = &current.structured_result {
+                ensure!(
+                    !matches!(
+                        self.results.verify(result),
+                        crate::structured_result::StructuredResult::Expired { .. }
+                            | crate::structured_result::StructuredResult::Tampered { .. }
+                    ),
+                    "cannot pin expired or tampered result"
+                );
+            }
+            if let Some(events) = &current.events {
+                ensure!(
+                    !matches!(
+                        self.results.retained_events(events).state,
+                        crate::result_store::EventState::Expired
+                            | crate::result_store::EventState::Tampered
+                    ),
+                    "cannot pin expired or tampered events"
+                );
+            }
+            let pinned: Vec<_> = self.runs.iter().filter(|run| run.pinned).collect();
+            ensure!(
+                pinned.len() < crate::result_store::PINNED_RUN_LIMIT,
+                "at most 16 pinned runs; unpin or export an existing baseline"
+            );
+            let bytes = pinned
+                .iter()
+                .map(|run| retained_bytes(run))
+                .fold(0u64, u64::saturating_add)
+                .saturating_add(retained_bytes(&current));
+            ensure!(
+                bytes <= crate::result_store::PINNED_RESULT_BYTES,
+                "pinned data exceeds 128 MiB; unpin or export an existing baseline"
+            );
+        } else {
+            while self.runs.iter().filter(|run| !run.pinned).count() >= HISTORY_LIMIT {
+                let index = self
+                    .runs
+                    .iter()
+                    .position(|run| self.can_rotate(run))
+                    .context(
+                        "ordinary history is full of active or unconfirmed work; cannot unpin yet",
+                    )?;
+                self.remove_history(index)?;
+            }
+        }
+        self.run_mut(run_id)?.pinned = pinned;
+        if let Err(error) = self.persist() {
+            self.run_mut(run_id)?.pinned = current.pinned;
+            return Err(error);
+        }
+        self.info(run_id)
+    }
+    pub fn export_result(
+        &self,
+        run_id: &str,
+        path: &Path,
+    ) -> Result<crate::result_store::ExportedResult> {
+        self.results.export(&self.result(run_id)?, path)
+    }
+    pub fn compare_results(
+        &self,
+        baseline_id: &str,
+        run_id: &str,
+    ) -> Result<crate::result_store::ResultComparison> {
+        let baseline = self.info(baseline_id)?;
+        let current = self.info(run_id)?;
+        let mut compared = self.results.compare(
+            baseline_id,
+            &self.result(baseline_id)?,
+            run_id,
+            &self.result(run_id)?,
+        );
+        if baseline.project_id != current.project_id || baseline.task_id != current.task_id {
+            compared.state = crate::result_store::ComparisonState::Incompatible;
+            compared.reason = "baseline belongs to a different project or task".into();
+            compared.new_count = 0;
+            compared.unchanged_count = 0;
+            compared.resolved_count = 0;
+            compared.carried_count = 0;
+            compared.new_sample.clear();
+            compared.resolved_sample.clear();
+        }
+        Ok(compared)
+    }
+    pub fn events(&self, run_id: &str) -> Result<crate::result_store::EventProgress> {
+        let run = self.info(run_id)?;
+        if let Some(events) = &run.events {
+            return Ok(self.results.retained_events(events));
+        }
+        if let Some(active) = self.active.get(run_id) {
+            return Ok(self.results.events(
+                run_id,
+                &active.directory.join("events.jsonl"),
+                run.structured_result
+                    .as_ref()
+                    .and_then(|result| result.summary())
+                    .and_then(|summary| summary.producer_run_id.as_deref()),
+                false,
+            ));
+        }
+        Ok(crate::result_store::EventProgress::default())
+    }
     pub fn persist(&self) -> Result<()> {
         let ledger = Ledger {
-            schema: 1,
+            schema: 2,
             runs: self.list(None),
+            retired: self.retired.clone(),
         };
         ledger.validate()?;
         self.store.write_state(LEDGER, &ledger)
@@ -1124,6 +1528,33 @@ impl Drop for RunRegistry {
             }
         }
     }
+}
+fn retained_bytes(run: &RunInfo) -> u64 {
+    run.structured_result
+        .as_ref()
+        .and_then(|result| result.body())
+        .map_or(0, |body| body.bytes)
+        .saturating_add(
+            run.events
+                .as_ref()
+                .and_then(|events| events.body.as_ref())
+                .map_or(0, |body| body.bytes),
+        )
+        .saturating_add(run.log.bytes)
+}
+fn run_environment(env: &mut BTreeMap<String, String>, run_id: &str, directory: &Path) {
+    env.insert("IDK_RUN_ID".into(), run_id.into());
+    env.insert(
+        "IDK_RESULT_PATH".into(),
+        directory.join("result.json").to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "IDK_EVENTS_PATH".into(),
+        directory
+            .join("events.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+    );
 }
 fn now_ms() -> u64 {
     SystemTime::now()

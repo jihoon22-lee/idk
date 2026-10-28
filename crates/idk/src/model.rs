@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-pub const SCHEMA: u32 = 2;
-pub const PROTOCOL: u32 = 2;
+pub const SCHEMA: u32 = 3;
+pub const PROTOCOL: u32 = 3;
 pub const MAX_PROJECTS: usize = 128;
 pub const MAX_TERMINALS: usize = 64;
 pub const MAX_MESSAGE: usize = 4 * 1024 * 1024;
@@ -20,6 +20,8 @@ pub fn new_id() -> String {
 pub struct Workspace {
     pub schema: u32,
     pub revision: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub portable: Vec<crate::portable::PortableBinding>,
     #[serde(default)]
     pub projects: Vec<Project>,
     pub selected_project: Option<String>,
@@ -32,6 +34,7 @@ impl Default for Workspace {
         Self {
             schema: SCHEMA,
             revision: 0,
+            portable: Vec::new(),
             projects: Vec::new(),
             selected_project: None,
             recent_projects: Vec::new(),
@@ -272,7 +275,7 @@ pub struct EditorConfig {
 
 impl Workspace {
     pub fn validate(&self) -> Result<()> {
-        if self.schema != 1 && self.schema != SCHEMA {
+        if ![1, 2, SCHEMA].contains(&self.schema) {
             bail!(
                 "unsupported configuration schema {}; supported {} (file preserved)",
                 self.schema,
@@ -286,6 +289,21 @@ impl Workspace {
                 .any(|p| p.shell.native.is_some() || p.tasks.iter().any(|t| t.execution.is_some()))
         {
             bail!("native/process execution requires configuration schema 2");
+        }
+        if !self.portable.is_empty() {
+            if self.schema < 3 {
+                bail!("portable mappings require configuration schema 3");
+            }
+            if self.portable.len() > MAX_PROJECTS {
+                bail!("too many portable project mappings");
+            }
+            let mut mapped = std::collections::HashSet::new();
+            for binding in &self.portable {
+                if !mapped.insert(&binding.project_id) {
+                    bail!("duplicate portable project mapping");
+                }
+                crate::portable::validate_binding(binding, self)?;
+            }
         }
         if self.projects.len() > MAX_PROJECTS {
             bail!("too many projects (limit {MAX_PROJECTS})");

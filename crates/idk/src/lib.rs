@@ -27,3 +27,7 @@ pub mod run_wire;
 pub mod task;
 
 pub mod structured_result;
+
+pub mod discovery;
+pub mod portable;
+pub mod result_store;

@@ -1084,7 +1084,11 @@ fn qmake_make_cmake_and_external_python_tests_use_registered_task_environment() 
             tested.artifact.from_run.as_deref(),
             Some(built.run_id.as_str())
         );
-        assert!(!tested.artifact.verified_bytes);
+        assert!(tested.artifact.verified_bytes);
+        assert_eq!(
+            tested.artifact.snapshot.as_ref().unwrap().sha256,
+            built.artifact.snapshot.as_ref().unwrap().sha256
+        );
     }
 }
 #[test]

@@ -342,6 +342,9 @@ impl ProjectService<'_> {
         self.change(expected, |workspace| {
             let result = impact(workspace.project(project_id)?);
             workspace.projects.retain(|p| p.id != project_id);
+            workspace
+                .portable
+                .retain(|binding| binding.project_id != project_id);
             workspace.recent_projects.retain(|id| id != project_id);
             if workspace.selected_project.as_deref() == Some(project_id) {
                 workspace.selected_project = workspace.recent_projects.first().cloned();
@@ -414,8 +417,29 @@ impl ProjectService<'_> {
                 fresh.project == preview.project,
                 "root reconnection inputs changed; review again"
             );
+            let portable_rebind = workspace
+                .portable
+                .iter()
+                .position(|binding| binding.project_id == preview.project_id)
+                .map(|index| -> Result<_> {
+                    let mut baseline = workspace.clone();
+                    *baseline.project_mut(&preview.project_id)? =
+                        workspace.portable[index].resolved.clone();
+                    baseline.portable.clear();
+                    let resolved =
+                        rebind_preview(&baseline, &preview.project_id, preview.new_root.clone())?
+                            .project;
+                    Ok((index, resolved))
+                })
+                .transpose()?;
             let result = impact(&fresh.project);
             *workspace.project_mut(&preview.project_id)? = fresh.project;
+            if let Some((index, resolved)) = portable_rebind {
+                workspace.portable[index].path =
+                    preview.new_root.join(crate::portable::DECLARATION);
+                workspace.portable[index].resolved = resolved;
+                crate::portable::ensure_workspace_current(workspace, &preview.project_id)?;
+            }
             Ok(result)
         })
     }
@@ -684,10 +708,17 @@ impl ProjectService<'_> {
         environment: &LaunchEnvironment,
     ) -> Result<TrustScopeReview> {
         let workspace = self.store.load()?;
+        crate::portable::ensure_workspace_current(&workspace, project_id)?;
         let project = workspace.project(project_id)?;
         validate_terminal(project, terminal)?;
-        let common = common_scope(project, environment);
-        Ok(terminal_scope(project, terminal, environment, &common))
+        let common = managed_common_scope(&workspace, project, environment);
+        Ok(managed_terminal_scope(
+            &workspace,
+            project,
+            terminal,
+            environment,
+            &common,
+        ))
     }
     /// Approve a transient definition in memory only; the caller must keep it
     /// in its session namespace. No captured environment or transient is saved.
@@ -700,14 +731,15 @@ impl ProjectService<'_> {
         environment: &LaunchEnvironment,
     ) -> Result<()> {
         let workspace = self.load_expected(expected)?;
+        crate::portable::ensure_workspace_current(&workspace, project_id)?;
         let project = workspace.project(project_id)?;
         ensure!(
             !terminal.persistent && !project.terminals.iter().any(|t| t.id == terminal.id),
             "transient ID must be outside saved definitions"
         );
-        let common = common_scope(project, environment);
+        let common = managed_common_scope(&workspace, project, environment);
         ensure!(common.trusted, "review common initialization first");
-        let fresh = terminal_scope(project, terminal, environment, &common);
+        let fresh = managed_terminal_scope(&workspace, project, terminal, environment, &common);
         ensure!(
             fresh.terminal_id == review.terminal_id && fresh.digest == review.digest,
             "transient initialization changed during review"
@@ -726,6 +758,7 @@ impl ProjectService<'_> {
         environment: LaunchEnvironment,
     ) -> Result<TerminalLaunchPlan> {
         let workspace = self.store.load()?;
+        crate::portable::ensure_workspace_current(&workspace, project_id)?;
         let project = workspace.project(project_id)?;
         validate_terminal(project, terminal)?;
         if let Some(saved) = project.terminals.iter().find(|t| t.id == terminal.id) {
@@ -741,7 +774,7 @@ impl ProjectService<'_> {
                 "persistent terminal is not registered"
             );
         }
-        let common = common_scope(project, &environment);
+        let common = managed_common_scope(&workspace, project, &environment);
         ensure!(
             common.trusted,
             "common initialization needs review: {}",
@@ -750,7 +783,8 @@ impl ProjectService<'_> {
                 .as_deref()
                 .unwrap_or("definition or startup files changed")
         );
-        let terminal_review = terminal_scope(project, terminal, &environment, &common);
+        let terminal_review =
+            managed_terminal_scope(&workspace, project, terminal, &environment, &common);
         ensure!(
             terminal_review.trusted,
             "terminal initialization needs review: {}",
@@ -1154,12 +1188,13 @@ fn review_project(
     project_id: &str,
     environment: &LaunchEnvironment,
 ) -> Result<InitializationReview> {
+    crate::portable::ensure_workspace_current(workspace, project_id)?;
     let project = workspace.project(project_id)?;
-    let common = common_scope(project, environment);
+    let common = managed_common_scope(workspace, project, environment);
     let terminals = project
         .terminals
         .iter()
-        .map(|terminal| terminal_scope(project, terminal, environment, &common))
+        .map(|terminal| managed_terminal_scope(workspace, project, terminal, environment, &common))
         .collect();
     Ok(InitializationReview {
         revision: workspace.revision,
@@ -1170,6 +1205,53 @@ fn review_project(
         environment: environment.clone(),
     })
 }
+fn managed_common_scope(
+    workspace: &Workspace,
+    project: &Project,
+    environment: &LaunchEnvironment,
+) -> TrustScopeReview {
+    let mut review = common_scope(project, environment);
+    if project.shell.native.is_some()
+        && workspace
+            .portable
+            .iter()
+            .any(|b| b.project_id == project.id && b.shell_review_required)
+    {
+        let result = project.validate().and_then(|()| framed_digest("idk-project-native-startup-v1", &serde_json::json!({
+            "shell": project.shell.executable, "native": project.shell.native, "init_cwd": project.shell.init_cwd,
+        })));
+        review = scope_result(
+            None,
+            project.shell.trusted_digest.as_ref(),
+            Vec::new(),
+            result,
+        );
+    }
+    review
+}
+fn managed_terminal_scope(
+    workspace: &Workspace,
+    project: &Project,
+    terminal: &TerminalDefinition,
+    environment: &LaunchEnvironment,
+    common: &TrustScopeReview,
+) -> TrustScopeReview {
+    let mut review = terminal_scope(project, terminal, environment, common);
+    if project.shell.native.is_some()
+        && workspace
+            .portable
+            .iter()
+            .any(|b| b.project_id == project.id && b.terminal_reviews.contains(&terminal.id))
+    {
+        review.trusted = common.trusted
+            && review
+                .digest
+                .as_ref()
+                .is_some_and(|digest| terminal.trusted_digest.as_ref() == Some(digest));
+    }
+    review
+}
+
 fn scope_result(
     terminal_id: Option<String>,
     approved: Option<&String>,

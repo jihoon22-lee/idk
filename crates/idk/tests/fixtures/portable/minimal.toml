@@ -1,0 +1,5 @@
+schema_version = 1
+
+[tasks.test]
+program = "cargo"
+args = ["test", "--all-features"]

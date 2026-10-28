@@ -134,13 +134,81 @@ impl HostExit {
 pub(crate) struct RunLedger {
     pub schema: u32,
     pub runs: Vec<RunInfo>,
+    #[serde(default)]
+    pub retired: Vec<RetiredRun>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RetiredRun {
+    pub run_id: String,
+    pub result: Option<crate::structured_result::BodyReference>,
+    pub events: Option<crate::structured_result::BodyReference>,
+    pub log_identity: Option<(u64, u64)>,
+    pub runtime_identity: Option<(u64, u64)>,
 }
 impl RunLedger {
     pub(crate) fn validate(&self) -> Result<()> {
         ensure!(
-            self.schema == 1 && self.runs.len() <= RUN_RECORD_LIMIT,
+            matches!(self.schema, 1 | 2)
+                && self.runs.iter().filter(|run| !run.pinned).count() <= RUN_RECORD_LIMIT
+                && self.runs.iter().filter(|run| run.pinned).count()
+                    <= crate::result_store::PINNED_RUN_LIMIT
+                && (self.schema == 2 || self.runs.iter().all(|run| !run.pinned)),
             "unsupported or oversized run ledger; preserved"
         );
+        let pinned_bytes: u64 = self
+            .runs
+            .iter()
+            .filter(|run| run.pinned)
+            .map(|run| {
+                run.structured_result
+                    .as_ref()
+                    .and_then(|result| result.body())
+                    .map_or(0, |body| body.bytes)
+                    .saturating_add(
+                        run.events
+                            .as_ref()
+                            .and_then(|events| events.body.as_ref())
+                            .map_or(0, |body| body.bytes),
+                    )
+                    .saturating_add(run.log.bytes)
+            })
+            .fold(0u64, u64::saturating_add);
+        ensure!(
+            pinned_bytes <= crate::result_store::PINNED_RESULT_BYTES,
+            "pinned run budget exceeds 128 MiB"
+        );
+        ensure!(
+            self.retired.len() <= RUN_RECORD_LIMIT && (self.schema == 2 || self.retired.is_empty()),
+            "invalid retired Run cleanup journal"
+        );
+        let mut retired_ids = HashSet::new();
+        for retired in &self.retired {
+            valid_id(&retired.run_id)?;
+            ensure!(
+                retired_ids.insert(&retired.run_id)
+                    && !self.runs.iter().any(|run| run.run_id == retired.run_id),
+                "retired Run is duplicated or still retained"
+            );
+            for (body, limit) in [
+                (
+                    retired.result.as_ref(),
+                    crate::structured_result::MAX_RESULT_BYTES,
+                ),
+                (
+                    retired.events.as_ref(),
+                    crate::result_store::MAX_EVENT_BYTES,
+                ),
+            ] {
+                if let Some(body) = body {
+                    ensure!(
+                        body.run_id == retired.run_id && body.bytes <= limit,
+                        "invalid retired body identity"
+                    );
+                    digest(&body.sha256)?;
+                }
+            }
+        }
         let mut ids = HashSet::new();
         let mut operations = HashSet::new();
         let mut sessions = HashSet::new();
@@ -160,6 +228,48 @@ impl RunLedger {
                     "duplicate Run session identity; ledger preserved"
                 );
             }
+            if let Some(result) = &run.structured_result {
+                ensure!(
+                    self.schema == 1
+                        || !matches!(
+                            result,
+                            crate::structured_result::StructuredResult::Available { .. }
+                        ),
+                    "new run ledger cannot inline result bodies"
+                );
+                if let Some(body) = result.body() {
+                    ensure!(
+                        body.run_id == run.run_id
+                            && body.bytes <= crate::structured_result::MAX_RESULT_BYTES,
+                        "invalid result body reference"
+                    );
+                    digest(&body.sha256)?;
+                }
+                if self.schema == 2 {
+                    ensure!(
+                        serde_json::to_vec(result)?.len() <= 8192,
+                        "result summary exceeds ledger limit"
+                    );
+                }
+            }
+            if let Some(events) = &run.events {
+                ensure!(
+                    serde_json::to_vec(events)?.len() <= 8192,
+                    "event summary exceeds ledger limit"
+                );
+                if let Some(body) = &events.body {
+                    ensure!(
+                        body.run_id == run.run_id
+                            && body.bytes <= crate::result_store::MAX_EVENT_BYTES,
+                        "invalid event body reference"
+                    );
+                    digest(&body.sha256)?;
+                }
+            }
+            ensure!(
+                !run.pinned || (!run.state.is_live() && run.cleanup_confirmed),
+                "pinned run must have confirmed cleanup"
+            );
             valid_name(&run.name)?;
             absolute_path(&run.cwd)?;
             digest(&run.launch_digest)?;
@@ -191,9 +301,31 @@ impl RunLedger {
             {
                 valid_id(id)?;
             }
+            if let Some(snapshot) = &run.artifact.snapshot {
+                ensure!(
+                    self.schema == 2
+                        && Some(&snapshot.path) == run.artifact.path.as_ref()
+                        && snapshot.size <= crate::run::MAX_AUTO_ARTIFACT_BYTES
+                        && snapshot.size == snapshot.identity.size
+                        && run.artifact.observed_at_ms.is_some(),
+                    "invalid artifact byte observation"
+                );
+                digest(&snapshot.sha256)?;
+            }
+            if let Some(error) = &run.artifact.snapshot_error {
+                ensure!(
+                    error.len() <= 2048 && !error.chars().any(char::is_control),
+                    "invalid artifact observation error"
+                );
+            }
             ensure!(
-                !run.artifact.verified_bytes,
-                "this schema cannot attest artifact byte identity"
+                !run.artifact.verified_bytes
+                    || (self.schema == 2
+                        && run.artifact.snapshot.is_some()
+                        && run.artifact.from_run.is_some()
+                        && run.artifact.from_task.is_some()
+                        && run.cleanup_confirmed),
+                "artifact equality lacks measured bytes or predecessor"
             );
             ensure!(
                 run.timeout_seconds

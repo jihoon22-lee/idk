@@ -176,6 +176,26 @@ impl Installer {
             root: root.to_owned(),
         })
     }
+    /// Read-only lookup for a host's exact executable bytes. This does not
+    /// create an installation, acquire a writer lock, activate, or run a binary.
+    pub fn compatible_client(root: &Path, build_id: &str) -> Result<Option<PathBuf>> {
+        valid_digest(build_id)?;
+        ensure!(root.is_absolute(), "installation prefix must be absolute");
+        let installer = Self {
+            root: root.to_owned(),
+        };
+        let state = installer.read_state()?;
+        for generation in state.generations.values() {
+            if generation.binary_sha256 == build_id {
+                installer.verify_generation(generation)?;
+                return Ok(Some(
+                    installer.generation_path(&generation.name).join(BINARY),
+                ));
+            }
+        }
+        Ok(None)
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
