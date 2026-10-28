@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditorReview {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finding: Option<FindingReference>,
     pub run_id: String,
     pub problem_id: String,
     pub project_id: String,
@@ -27,6 +29,19 @@ pub struct EditorReview {
     pub configuration_changed_since_run: bool,
     pub source_changed_during_run: Option<bool>,
     pub source_identity_is_snapshot: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FindingReference {
+    pub body_sha256: String,
+    pub index: usize,
+}
+struct ReviewedLocation {
+    problem_id: String,
+    finding: Option<FindingReference>,
+    reported: PathBuf,
+    line: Option<u32>,
+    column: Option<u32>,
+    result: Option<crate::structured_result::StructuredResult>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Identity {
@@ -53,6 +68,7 @@ impl Identity {
 }
 #[derive(Clone)]
 pub struct EditorPlan {
+    result: Option<crate::structured_result::StructuredResult>,
     review: EditorReview,
     config: EditorConfig,
     source: Identity,
@@ -92,16 +108,95 @@ impl EditorService<'_> {
                 && problem.log_generation == run.log.generation,
             "diagnostic belongs to another run or log generation"
         );
+        let reported = problem
+            .file
+            .as_ref()
+            .context("this tool diagnostic has no file location; inspect its original log")?;
+        self.review_location(
+            run,
+            ReviewedLocation {
+                problem_id: problem.id.clone(),
+                finding: None,
+                reported: reported.clone(),
+                line: problem.range.as_ref().map(|position| position.line),
+                column: problem.range.as_ref().and_then(|position| position.column),
+                result: None,
+            },
+        )
+    }
+    /// Structured locations carry immutable result identity/index, never a fake log offset.
+    pub fn review_finding(
+        &self,
+        run: &RunInfo,
+        finding: &crate::result_store::StructuredFinding,
+    ) -> Result<EditorPlan> {
+        let result = run
+            .structured_result
+            .as_ref()
+            .context("run has no structured result")?;
+        let body = result
+            .body()
+            .context("run result has no immutable body reference")?;
+        ensure!(
+            body.run_id == run.run_id && body.sha256 == finding.body_sha256,
+            "finding belongs to another run or result body"
+        );
+        let page = crate::result_store::ResultStore::open(&self.store.state_dir)?.findings(
+            result,
+            finding.index,
+            1,
+        )?;
+        let actual = page
+            .findings
+            .first()
+            .context("finding result is missing, expired, changed or unavailable")?;
+        ensure!(
+            actual.index == finding.index
+                && actual.body_sha256 == finding.body_sha256
+                && actual.location == finding.location,
+            "finding location differs from the immutable result"
+        );
+        let location = actual
+            .location
+            .as_ref()
+            .context("this structured finding has no actionable file location")?;
+        let line = location
+            .start_line
+            .map(u32::try_from)
+            .transpose()
+            .context("finding line exceeds editor range")?;
+        let column = location
+            .start_column
+            .map(u32::try_from)
+            .transpose()
+            .context("finding column exceeds editor range")?;
+        ensure!(
+            column.is_none() || line.is_some(),
+            "finding column has no source line"
+        );
+        self.review_location(
+            run,
+            ReviewedLocation {
+                problem_id: String::new(),
+                finding: Some(FindingReference {
+                    body_sha256: finding.body_sha256.clone(),
+                    index: finding.index,
+                }),
+                reported: PathBuf::from(&location.path),
+                line,
+                column,
+                result: Some(page.result),
+            },
+        )
+    }
+    fn review_location(&self, run: &RunInfo, location: ReviewedLocation) -> Result<EditorPlan> {
         let workspace = self.store.load()?;
         let project = workspace.project(&run.project_id)?;
         let config = project.editor.clone().context(
             "configure an external editor for this project before opening a source location",
         )?;
         validate_config(&config)?;
-        let reported = problem
-            .file
-            .as_ref()
-            .context("this tool diagnostic has no file location; inspect its original log")?;
+        let reported = &location.reported;
         let file = resolve_location(
             &run.cwd,
             reported,
@@ -110,17 +205,19 @@ impl EditorService<'_> {
         )?;
         let source = regular_source(&file)?;
         let (executable_path, executable_identity) = executable(&config.executable)?;
-        let line = problem.range.as_ref().map(|position| position.line);
-        let column = problem.range.as_ref().and_then(|position| position.column);
+        let line = location.line;
+        let column = location.column;
         let arguments = arguments(&config, &file, line, column)?;
         let cwd = project
             .root
             .canonicalize()
             .context("current project root unavailable")?;
         Ok(EditorPlan {
+            result: location.result,
             review: EditorReview {
+                finding: location.finding,
                 run_id: run.run_id.clone(),
-                problem_id: problem.id.clone(),
+                problem_id: location.problem_id,
                 project_id: run.project_id.clone(),
                 file,
                 line,
@@ -146,6 +243,15 @@ impl EditorService<'_> {
         plan: &EditorPlan,
         environment: BTreeMap<String, String>,
     ) -> Result<CommandBuilder> {
+        if let Some(result) = &plan.result {
+            ensure!(
+                crate::result_store::ResultStore::open(&self.store.state_dir)?
+                    .verify(result)
+                    .summary()
+                    .is_some(),
+                "structured result changed or expired after editor review"
+            );
+        }
         let workspace = self.store.load()?;
         let project = workspace.project(&plan.review.project_id)?;
         ensure!(
@@ -353,4 +459,152 @@ fn executable(path: &Path) -> Result<(PathBuf, Identity)> {
         );
     }
     Ok((resolved, Identity::of(&metadata)))
+}
+
+/// A discovered editor is a reviewable configuration, never an executable side effect.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditorCandidate {
+    pub config: EditorConfig,
+    pub origin: String,
+    pub available: bool,
+    pub reason: Option<String>,
+}
+
+/// Explicit project/user preference wins even when unavailable. VISUAL and EDITOR
+/// are tokenized as literal argv, never evaluated as shell programs.
+pub fn discover_editor(
+    preferred: Option<&EditorConfig>,
+    environment: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<Option<EditorCandidate>> {
+    ensure!(cwd.is_absolute(), "editor discovery cwd must be absolute");
+    if let Some(config) = preferred {
+        return Ok(Some(editor_candidate(
+            config.clone(),
+            "explicit preference",
+        )));
+    }
+    for name in ["VISUAL", "EDITOR"] {
+        if let Some(value) = environment
+            .get(name)
+            .filter(|value| !value.trim().is_empty())
+        {
+            let mut argv =
+                parse_editor_argv(value).with_context(|| format!("invalid {name} argv"))?;
+            ensure!(
+                !argv.is_empty() && !argv[0].is_empty(),
+                "{name} has no executable"
+            );
+            let program = argv.remove(0);
+            let resolved = crate::discovery::resolve_program(&program, cwd, environment);
+            let path = resolved.as_ref().cloned().unwrap_or_else(|_| {
+                let path = Path::new(&program);
+                if path.is_absolute() {
+                    path.into()
+                } else {
+                    cwd.join(path)
+                }
+            });
+            if !argv.iter().any(|arg| arg.contains("{file}")) {
+                if !argv.iter().any(|arg| arg == "--") {
+                    argv.push("--".into());
+                }
+                argv.push("{file}".into());
+            }
+            let mut candidate = editor_candidate(
+                EditorConfig {
+                    executable: path,
+                    args: argv,
+                    external_gui: false,
+                },
+                name,
+            );
+            if let Err(error) = resolved {
+                candidate.available = false;
+                candidate.reason = Some(error.to_string());
+            }
+            return Ok(Some(candidate));
+        }
+    }
+    for program in ["nvim", "vim", "vi", "nano", "emacs"] {
+        if let Ok(path) = crate::discovery::resolve_program(program, cwd, environment) {
+            let candidate = editor_candidate(
+                EditorConfig {
+                    executable: path,
+                    args: vec!["--".into(), "{file}".into()],
+                    external_gui: false,
+                },
+                "installed candidate",
+            );
+            if candidate.available {
+                return Ok(Some(candidate));
+            }
+        }
+    }
+    Ok(None)
+}
+fn editor_candidate(config: EditorConfig, origin: &str) -> EditorCandidate {
+    let result = validate_config(&config).and_then(|_| executable(&config.executable).map(|_| ()));
+    EditorCandidate {
+        config,
+        origin: origin.into(),
+        available: result.is_ok(),
+        reason: result.err().map(|e| e.to_string()),
+    }
+}
+
+/// Shell-like quoting only. No variables, globbing, substitutions, pipes, redirects
+/// or command separators are interpreted; the returned strings are literal argv.
+pub fn parse_editor_argv(value: &str) -> Result<Vec<String>> {
+    ensure!(
+        value.len() <= 16 * 1024 && !value.chars().any(char::is_control),
+        "editor command is too long or contains control characters"
+    );
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut active = false;
+    let mut quote = None;
+    let mut chars = value.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some('\''), '\'') | (Some('"'), '"') => quote = None,
+            (Some('\''), _) => current.push(c),
+            (Some('"'), '\\') => {
+                let next = chars.next().context("unterminated editor escape")?;
+                if !['$', '`', '"', '\\'].contains(&next) {
+                    current.push('\\');
+                }
+                current.push(next);
+            }
+            (Some('"'), _) => current.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                active = true;
+            }
+            (None, '\\') => {
+                current.push(chars.next().context("unterminated editor escape")?);
+                active = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if active {
+                    args.push(std::mem::take(&mut current));
+                    active = false;
+                }
+            }
+            _ => {
+                current.push(c);
+                active = true;
+            }
+        }
+        ensure!(
+            args.len() <= 64 && current.len() <= 8192,
+            "editor argv exceeds bounds"
+        );
+    }
+    ensure!(quote.is_none(), "unterminated editor quote");
+    if active {
+        args.push(current);
+    }
+    ensure!(args.len() <= 64, "editor argv exceeds bounds");
+    Ok(args)
 }

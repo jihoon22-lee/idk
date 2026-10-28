@@ -64,6 +64,7 @@ impl TaskService<'_> {
         task_id: &str,
         environment: &LaunchEnvironment,
     ) -> Result<TaskReview> {
+        crate::portable::ensure_current(self.store, project_id)?;
         let workspace = self.store.load()?;
         let project = workspace.project(project_id)?;
         let task = project
@@ -120,6 +121,7 @@ impl TaskService<'_> {
         task_id: &str,
         environment: LaunchEnvironment,
     ) -> Result<TaskLaunchPlan> {
+        crate::portable::ensure_current(self.store, project_id)?;
         let workspace = self.store.load()?;
         let project = workspace.project(project_id)?;
         project.validate()?;

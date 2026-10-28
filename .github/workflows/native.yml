@@ -86,7 +86,8 @@ jobs:
           IDK_TEST_LAUNCHER: ${{ github.workspace }}/dist/idk-linux-x86_64
         run: |
           cargo test --locked -p idk-workspace --test cli_projects --test cli_runs --test cli_doctor \
-            --test host_runtime --test host_git --test host_runs --test project_flow -- --nocapture
+            --test host_runtime --test host_git --test host_runs --test project_flow \
+            --test usability_flow --test usability_results_ui --test cli_discovery --test cli_results -- --nocapture
           cargo test --locked -p idk-workspace --test ui_runs complete_menu_flow -- --nocapture
 
       - name: Independent build directory reproducibility

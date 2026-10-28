@@ -9,6 +9,24 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-28
+
+### Added
+- `idk PATH`로 기본 프로젝트를 열고 살아 있는 셸의 PID·cwd·변수를 보존해 재접속한다.
+- 선택적 `idk.toml`, 개인 shell/editor 선호, 출처 표시와 `config init/show/set/unset/sync/export`를 추가한다. CLI/TUI는 같은 resolver·CAS writer를 쓰며 자동 진입은 파일을 만들지 않는다.
+- Cargo/package scripts 읽기 기반 후보와 기본 편집기 발견, 한 화면의 작업 승인·실행을 추가한다. 검토 digest를 시작까지 재확인한다.
+- 최대 16 MiB 결과의 독립 본문·요약·digest 보관, bounded finding/raw 조회와 위치별 편집기 연결, pin/unpin/export·범위/identity 확인 비교·bounded events 관찰을 추가한다.
+- 선택적 ici/Lens의 명시 버전 검사와 wrapper 초안, artifact의 실제 bytes 관찰·predecessor 일치 판정을 추가한다. 다른 두 도구 없이 기본 사용이 가능하다.
+
+### Fixed
+- native 설정 재지정 시 argv/env를 보존하고 환경 key 수정·제거·전체 교체를 구분한다.
+- 설치 기본 위치와 구 host의 검증된 호환 generation/data 경로 안내를 추가한다. 실행 중인 셸·Run을 자동 종료하지 않는다.
+
+### Compatibility
+- 로컬 configuration schema 3·host protocol 3을 사용하고 schema 1/2와 기존 inline 결과를 보존하며 읽는다. 사용자 선언 schema 1과 설치 inventory schema 2는 별개다.
+- 결과 보관 예산·pin 한도를 적용한다. incomplete·missing·unknown을 성공이나 resolved로 바꾸지 않는다. artifact 관찰은 변경 가능한 현재 파일의 영구 snapshot 보증이 아니다.
+- 대상 RHEL·폐쇄망 사용자 실기는 미실행 후속이며 NFS host state/runtime 지원은 추가하지 않는다.
+
 ## [0.5.0] - 2026-10-28
 
 ### Added
@@ -370,7 +388,8 @@
 [Native release promotion](docs/native-release.md)을 따른다. 공개 전 검사 완료와 대상
 RHEL·폐쇄망 실기는 별도이며 실기는 공개 후 사용자 후속으로 남긴다.
 
-[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/jihoon22-lee/idk/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/jihoon22-lee/idk/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jihoon22-lee/idk/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/jihoon22-lee/idk/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/jihoon22-lee/idk/compare/v0.4.1...v0.4.2

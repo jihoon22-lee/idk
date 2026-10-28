@@ -58,6 +58,8 @@ impl App<'_> {
             .map(Runtime::drain)
             .unwrap_or_default();
         for reply in replies {
+            let entry_ready = self.entry_pending
+                && (reply.tag == Tag::List || (reply.tag == Tag::Connect && reply.result.is_err()));
             let changed_host = reply.identity.as_ref().is_some_and(|(host, _)| {
                 self.runtime
                     .as_ref()
@@ -108,6 +110,9 @@ impl App<'_> {
                         self.error(format!("{error:#}"));
                     }
                 }
+            }
+            if entry_ready {
+                self.open_entry_terminal();
             }
         }
         self.tick_git();

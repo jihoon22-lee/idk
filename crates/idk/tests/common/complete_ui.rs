@@ -224,7 +224,7 @@ pub(super) fn run() {
     // Connect entirely through fields and visible menus; no configuration DSL.
     flow.key(KeyCode::Char('n'));
     flow.wait("Project name");
-    flow.paste("전체 한글");
+    flow.replace("전체 한글");
     flow.key(KeyCode::Tab);
     flow.replace(source.to_str().unwrap());
     flow.key(KeyCode::Tab);
@@ -335,12 +335,9 @@ pub(super) fn run() {
     flow.wait("한글 빌드");
     flow.key(KeyCode::F(2));
     flow.resize(36, 120);
-    flow.wait("Task approved");
-    flow.key(KeyCode::Enter);
-    flow.wait("F2 Start reviewed task");
-    flow.key(KeyCode::F(2));
     flow.wait("Run registered");
     flow.wait("한글 오류");
+    flow.wait("Captured Run is READ ONLY");
     flow.control('g');
     flow.key(KeyCode::Char('4'));
     flow.wait("Failed");
@@ -359,7 +356,10 @@ pub(super) fn run() {
     assert_eq!(runs[0].cwd, source);
     flow.key(KeyCode::Char('E'));
     flow.wait("Editor configuration");
-    flow.paste(editor.to_str().unwrap());
+    flow.replace(editor.to_str().unwrap());
+    flow.key(KeyCode::Tab);
+    flow.key(KeyCode::F(9));
+    flow.paste("+{line}\n--\n{file}");
     flow.key(KeyCode::F(2));
     flow.wait("Definition saved");
     flow.key(KeyCode::Char('p'));

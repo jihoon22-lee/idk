@@ -80,6 +80,16 @@ pub enum ProjectCommand {
         shell_arg: Vec<String>,
         #[arg(long)]
         shell_env: Vec<String>,
+        /// Set selected environment keys while preserving other overrides.
+        #[arg(long, conflicts_with = "shell_env")]
+        shell_env_set: Vec<String>,
+        /// Remove selected environment override keys.
+        #[arg(long, conflicts_with = "shell_env")]
+        shell_env_unset: Vec<String>,
+        #[arg(long, conflicts_with = "shell_env")]
+        clear_shell_env: bool,
+        #[arg(long, conflicts_with = "shell_arg")]
+        clear_shell_args: bool,
         #[arg(long)]
         shell: Option<PathBuf>,
         #[arg(long)]
@@ -302,6 +312,10 @@ pub fn project(store: &Store, command: ProjectCommand) -> Result<()> {
             legacy_csh,
             shell_arg,
             shell_env,
+            shell_env_set,
+            shell_env_unset,
+            clear_shell_env,
+            clear_shell_args,
             shell,
             init_cwd,
             login,
@@ -315,23 +329,24 @@ pub fn project(store: &Store, command: ProjectCommand) -> Result<()> {
             if legacy_csh {
                 config.native = None;
             }
-            if native {
-                config.native = Some(Default::default());
-                config.login = false;
-                config.sources.clear();
-            }
-            if !shell_arg.is_empty() || !shell_env.is_empty() {
-                let definition = config
-                    .native
-                    .as_mut()
-                    .context("shell args/env require --native or an existing native terminal")?;
-                if !shell_arg.is_empty() {
-                    definition.args = shell_arg;
-                }
-                if !shell_env.is_empty() {
-                    definition.env = parse_environment(shell_env)?;
-                }
-            }
+            let args = if clear_shell_args {
+                Some(Vec::new())
+            } else if !shell_arg.is_empty() {
+                Some(shell_arg)
+            } else {
+                None
+            };
+            let patch = idk_workspace::portable::EnvironmentPatch {
+                replace: if shell_env.is_empty() {
+                    None
+                } else {
+                    Some(parse_environment(shell_env)?)
+                },
+                clear: clear_shell_env,
+                set: parse_environment(shell_env_set)?,
+                unset: shell_env_unset,
+            };
+            idk_workspace::portable::patch_native(&mut config, native, args, &patch)?;
             if let Some(path) = shell {
                 config.executable = absolute(&path)?;
             }

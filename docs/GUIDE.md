@@ -7,7 +7,9 @@
 
 | 명령/화면 | 용도 |
 |---|---|
-| `idk` | 프로젝트·터미널·Git·작업·결과 TUI |
+| `idk .` / `idk PATH` | 폴더 기본값으로 열기·기존 셸 재접속; `idk`는 프로젝트 목록 |
+| `idk config` | 선택적 idk.toml 초기화·출처 확인·부분 변경·동기화·export |
+| `idk discover` | 읽기 기반 작업 후보·선택 도구 초안·artifact 현재 bytes 관찰 |
 | `idk project` | 프로젝트 연결·native 셸 정의·기존 csh 초기화 호환 |
 | `idk terminal` | 저장된 터미널의 cwd·환경 정의 |
 | `idk session` / `idk host` | 실제 셸과 호스트의 조회·접속·명시적 종료 |
@@ -24,6 +26,16 @@
 
 상세 정의·키 안내는 [workspace-guide.md](workspace-guide.md), 패키지 수명과 저장 위치는
 [offline-workspace.md](offline-workspace.md)를 참조한다. 상세 문서는 각 구현과 함께 갱신한다.
+
+## 빠른 사용
+
+프로젝트 폴더에서 `idk .`을 실행한다. checkout이 지정한 startup·환경에 검토가 필요하면 초기화 화면에서 승인한다. 기존 live 셸은 먼저 재접속하며 source를 반복하지 않는다. 같은 root의 저장된 정의가 여러 개이면 `idk PATH --select <project-id>`로 선택한다.
+
+Tasks(`3`)의 `d`는 Cargo/package scripts를 읽어 후보를 표시한다. `F2`는 선택 후보를 등록하고, 목록의 `Enter`는 argv·cwd 검토를 연다. 첫 실행도 `F2` 한 번으로 승인하고 시작한다. CLI는 `idk discover PROJECT`, `idk run start PROJECT TASK --approve --wait`를 사용한다. 승인된 정의의 재실행에는 `--approve`가 필요 없다.
+
+Results(`4`)의 `s`는 구조화 findings, `v`는 원문 페이지, `o`는 원문 export다. `P`로 pin을 켜고 끄며 기준 결과에서 `b`, 비교할 결과에서 `c`를 누른다. `i`는 진행 관찰이고 실제 exit와 별개다. 파일 위치의 `Enter`는 편집기 검토를 연다. 설정하지 않았으면 VISUAL/EDITOR와 설치 후보를 사용하며 명시한 편집기가 없을 때 다른 도구로 바꾸지 않는다.
+
+선택적 [idk.toml 설정](portable-settings.md)은 `config init`으로 만들며 기본값을 모두 적을 필요가 없다. TUI의 `C`로 같은 선언을 편집한다. 외부 변경 충돌에서는 원본을 보존하고 초안을 유지한다. `config show`는 resolved 값과 출처를 표시하고 `config sync`는 실행 없이 갱신한다.
 
 ## 셸과 작업 등록
 
@@ -56,11 +68,11 @@ idk task add demo check --interpreter /bin/sh --script-file /absolute/scripts/ch
 기존 terminal source가 남아 있으면 native 전환이 거부되므로 먼저 해당 정의를 검토해 변경한다.
 원본 `.csh`를 번역하거나 삭제하지 않는다.
 
-기존 schema 1 설정은 legacy 의미로 읽고 새 실행 정의는 schema 2로 저장한다. 이행 시 기존
-설정을 `workspace.schema1.toml`로 보존하고 직전 저장본은 `workspace.previous.toml`로 남긴다. 새 schema를 구 binary가 읽는다고 보장하지 않으며,
+기존 schema 1/2 설정은 원래 실행 의미로 읽고 새 로컬 설정은 schema 3으로 저장한다. 이행 시 원래
+schema 설정을 보존하고 직전 저장본은 `workspace.previous.toml`로 남긴다. 사용자 선언 idk.toml의 schema 1은 별도 계약이다. 새 schema를 구 binary가 읽는다고 보장하지 않으며,
 설치 generation 복구가 실행 중 변경된 사용자 데이터를 과거 snapshot으로 되돌리지는 않는다.
-v0.4에서 첫 업그레이드는 검증한 새 archive에서 추출한 새 binary로 설치한다. 구 installer는
-새 schema/protocol을 거부한다. protocol 2 client는 구 host와 연결하지 않으며, 살아 있는 구
+v0.4/v0.5에서 v0.6으로 첫 업그레이드는 검증한 새 archive에서 추출한 새 binary로 설치한다. 구 installer는
+새 schema/protocol을 거부한다. protocol 3 client는 구 host와 연결하지 않으며, 살아 있는 구
 host에는 보존된 원래 generation의 binary와 같은 data 경로로 접속한다.
 
 ## 수명을 구분하기

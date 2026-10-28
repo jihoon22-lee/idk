@@ -1,8 +1,10 @@
 use clap::{Parser, Subcommand};
+mod cli_config;
 mod cli_package;
 mod cli_project;
 mod cli_run;
 mod cli_session;
+mod cli_task_discovery;
 
 #[derive(Parser)]
 #[command(name = "idk", version, about = "Project-centric terminal workspace")]
@@ -10,12 +12,24 @@ struct Cli {
     /// Isolated configuration/state/runtime root (default: XDG idk/v0.4).
     #[arg(long, global = true)]
     data_dir: Option<std::path::PathBuf>,
+    /// Open a project folder, for example: idk .
+    path: Option<std::path::PathBuf>,
+    /// Select an existing project ID when multiple definitions share this folder.
+    #[arg(long, requires = "path")]
+    select: Option<String>,
     #[command(subcommand)]
     command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Discover project tasks from files, or explicitly inspect an optional tool.
+    Discover(cli_task_discovery::DiscoverArgs),
+    /// Inspect or edit portable project declarations and personal preferences.
+    Config {
+        #[command(subcommand)]
+        command: cli_config::ConfigCommand,
+    },
     /// Register and review build/test tasks without executing them.
     Task {
         #[command(subcommand)]
@@ -103,7 +117,27 @@ enum Commands {
 
 fn main() {
     let cli = Cli::parse();
+    if cli.path.is_some() && cli.command.is_some() {
+        eprintln!("idk: choose a project PATH entry or a subcommand; use --help for examples");
+        std::process::exit(2);
+    }
     match cli.command {
+        Some(Commands::Discover(args)) => {
+            let result = idk_workspace::store::Store::open(cli.data_dir.as_deref())
+                .and_then(|store| cli_task_discovery::execute(&store, args));
+            if let Err(error) = result {
+                eprintln!("idk: {error:#}");
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Config { command }) => {
+            let result = idk_workspace::store::Store::open(cli.data_dir.as_deref())
+                .and_then(|store| cli_config::execute(&store, command));
+            if let Err(error) = result {
+                eprintln!("idk: {error:#}");
+                std::process::exit(1);
+            }
+        }
         Some(Commands::Task { command }) => {
             let result = idk_workspace::store::Store::open(cli.data_dir.as_deref())
                 .and_then(|store| cli_run::task(&store, command));
@@ -247,8 +281,39 @@ fn main() {
                 eprintln!("idk requires a terminal; use --help for commands");
                 std::process::exit(2);
             }
-            let result = idk_workspace::store::Store::open(cli.data_dir.as_deref())
-                .and_then(|store| idk_workspace::ui::run(&store));
+            let result =
+                idk_workspace::store::Store::open(cli.data_dir.as_deref()).and_then(|store| {
+                    if let Some(path) = cli.path {
+                        // Diagnose a live older host before a path convenience action migrates local definitions.
+                        match idk_workspace::client::Client::connect_with_launcher(
+                            &store,
+                            &std::env::current_exe()?,
+                        ) {
+                            Ok(_) => {}
+                            Err(error)
+                                if error.downcast_ref::<std::io::Error>().is_some_and(
+                                    |error| {
+                                        matches!(
+                                            error.kind(),
+                                            std::io::ErrorKind::NotFound
+                                                | std::io::ErrorKind::ConnectionRefused
+                                        )
+                                    },
+                                ) => {}
+                            Err(error) => return Err(error),
+                        }
+                        let resolved = idk_workspace::portable::resolve_for(
+                            &store,
+                            &path,
+                            &idk_workspace::project::LaunchEnvironment::capture()?,
+                            cli.select.as_deref(),
+                        )?;
+                        let project = idk_workspace::portable::apply(&store, resolved)?;
+                        idk_workspace::ui::run_project(&store, &project.id)
+                    } else {
+                        idk_workspace::ui::run(&store)
+                    }
+                });
             if let Err(error) = result {
                 eprintln!("{error:#}");
                 std::process::exit(1);

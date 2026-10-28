@@ -383,11 +383,9 @@ fn task_draft_approval_failed_result_log_search_problem_and_literal_editor() {
     wait(&mut app, "Definition saved");
     assert!(!f.root.join("init-count").exists());
     key(&mut app, KeyCode::Enter);
-    wait(&mut app, "F2 Approve task");
-    key(&mut app, KeyCode::F(2));
-    wait(&mut app, "Task approved");
+    wait(&mut app, "F2 Approve and start this exact task");
     assert!(!f.root.join("init-count").exists());
-    start(&mut app);
+    key(&mut app, KeyCode::F(2));
     wait(&mut app, "Run registered");
     pump(&mut app, Duration::from_millis(300));
     controls(&mut app);
@@ -540,8 +538,6 @@ fn new_task_form_preserves_literal_source_arguments_and_starts_selected_ordered_
     wait(&mut app, "Review task");
     wait(&mut app, "Name Ordered UI task");
     key(&mut app, KeyCode::F(2));
-    wait(&mut app, "Task approved");
-    start(&mut app);
     wait(&mut app, "Run registered");
     pump(&mut app, Duration::from_millis(300));
     controls(&mut app);

@@ -105,12 +105,14 @@ impl Store {
         if previous.revision != expected_revision {
             bail!("configuration changed elsewhere; reload before saving");
         }
-        if workspace
+        if !workspace.portable.is_empty() {
+            workspace.schema = crate::model::SCHEMA;
+        } else if workspace
             .projects
             .iter()
             .any(|p| p.shell.native.is_some() || p.tasks.iter().any(|t| t.execution.is_some()))
         {
-            workspace.schema = crate::model::SCHEMA;
+            workspace.schema = workspace.schema.max(2);
         }
         workspace.validate()?;
         workspace.revision = expected_revision
@@ -122,8 +124,10 @@ impl Store {
         }
         if self.config_path().exists() {
             let old = read_private(&self.config_path(), MAX_MESSAGE)?;
-            if previous.schema == 1 && workspace.schema == crate::model::SCHEMA {
-                let migration_backup = self.config_dir.join("workspace.schema1.toml");
+            if previous.schema < workspace.schema {
+                let migration_backup = self
+                    .config_dir
+                    .join(format!("workspace.schema{}.toml", previous.schema));
                 if !migration_backup.exists() {
                     atomic_write(&migration_backup, &old)?;
                 }

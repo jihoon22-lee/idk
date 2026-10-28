@@ -1,6 +1,6 @@
 # 설치·업데이트·복구
 
-현재 Linux x86_64 배포 archive 예시는 `idk-0.5.0-x86_64-unknown-linux-musl.tar.gz` 하나다. 내부에는 정적 실행 파일,
+현재 Linux x86_64 배포 archive 예시는 `idk-0.6.0-x86_64-unknown-linux-musl.tar.gz` 하나다. 내부에는 정적 실행 파일,
 manifest, 구성요소 checksum, 의존성 inventory, 라이선스 원문이 있다. 제품 실행에 Python·Rust·C
 compiler나 사외 네트워크가 필요하지 않다. 셸과 Git은 해당 환경의 기존 실행 파일을 사용한다. 별도 도구 팩·전체 구 기능 호환·자동 도구 설치는 포함하지 않는다.
 
@@ -13,11 +13,12 @@ archive 확인·실행 파일 추출 절차로 시작한다. 공개 릴리스에
 ```text
 idk package targets
 idk package verify-url https://github.com/jihoon22-lee/idk/releases/download/v<VERSION>/idk-<VERSION>-x86_64-unknown-linux-musl.tar.gz --sha256 <trusted-SHA256>
-idk package install-url https://github.com/jihoon22-lee/idk/releases/download/v<VERSION>/idk-<VERSION>-x86_64-unknown-linux-musl.tar.gz --sha256 <trusted-SHA256> --prefix /absolute/user/path/idk-workspace
+idk package install-url https://github.com/jihoon22-lee/idk/releases/download/v<VERSION>/idk-<VERSION>-x86_64-unknown-linux-musl.tar.gz --sha256 <trusted-SHA256>
 ```
 
-v0.4에서 최초 전환은 아래 로컬 archive 절차로 검증한 **새 binary**를 사용한다. 구 installer는
-새 schema/protocol을 거부하므로 구 binary로 업데이트를 시도하지 않는다. 원래 generation은
+v0.4/v0.5에서 v0.6으로 전환할 때는 아래 로컬 archive 절차로 검증한 **새 binary**를 사용한다.
+v0.6은 workspace schema 3·host protocol 3을 사용하며 구 installer는 새 schema/protocol을
+거부하므로 구 binary로 업데이트를 시도하지 않는다. 원래 generation은
 보존되어 살아 있는 구 host에 다시 접속할 때 사용할 수 있다.
 
 검토한 install-url 명령에 `--yes`를 붙이면 검증한 bytes를 기존 generation 설치 경로로
@@ -45,12 +46,13 @@ macOS/native Windows 또는 모든 Linux filesystem 지원을 뜻하지 않는�
    실제 승인 값으로 바꾼다. 프로그램은 `--yes` 전까지 활성화하지 않는다.
 
 ```text
-./idk-linux-x86_64 package verify /absolute/path/idk-0.5.0-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256>
-./idk-linux-x86_64 package install /absolute/path/idk-0.5.0-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256> --prefix /absolute/user/path/idk-workspace
+./idk-linux-x86_64 package verify /absolute/path/idk-0.6.0-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256>
+./idk-linux-x86_64 package install /absolute/path/idk-0.6.0-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256>
 ```
 
-검토한 같은 명령에 `--yes`를 붙여 설치한다. 이후 `/absolute/user/path/idk-workspace/idk`로
-실행한다. shell startup 파일이나 PATH를 자동 수정하지 않으며 root·시스템 서비스가 필요하지 않다.
+검토한 같은 명령에 `--yes`를 붙여 설치한다. 기본 prefix는 `$HOME/.local/share/idk`이며
+이후 `"$HOME/.local/share/idk/idk" .`으로 프로젝트 폴더를 연다. 다른 위치가 필요하면 설치·조회·
+복구 명령에 같은 `--prefix /absolute/user/path/idk-workspace`를 명시한다. shell startup 파일이나 PATH를 자동 수정하지 않으며 root·시스템 서비스가 필요하지 않다.
 noexec·읽기 전용·권한 거부를 만났다면 정책상 허용된 위치를 확인한다. 프로그램은 다른 경로로
 실행 파일을 몰래 복사하거나 마운트 정책을 바꾸지 않는다.
 
@@ -83,13 +85,30 @@ NFS·로그아웃·장기 프로세스 정책은 현지에서 확인한다. 일�
 host에서 이어지며, 설치·업데이트·제거는 로그를 초기화하거나 이전 snapshot으로 되돌리지 않는다.
 Run 자체의 로그 한도·retention 정책은 별도로 계속 적용된다. 이전 generation을 삭제하거나 host를 자동 재시작하지
 않는다. 새 client와 기존 host의 실행 파일 SHA 또는 protocol이 다르면 연결을 거부한다. 설치 결과와
-`package status --prefix <prefix>`에 남은 generation 경로가 나온다. 기존 host에 연결할 때는 그 host를
-시작한 원래 generation의 `idk-linux-x86_64`와 같은 `--data-dir`/XDG 경로로 TUI를 열어
-살아 있는 셸·Run을 선택한다. 같은 버전 번호여도
-build SHA가 다르면 같은 host로 취급하지 않는다. 정상 종료 후 새 entrypoint에서 새 host를 시작할 수 있다.
+`package status`(사용자 지정 설치는 `--prefix <prefix>`)에 보존 generation이 나온다.
 
-현재 v0.4는 기존 schema와 protocol을 읽을 수 있는 업데이트만 지원한다. 데이터 schema migration이나
-commit 이후 낮은 버전으로의 downgrade를 제공하지 않는다. 설치 schema 2는 가장 높게 확정한
+새 client가 기존 host와 맞지 않으면 socket의 실제 peer PID와 `/proc` 실행 파일 identity를 읽고,
+보존 archive·manifest·구성요소 bytes를 검증해 일치하는 client의 **같은 data 경로** 명령을 안내한다.
+저장된 PID 기록만으로 실행 파일을 선택하지 않으며 어떤 프로세스도 자동 종료·재시작하지 않는다.
+명시적으로 다시 조회할 수도 있다.
+
+```text
+idk --data-dir /absolute/existing-data package compatible-client
+idk --data-dir /absolute/existing-data package compatible-client --prefix /absolute/existing-installation
+```
+
+응답의 `inspect_command`는 검증한 구 generation의 `session list` 명령이다. 먼저 이 명령으로
+기존 session ID와 PID를 확인한다. 같은 `invocation` 뒤에 `session snapshot SESSION_ID`를 붙이면
+화면을 읽기 전용 JSON으로 볼 수 있다. workspace schema가 구 client와 호환될 때만 같은 invocation의
+`session attach SESSION_ID`로 TUI에 재접속한다. schema 3으로 명시 sync한 설정은 v0.5 TUI가 읽을 수
+없으므로 binary 링크만 되돌려 해결하지 않는다. `idk PATH`는 이런 암묵적 이행을 피하도록 구 host를
+먼저 확인하며, 불일치하면 설정을 바꾸기 전에 호환 client를 안내한다. 같은 버전 번호라도 build SHA가
+다르면 다른 host로 취급한다. 사용자가 기존 작업을 정상 종료하고 cleanup을 확인한 뒤 새 entrypoint로
+새 host를 시작할 수 있다.
+
+설정 schema 1/2는 읽고 portable 정의 저장 시 schema 3으로 이행하며 첫 원본을 별도 보관한다.
+자세한 범위는 [portable 설정](portable-settings.md)을 따른다. 이 설정 이행은 live 실행 데이터 복원이나
+commit 이후 낮은 버전으로의 downgrade가 아니다. 설치 schema 2는 가장 높게 확정한
 버전 하한을 uninstall 뒤에도 보존한다. stage만 했거나 건강 검사에 실패한 높은 버전은 하한을
 올리지 않는다. 이전 설치 schema를 추정 변환하지 않으며 원본을 보존한 채 거부한다. 바이너리만 되돌려 새 데이터가 호환되지
 않는 구현에 열리도록 하지 않는다. 모든 설치 generation은 자동 정리 없이 보존하며 128개 한도에
@@ -98,10 +117,10 @@ commit 이후 낮은 버전으로의 downgrade를 제공하지 않는다. 설치
 ## 중단 복구와 제거
 
 ```text
-idk package recover --prefix /absolute/user/path/idk-workspace
-idk package recover --prefix /absolute/user/path/idk-workspace --yes
-idk package verify-generation <status에-기록된-generation> --prefix /absolute/user/path/idk-workspace
-idk package uninstall --prefix /absolute/user/path/idk-workspace
+idk package recover
+idk package recover --yes
+idk package verify-generation <status에-기록된-generation>
+idk package uninstall
 ```
 
 recover는 기록된 중단 작업의 정확한 대상과 보존 generation을 먼저 보여 준다. commit 전에 중단됐다면

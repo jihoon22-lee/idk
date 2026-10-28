@@ -181,7 +181,7 @@ fn canceled_unicode_draft_survives_resize_and_review_does_not_persist() {
     let fixture = Fixture::new();
     let mut app = fixture.app();
     key(&mut app, KeyCode::Char('n'));
-    paste(&mut app, "한글A");
+    replace(&mut app, "한글A");
     key(&mut app, KeyCode::Left);
     key(&mut app, KeyCode::Backspace);
     assert!(screen(&mut app, 44, 16).contains("한A"));
@@ -527,6 +527,7 @@ fn actual_tui_connects_through_a_pty_resizes_and_exits_without_running_scripts()
     wait_screen(&terminal, "Connect an existing folder");
     terminal.input(b"n").unwrap();
     wait_screen(&terminal, "Project name");
+    terminal.input(b"\x15").unwrap();
     terminal.input("PTY 한글".as_bytes()).unwrap();
     terminal.input(b"\t\t\x01\x0b").unwrap();
     terminal

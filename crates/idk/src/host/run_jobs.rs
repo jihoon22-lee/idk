@@ -5,7 +5,7 @@ use crate::model::{new_id, SourceGate};
 use crate::problems::{ProblemParser, ProblemSet};
 use crate::project::LaunchEnvironment;
 use crate::protocol::safe_error;
-use crate::run::{observe_source, BeginReservation, BeginTicket, RunRegistry, SourceProbe};
+use crate::run::{BeginReservation, BeginTicket, RunRegistry, SourceProbe};
 use crate::run_wire::*;
 use crate::store::{ensure_private_dir, Store};
 use crate::task::TaskService;
@@ -27,7 +27,7 @@ const TTL: Duration = Duration::from_secs(300);
 /// Source observations (bounded git subprocesses) run on a dedicated worker so
 /// the registry worker never blocks on git. Results carry a sequence tag.
 struct Prober {
-    jobs: mpsc::SyncSender<(u64, Option<crate::git::Repository>, SourceGate)>,
+    jobs: mpsc::SyncSender<(u64, SourceProbe)>,
     results: mpsc::Receiver<(u64, SourceObservation)>,
     seq: u64,
 }
@@ -36,18 +36,14 @@ impl Prober {
         // Bounded like every other worker queue: at most one job per deferred
         // entry is ever outstanding. Results also cover observations whose
         // entry already timed out, so the worker never blocks indefinitely.
-        let (jobs, incoming) =
-            mpsc::sync_channel::<(u64, Option<crate::git::Repository>, SourceGate)>(LIMIT_DEFERRED);
+        let (jobs, incoming) = mpsc::sync_channel::<(u64, SourceProbe)>(LIMIT_DEFERRED);
         let (results, outgoing) =
             mpsc::sync_channel::<(u64, SourceObservation)>(2 * LIMIT_DEFERRED);
         std::thread::Builder::new()
             .name("idk-run-probe".into())
             .spawn(move || {
-                while let Ok((seq, repository, gate)) = incoming.recv() {
-                    if results
-                        .send((seq, observe_source(repository.as_ref(), &gate)))
-                        .is_err()
-                    {
+                while let Ok((seq, probe)) = incoming.recv() {
+                    if results.send((seq, probe.observe_now())).is_err() {
                         return;
                     }
                 }
@@ -63,12 +59,14 @@ impl Prober {
     /// probe back so the caller can observe synchronously instead of losing
     /// the work.
     fn dispatch(&mut self, probe: SourceProbe) -> std::result::Result<u64, SourceProbe> {
-        let (repository, gate) = probe.into_parts();
         self.seq += 1;
         self.jobs
-            .try_send((self.seq, repository.clone(), gate.clone()))
+            .try_send((self.seq, probe))
             .map(|()| self.seq)
-            .map_err(|_| SourceProbe::from_parts(repository, gate))
+            .map_err(|error| match error {
+                mpsc::TrySendError::Full((_, probe))
+                | mpsc::TrySendError::Disconnected((_, probe)) => probe,
+            })
     }
 }
 /// A work item waiting on an off-thread source observation. Registry access
@@ -638,6 +636,7 @@ fn execute(
             project_id,
             task_id,
             operation_id,
+            expected_digest,
             environment,
             parallel,
             rows,
@@ -652,6 +651,12 @@ fn execute(
             ensure!(
                 !cancel.load(Ordering::Acquire),
                 "task preparation cancelled"
+            );
+            ensure!(
+                expected_digest
+                    .as_ref()
+                    .is_none_or(|digest| digest == &plan.launch_digest),
+                "task changed since execution review"
             );
             let started = registry.begin(plan, &operation_id, parallel)?;
             *run_out = Some(started.run.clone());
@@ -700,6 +705,50 @@ fn execute(
         RunRequest::Problems { run_id } => {
             Ok(RunResult::Problems(problems(registry, &run_id, cancel)?))
         }
+        RunRequest::ResultRaw {
+            run_id,
+            offset,
+            limit,
+        } => Ok(RunResult::ResultRaw(
+            registry.result_raw(&run_id, offset, limit)?,
+        )),
+        RunRequest::Findings {
+            run_id,
+            offset,
+            limit,
+        } => Ok(RunResult::Findings(
+            registry.findings(&run_id, offset, limit)?,
+        )),
+        RunRequest::ResultPin { run_id, pinned } => Ok(RunResult::ResultPinned(
+            registry.pin_result(&run_id, pinned)?,
+        )),
+        RunRequest::ResultExport { run_id, path } => Ok(RunResult::ResultExported(
+            registry.export_result(&run_id, &path)?,
+        )),
+        RunRequest::Compare {
+            baseline_run_id,
+            run_id,
+        } => Ok(RunResult::Compared(
+            registry.compare_results(&baseline_run_id, &run_id)?,
+        )),
+        RunRequest::Events { run_id } => Ok(RunResult::Events(registry.events(&run_id)?)),
+        RunRequest::FindingEditorReview {
+            run_id,
+            body_sha256,
+            index,
+        } => {
+            ensure!(reviews.len() < 64, "too many pending editor reviews");
+            let run = registry.info(&run_id)?;
+            let finding = registry.structured_finding(&run_id, &body_sha256, index)?;
+            let plan = (EditorService { store }).review_finding(&run, &finding)?;
+            let review = plan.review().clone();
+            let id = new_id();
+            reviews.insert(id.clone(), (client.into(), plan, Instant::now()));
+            Ok(RunResult::EditorReview {
+                review_id: id,
+                review,
+            })
+        }
         RunRequest::EditorReview {
             run_id,
             problem_id,
@@ -739,6 +788,13 @@ fn execute(
                 owner == client && !expired(*created, TTL, Instant::now()),
                 "editor review belongs to another client or expired"
             );
+            if let Some(finding) = &plan.review().finding {
+                registry.structured_finding(
+                    &plan.review().run_id,
+                    &finding.body_sha256,
+                    finding.index,
+                )?;
+            }
             let command = (EditorService { store }).command(plan, environment)?;
             let session = session.context("editor session was not reserved")?;
             let revision = store.load()?.revision;
@@ -1133,6 +1189,7 @@ fn request_events(
         project_id,
         task_id,
         operation_id,
+        expected_digest,
         environment,
         parallel,
         rows,
@@ -1152,6 +1209,20 @@ fn request_events(
             let same_task = ticket.project_id() == project_id && ticket.task_id() == task_id;
             if !same_operation && !(same_task && !parallel) {
                 continue;
+            }
+            if expected_digest
+                .as_ref()
+                .is_some_and(|digest| digest != ticket.launch_digest())
+            {
+                return vec![Event {
+                    job_id: Some(id),
+                    session_id: session,
+                    runtime: None,
+                    run: None,
+                    result: Err(anyhow::anyhow!("task changed since execution review")),
+                    cancel: None,
+                    work_done: true,
+                }];
             }
             if same_operation {
                 let tasks = TaskService { store };
@@ -1189,7 +1260,15 @@ fn request_events(
                 let tasks = TaskService { store };
                 let dispatch = LaunchEnvironment::from_variables(environment.clone())
                     .and_then(|env| tasks.launch_plan(project_id, task_id, env))
-                    .and_then(|plan| registry.begin_reserve(plan, operation_id, *parallel));
+                    .and_then(|plan| {
+                        ensure!(
+                            expected_digest
+                                .as_ref()
+                                .is_none_or(|digest| digest == &plan.launch_digest),
+                            "task changed since execution review"
+                        );
+                        registry.begin_reserve(plan, operation_id, *parallel)
+                    });
                 match dispatch {
                     Ok(BeginReservation::Existing(reply)) => {
                         return vec![Event {
@@ -1197,7 +1276,7 @@ fn request_events(
                             session_id: Some(session_id.clone()),
                             runtime: None,
                             run: Some(reply.run.clone()),
-                            result: Ok(RunResult::Started(reply)),
+                            result: Ok(RunResult::Started(*reply)),
                             cancel: None,
                             work_done: true,
                         }];
@@ -1218,7 +1297,7 @@ fn request_events(
                                     rows: *rows,
                                     cols: *cols,
                                     cancel: cancel.clone(),
-                                    ticket: Box::new(ticket),
+                                    ticket,
                                     waiters: Vec::new(),
                                 });
                                 return Vec::new();
@@ -1235,7 +1314,7 @@ fn request_events(
                                     session_id,
                                     *rows,
                                     *cols,
-                                    ticket,
+                                    *ticket,
                                     observation,
                                     cancel,
                                     &mut runtime,
@@ -1315,7 +1394,7 @@ fn finish_events(
     }
     if deferred.len() < LIMIT_DEFERRED {
         if let Ok(probe) = registry.finish_probe(&run_id) {
-            if probe.identity().is_some() {
+            if probe.identity().is_some() || probe.has_artifact() {
                 let identity = probe.identity();
                 let dispatched = match prober.as_mut() {
                     Some(worker) => worker.dispatch(probe),
@@ -1335,7 +1414,11 @@ fn finish_events(
                         return Vec::new();
                     }
                     Err(probe) => {
-                        let observation = probe.observe_now();
+                        let observation = probe
+                            .skip_artifact(
+                                "artifact worker unavailable or saturated; bytes unverified",
+                            )
+                            .observe_now();
                         let result =
                             registry.finish_observed(&run_id, exit, true, error, observation);
                         let run = result
@@ -1357,7 +1440,12 @@ fn finish_events(
             }
         }
     }
-    let result = registry.finish(&run_id, exit, true, error);
+    let result = registry.finish_probe(&run_id).and_then(|probe| {
+        let observation = probe
+            .skip_artifact("artifact observation queue full; bytes unverified")
+            .observe_now();
+        registry.finish_observed(&run_id, exit, true, error, observation)
+    });
     let run = result
         .as_ref()
         .ok()
@@ -1561,8 +1649,7 @@ mod tests {
     fn prober_queue_is_bounded_and_saturated_dispatch_hands_probe_back() {
         // Nothing drains the job channel: it fills at LIMIT_DEFERRED and the
         // next dispatch returns the probe for the synchronous fallback.
-        let (jobs, _incoming) =
-            mpsc::sync_channel::<(u64, Option<crate::git::Repository>, SourceGate)>(LIMIT_DEFERRED);
+        let (jobs, _incoming) = mpsc::sync_channel::<(u64, SourceProbe)>(LIMIT_DEFERRED);
         let (_results, outgoing) =
             mpsc::sync_channel::<(u64, SourceObservation)>(2 * LIMIT_DEFERRED);
         let mut prober = Prober {
@@ -1581,8 +1668,7 @@ mod tests {
     }
     #[test]
     fn dead_prober_dispatch_hands_probe_back() {
-        let (jobs, incoming) =
-            mpsc::sync_channel::<(u64, Option<crate::git::Repository>, SourceGate)>(LIMIT_DEFERRED);
+        let (jobs, incoming) = mpsc::sync_channel::<(u64, SourceProbe)>(LIMIT_DEFERRED);
         let (_results, outgoing) =
             mpsc::sync_channel::<(u64, SourceObservation)>(2 * LIMIT_DEFERRED);
         let mut prober = Prober {

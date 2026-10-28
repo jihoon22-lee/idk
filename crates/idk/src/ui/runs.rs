@@ -22,6 +22,10 @@ pub(super) enum Page {
     Log,
     Problems,
     Search,
+    Findings,
+    RawResult,
+    Comparison,
+    Events,
 }
 #[derive(Clone, Debug)]
 pub(super) enum RunDialog {
@@ -43,6 +47,16 @@ pub(super) enum RunDialog {
         scroll: u16,
     },
     Search(CommitDraft),
+    Export(CommitDraft),
+    Configuration {
+        root: PathBuf,
+        expected: Option<String>,
+        draft: CommitDraft,
+    },
+    Discovery {
+        report: crate::discovery::DiscoveryReport,
+        selected: usize,
+    },
     Attach {
         session: String,
         owner: String,
@@ -70,6 +84,17 @@ pub(super) struct RunUi {
     pub log: Option<LogView>,
     pub problems: Option<crate::problems::ProblemSet>,
     pub search: Option<LogSearch>,
+    pub result_raw: Option<crate::result_store::RawResultPage>,
+    pub findings: Option<crate::result_store::FindingPage>,
+    pub comparison: Option<crate::result_store::ResultComparison>,
+    pub events: Option<crate::result_store::EventProgress>,
+    approval_start: Option<RunRequest>,
+    pub baseline: Option<String>,
+    baseline_pending: Option<String>,
+    pub advanced_details: bool,
+    pub finding_index: usize,
+    raw_history: Vec<u64>,
+    finding_history: Vec<usize>,
     pub problem_index: usize,
     pub match_index: usize,
     pub scroll: u16,
@@ -77,6 +102,7 @@ pub(super) struct RunUi {
     pub attached: Option<String>,
     input_policy: HashMap<String, bool>,
     pending_attach: Option<(String, bool)>,
+    attach_inflight: Option<(String, u64)>,
     intents: HashMap<u64, Intent>,
     nonce: u64,
     epoch: u64,
@@ -97,6 +123,17 @@ impl Default for RunUi {
             log: None,
             problems: None,
             search: None,
+            result_raw: None,
+            findings: None,
+            comparison: None,
+            events: None,
+            approval_start: None,
+            baseline: None,
+            baseline_pending: None,
+            advanced_details: false,
+            finding_index: 0,
+            raw_history: vec![],
+            finding_history: vec![],
             problem_index: 0,
             match_index: 0,
             scroll: 0,
@@ -104,6 +141,7 @@ impl Default for RunUi {
             attached: None,
             input_policy: HashMap::new(),
             pending_attach: None,
+            attach_inflight: None,
             intents: HashMap::new(),
             nonce: 0,
             epoch: 0,
@@ -158,10 +196,19 @@ impl App<'_> {
         Ok(())
     }
     pub(super) fn invalidate_run_navigation(&mut self) {
+        self.runs.approval_start = None;
         self.runs.epoch += 1;
         self.runs.pending_attach = None;
+        self.runs.attach_inflight = None;
     }
     pub(super) fn run_host_changed(&mut self) {
+        self.runs.approval_start = None;
+        self.runs.baseline_pending = None;
+        self.runs.attach_inflight = None;
+        self.runs.result_raw = None;
+        self.runs.findings = None;
+        self.runs.comparison = None;
+        self.runs.events = None;
         self.runs.intents.clear();
         self.runs.attached = None;
         self.runs.input_policy.clear();
@@ -173,8 +220,27 @@ impl App<'_> {
         self.runs.runs.clear();
     }
     pub(super) fn run_rpc_error(&mut self, tag: &Tag) {
+        if matches!(tag, Tag::RunAttached(_) | Tag::RunAttachInfo(_)) {
+            self.runs.attach_inflight = None;
+        }
         match tag {
             Tag::RunSubmit(n) | Tag::RunJob(n) => {
+                if self
+                    .runs
+                    .intents
+                    .get(n)
+                    .is_some_and(|intent| matches!(intent.request, RunRequest::ResultPin { .. }))
+                {
+                    self.runs.baseline_pending = None;
+                }
+                if self
+                    .runs
+                    .intents
+                    .get(n)
+                    .is_some_and(|intent| matches!(intent.request, RunRequest::ApproveTask { .. }))
+                {
+                    self.runs.approval_start = None;
+                }
                 self.runs.intents.remove(n);
             }
             _ => {}
@@ -257,6 +323,9 @@ impl App<'_> {
     pub(super) fn accept_run_reply(&mut self, tag: Tag, value: serde_json::Value) -> Result<()> {
         if let Tag::RunAttached(epoch) = tag {
             let session: SessionInfo = serde_json::from_value(value)?;
+            if self.runs.attach_inflight.as_ref() == Some(&(session.session_id.clone(), epoch)) {
+                self.runs.attach_inflight = None;
+            }
             if epoch != self.runs.epoch {
                 self.runtime.as_mut().unwrap().submit(
                     Some(Request::Detach {
@@ -338,6 +407,12 @@ impl App<'_> {
             return Ok(());
         }
         if job.state != RunJobState::Complete {
+            if matches!(intent.request, RunRequest::ResultPin { .. }) {
+                self.runs.baseline_pending = None;
+            }
+            if matches!(intent.request, RunRequest::ApproveTask { .. }) {
+                self.runs.approval_start = None;
+            }
             if matches!(intent.request, RunRequest::Info { .. }) {
                 self.runs.pending_attach = None;
             }
@@ -443,7 +518,32 @@ impl App<'_> {
                         .tasks
                         .insert(project_id.clone(), (self.view.revision, tasks));
                 }
-                self.info("Task approved. Enter reviews the task before starting.");
+                if let Some(request) = self.runs.approval_start.take() {
+                    let same = match (&request, &intent.request) {
+                        (
+                            RunRequest::Start {
+                                project_id: a,
+                                task_id: b,
+                                expected_digest: Some(c),
+                                ..
+                            },
+                            RunRequest::ApproveTask {
+                                project_id: x,
+                                task_id: y,
+                                digest: z,
+                                ..
+                            },
+                        ) => a == x && b == y && c == z,
+                        _ => false,
+                    };
+                    if same && current && self.dialog.is_none() && self.menu_visible {
+                        self.run_submit(request)?;
+                    } else {
+                        self.info("Task approved. Start was cancelled because the review context changed.");
+                    }
+                } else {
+                    self.info("Task approved.");
+                }
                 self.runs.last_poll = Instant::now() - Duration::from_secs(3);
             }
             RunResult::Started(reply) => {
@@ -528,6 +628,62 @@ impl App<'_> {
                     self.runs.problem_index = 0;
                 }
             }
+            RunResult::ResultRaw(page) => {
+                if current && intent.run == self.runs.selected {
+                    if let Some(old) = &self.runs.result_raw {
+                        if page.offset > old.offset {
+                            self.runs.raw_history.push(old.offset);
+                        } else if page.offset < old.offset
+                            && self.runs.raw_history.last() == Some(&page.offset)
+                        {
+                            self.runs.raw_history.pop();
+                        }
+                    }
+                    self.runs.result_raw = Some(page);
+                }
+            }
+            RunResult::Findings(page) => {
+                if current && intent.run == self.runs.selected {
+                    if let Some(old) = &self.runs.findings {
+                        if page.offset > old.offset {
+                            self.runs.finding_history.push(old.offset);
+                        } else if page.offset < old.offset
+                            && self.runs.finding_history.last() == Some(&page.offset)
+                        {
+                            self.runs.finding_history.pop();
+                        }
+                    }
+                    self.runs.findings = Some(page);
+                }
+            }
+            RunResult::ResultPinned(run) => {
+                if self.runs.baseline_pending.as_deref() == Some(&run.run_id) {
+                    self.runs.baseline_pending = None;
+                    if run.pinned {
+                        self.runs.baseline = Some(run.run_id.clone());
+                    }
+                }
+                self.run_update(run);
+                self.info("Run retention updated.");
+            }
+            RunResult::ResultExported(export) => {
+                self.info(format!(
+                    "Exported {} bytes to {} · SHA256 {}",
+                    export.bytes,
+                    export.path.display(),
+                    export.sha256
+                ));
+            }
+            RunResult::Compared(comparison) => {
+                if current && intent.run == self.runs.selected {
+                    self.runs.comparison = Some(comparison);
+                }
+            }
+            RunResult::Events(progress) => {
+                if current && intent.run == self.runs.selected {
+                    self.runs.events = Some(progress);
+                }
+            }
             RunResult::EditorReview { review_id, review } => {
                 if current
                     && intent.run == self.runs.selected
@@ -576,13 +732,23 @@ impl App<'_> {
         }
     }
     fn run_attach_review(&mut self, session: &str) -> Result<()> {
+        if self
+            .runs
+            .attach_inflight
+            .as_ref()
+            .is_some_and(|(id, epoch)| id == session && *epoch == self.runs.epoch)
+        {
+            return Ok(());
+        }
         self.runtime.as_mut().context("No runtime")?.submit(
             Some(Request::Snapshot {
                 session: session.into(),
                 since: None,
             }),
             Tag::RunAttachInfo(self.runs.epoch),
-        )
+        )?;
+        self.runs.attach_inflight = Some((session.into(), self.runs.epoch));
+        Ok(())
     }
     fn run_attach(&mut self, session: &str, takeover: bool) -> Result<()> {
         self.runtime.as_mut().context("No runtime")?.submit(
@@ -591,7 +757,9 @@ impl App<'_> {
                 takeover,
             }),
             Tag::RunAttached(self.runs.epoch),
-        )
+        )?;
+        self.runs.attach_inflight = Some((session.into(), self.runs.epoch));
+        Ok(())
     }
     pub(super) fn captured_run_input(&self) -> bool {
         !self.git.focused
@@ -672,6 +840,19 @@ impl App<'_> {
                 KeyCode::Char('n') | KeyCode::Char('e') if self.tab == 2 => {
                     self.run_task_form(key.code == KeyCode::Char('n'))?
                 }
+                KeyCode::Char('d') if self.tab == 2 => {
+                    let root = &self
+                        .current_project()
+                        .context("Select a project")?
+                        .project
+                        .root;
+                    let report =
+                        crate::discovery::discover_tasks(root, self.environment.variables())?;
+                    self.dialog = Some(Dialog::Run(Box::new(RunDialog::Discovery {
+                        report,
+                        selected: 0,
+                    })));
+                }
                 KeyCode::Char('E') => {
                     let project = self
                         .current_project()
@@ -680,7 +861,18 @@ impl App<'_> {
                         .clone();
                     let key = (project.id.clone(), Some("@editor".into()));
                     let form = self.runs.drafts.get(&key).cloned().unwrap_or_else(|| {
-                        RunForm::editor(project.id, self.view.revision, project.editor)
+                        let config = project.editor.or_else(|| {
+                            crate::editor::discover_editor(
+                                None,
+                                self.environment.variables(),
+                                &project.root,
+                            )
+                            .ok()
+                            .flatten()
+                            .filter(|c| c.available)
+                            .map(|c| c.config)
+                        });
+                        RunForm::editor(project.id, self.view.revision, config)
                     });
                     self.dialog = Some(Dialog::Run(Box::new(RunDialog::Form(Box::new(form)))));
                 }
@@ -701,6 +893,7 @@ impl App<'_> {
                     })?;
                 }
                 KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown => {
+                    self.runs.approval_start = None;
                     let down = matches!(key.code, KeyCode::Down | KeyCode::PageDown);
                     let step = if matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
                         8
@@ -719,6 +912,10 @@ impl App<'_> {
                             Page::Problems => (
                                 &mut self.runs.problem_index,
                                 self.runs.problems.as_ref().map_or(0, |p| p.problems.len()),
+                            ),
+                            Page::Findings => (
+                                &mut self.runs.finding_index,
+                                self.runs.findings.as_ref().map_or(0, |p| p.findings.len()),
                             ),
                             Page::Search => (
                                 &mut self.runs.match_index,
@@ -789,6 +986,178 @@ impl App<'_> {
                         .context("Select a match")?
                         .offset;
                     self.run_open_log(offset)?;
+                }
+                KeyCode::Enter if self.runs.page == Page::Findings => {
+                    let finding = self
+                        .runs
+                        .findings
+                        .as_ref()
+                        .and_then(|p| p.findings.get(self.runs.finding_index))
+                        .context("Select a finding")?;
+                    ensure!(
+                        finding.location.is_some(),
+                        "This finding has no source location; inspect its message and raw result."
+                    );
+                    self.run_submit(RunRequest::FindingEditorReview {
+                        run_id: self.runs.selected.clone().context("Select a Run")?,
+                        body_sha256: finding.body_sha256.clone(),
+                        index: finding.index,
+                    })?;
+                }
+                KeyCode::Char('A') if self.tab == 3 => {
+                    self.runs.advanced_details = !self.runs.advanced_details;
+                }
+                KeyCode::Char('s') if self.tab == 3 => {
+                    let run_id = self
+                        .runs
+                        .selected
+                        .clone()
+                        .context("Open Run details first")?;
+                    self.runs.epoch += 1;
+                    self.runs.page = Page::Findings;
+                    self.runs.findings = None;
+                    self.runs.finding_index = 0;
+                    self.runs.finding_history.clear();
+                    self.runs.scroll = 0;
+                    self.run_submit(RunRequest::Findings {
+                        run_id,
+                        offset: 0,
+                        limit: 100,
+                    })?;
+                }
+                KeyCode::Char('v') if self.tab == 3 => {
+                    let run_id = self
+                        .runs
+                        .selected
+                        .clone()
+                        .context("Open Run details first")?;
+                    self.runs.epoch += 1;
+                    self.runs.page = Page::RawResult;
+                    self.runs.result_raw = None;
+                    self.runs.raw_history.clear();
+                    self.runs.scroll = 0;
+                    self.run_submit(RunRequest::ResultRaw {
+                        run_id,
+                        offset: 0,
+                        limit: 65536,
+                    })?;
+                }
+                KeyCode::Char(']') | KeyCode::Char('[')
+                    if matches!(self.runs.page, Page::RawResult | Page::Findings) =>
+                {
+                    ensure!(
+                        !self
+                            .runs
+                            .intents
+                            .values()
+                            .any(|intent| intent.epoch == self.runs.epoch
+                                && intent.run == self.runs.selected
+                                && matches!(
+                                    intent.request,
+                                    RunRequest::ResultRaw { .. } | RunRequest::Findings { .. }
+                                )),
+                        "Wait for the requested result page before moving again"
+                    );
+                    let next = key.code == KeyCode::Char(']');
+                    let run_id = self.runs.selected.clone().context("Select a Run")?;
+                    let request = if self.runs.page == Page::RawResult {
+                        let page = self
+                            .runs
+                            .result_raw
+                            .as_ref()
+                            .context("Wait for the result page")?;
+                        let offset = if next {
+                            ensure!(!page.eof, "Last result page");
+                            page.next_offset
+                        } else {
+                            *self.runs.raw_history.last().context("First result page")?
+                        };
+                        RunRequest::ResultRaw {
+                            run_id,
+                            offset,
+                            limit: 65536,
+                        }
+                    } else {
+                        let page = self
+                            .runs
+                            .findings
+                            .as_ref()
+                            .context("Wait for the finding page")?;
+                        let offset = if next {
+                            ensure!(page.more, "Last finding page");
+                            page.next_offset
+                        } else {
+                            *self
+                                .runs
+                                .finding_history
+                                .last()
+                                .context("First finding page")?
+                        };
+                        self.runs.finding_index = 0;
+                        RunRequest::Findings {
+                            run_id,
+                            offset,
+                            limit: 100,
+                        }
+                    };
+                    self.runs.scroll = 0;
+                    self.run_submit(request)?;
+                }
+                KeyCode::Char('P') if self.tab == 3 => {
+                    let run = self.current_run().context("Open Run details first")?;
+                    self.run_submit(RunRequest::ResultPin {
+                        run_id: run.run_id.clone(),
+                        pinned: !run.pinned,
+                    })?;
+                }
+                KeyCode::Char('b') if self.tab == 3 => {
+                    let run_id = self
+                        .current_run()
+                        .context("Open Run details first")?
+                        .run_id
+                        .clone();
+                    self.run_submit(RunRequest::ResultPin {
+                        run_id: run_id.clone(),
+                        pinned: true,
+                    })?;
+                    self.runs.baseline_pending = Some(run_id);
+                    self.info("Pinning baseline; c compares another Run after confirmation.");
+                }
+                KeyCode::Char('c') if self.tab == 3 => {
+                    let run_id = self
+                        .runs
+                        .selected
+                        .clone()
+                        .context("Open Run details first")?;
+                    let baseline_run_id = self
+                        .runs
+                        .baseline
+                        .clone()
+                        .context("Open a baseline Run and press b first")?;
+                    self.runs.page = Page::Comparison;
+                    self.runs.comparison = None;
+                    self.runs.scroll = 0;
+                    self.run_submit(RunRequest::Compare {
+                        baseline_run_id,
+                        run_id,
+                    })?;
+                }
+                KeyCode::Char('i') if self.tab == 3 => {
+                    let run_id = self
+                        .runs
+                        .selected
+                        .clone()
+                        .context("Open Run details first")?;
+                    self.runs.page = Page::Events;
+                    self.runs.events = None;
+                    self.runs.scroll = 0;
+                    self.run_submit(RunRequest::Events { run_id })?;
+                }
+                KeyCode::Char('o') if self.tab == 3 => {
+                    ensure!(self.runs.selected.is_some(), "Open Run details first");
+                    self.dialog = Some(Dialog::Run(Box::new(RunDialog::Export(
+                        CommitDraft::default(),
+                    ))));
                 }
                 KeyCode::Char('l') if self.tab == 3 => self.run_open_log(0)?,
                 KeyCode::Char('p') if self.tab == 3 && self.runs.selected.is_some() => {
@@ -869,6 +1238,11 @@ impl App<'_> {
                                 | RunRequest::Problems { .. }
                                 | RunRequest::ReviewTask { .. }
                                 | RunRequest::EditorReview { .. }
+                                | RunRequest::FindingEditorReview { .. }
+                                | RunRequest::ResultRaw { .. }
+                                | RunRequest::Findings { .. }
+                                | RunRequest::Compare { .. }
+                                | RunRequest::Events { .. }
                         ) {
                             intent.cancelled = true;
                         }
@@ -888,6 +1262,11 @@ impl App<'_> {
                                     | RunRequest::Problems { .. }
                                     | RunRequest::ReviewTask { .. }
                                     | RunRequest::EditorReview { .. }
+                                    | RunRequest::FindingEditorReview { .. }
+                                    | RunRequest::ResultRaw { .. }
+                                    | RunRequest::Findings { .. }
+                                    | RunRequest::Compare { .. }
+                                    | RunRequest::Events { .. }
                             )
                         })
                         .filter_map(|intent| intent.job.clone())
@@ -987,6 +1366,27 @@ impl App<'_> {
         );
         self.runs.drafts.insert(key, form);
     }
+    pub(super) fn open_configuration(&mut self) -> Result<()> {
+        let root = self
+            .current_project()
+            .context("Select a project")?
+            .project
+            .root
+            .clone();
+        let snapshot = crate::portable::read(&root)?;
+        let (text, expected) = snapshot
+            .map(|value| (value.raw, Some(value.digest)))
+            .unwrap_or(("schema_version = 1\n".into(), None));
+        self.dialog = Some(Dialog::Run(Box::new(RunDialog::Configuration {
+            root,
+            expected,
+            draft: CommitDraft {
+                cursor: text.len(),
+                text,
+            },
+        })));
+        Ok(())
+    }
     pub(super) fn run_paste(&mut self, text: &str) -> Result<()> {
         if let Some(Dialog::Run(dialog)) = &mut self.dialog {
             match dialog.as_mut() {
@@ -994,7 +1394,11 @@ impl App<'_> {
                     .value
                     .insert(text)
                     .map_err(anyhow::Error::msg)?,
-                RunDialog::Search(input) => input.insert(text).map_err(anyhow::Error::msg)?,
+                RunDialog::Search(input)
+                | RunDialog::Export(input)
+                | RunDialog::Configuration { draft: input, .. } => {
+                    input.insert(text).map_err(anyhow::Error::msg)?
+                }
                 _ => {}
             }
         }
@@ -1002,8 +1406,20 @@ impl App<'_> {
     }
     pub(super) fn handle_run_dialog(&mut self, mut dialog: RunDialog, key: KeyEvent) -> Result<()> {
         if key.code == KeyCode::Esc {
-            if let RunDialog::Form(form) = dialog {
-                self.keep_run_form(*form);
+            self.runs.approval_start = None;
+            self.runs.attach_inflight = None;
+            match dialog {
+                RunDialog::Form(form) => self.keep_run_form(*form),
+                RunDialog::Configuration { draft, .. } => {
+                    let path = self
+                        .service
+                        .store
+                        .config_dir
+                        .join(format!("declaration-draft-{}.toml", crate::model::new_id()));
+                    crate::store::atomic_write(&path, draft.text.as_bytes())?;
+                    self.info(format!("Declaration draft kept at {}", path.display()));
+                }
+                _ => {}
             }
             self.runs.epoch += 1;
             return Ok(());
@@ -1011,9 +1427,13 @@ impl App<'_> {
         let result = (|| -> Result<bool> {
             match &mut dialog {
                 RunDialog::Form(form) => match key.code {
-                    KeyCode::Tab => form.selected = (form.selected + 1) % form.fields.len(),
-                    KeyCode::BackTab => {
-                        form.selected = (form.selected + form.fields.len() - 1) % form.fields.len()
+                    KeyCode::F(9) => form.fields[form.selected].value = CommitDraft::default(),
+                    KeyCode::F(11) if form.task.is_some() => form.toggle_arguments()?,
+                    KeyCode::Tab => form.move_field(false),
+                    KeyCode::BackTab => form.move_field(true),
+                    KeyCode::F(10) => {
+                        form.advanced = !form.advanced;
+                        form.selected = 0;
                     }
                     KeyCode::F(6) if form.task.is_some() => {
                         ensure!(form.task.as_ref().is_some_and(|task| task.execution.is_none()), "Sources belong to legacy csh tasks; use an explicit script for native initialization");
@@ -1021,6 +1441,7 @@ impl App<'_> {
                             form.source_count < 32,
                             "A task supports at most 32 source scripts"
                         );
+                        form.advanced = true;
                         form.add_source(SourceSpec {
                             path: PathBuf::new(),
                             args: vec![],
@@ -1029,6 +1450,7 @@ impl App<'_> {
                     KeyCode::F(7) if form.task.is_some() => {
                         ensure!(form.task.as_ref().is_some_and(|task| task.execution.is_none()), "Same-shell steps belong to legacy csh tasks; use one explicit script for shared state");
                         ensure!(form.step_count < 64, "A task supports at most 64 steps");
+                        form.advanced = true;
                         form.add_step(TaskStep {
                             name: format!("Step {}", form.step_count + 1),
                             command: String::new(),
@@ -1064,6 +1486,70 @@ impl App<'_> {
                         .key(key)
                         .map_err(anyhow::Error::msg)?,
                 },
+                RunDialog::Configuration {
+                    root,
+                    expected,
+                    draft,
+                } => {
+                    if key.code == KeyCode::F(2) {
+                        let digest = crate::portable::write_declaration(
+                            self.service.store,
+                            &root.join(crate::portable::DECLARATION),
+                            expected.as_deref(),
+                            &draft.text,
+                        )?;
+                        // A saved file may still fail to resolve (e.g. missing executable). Keep its new CAS identity and the draft.
+                        *expected = Some(digest);
+                        let id = self.current_id().context("Select a project")?;
+                        let resolved = crate::portable::resolve_for(
+                            self.service.store,
+                            root,
+                            &self.environment,
+                            Some(&id),
+                        )?;
+                        crate::portable::apply(self.service.store, resolved)?;
+                        self.reload(Some(&id))?;
+                        self.info("Project declaration saved and synchronized. Changed execution requires review.");
+                        return Ok(false);
+                    }
+                    draft.key(key).map_err(anyhow::Error::msg)?;
+                }
+                RunDialog::Discovery { report, selected } => match key.code {
+                    KeyCode::Up => *selected = selected.saturating_sub(1),
+                    KeyCode::Down => {
+                        *selected = (*selected + 1).min(report.candidates.len().saturating_sub(1))
+                    }
+                    KeyCode::F(2) => {
+                        let candidate = report
+                            .candidates
+                            .get(*selected)
+                            .context("No discovered tasks; n creates a command draft")?;
+                        ensure!(!self.service.store.load()?.project(&self.current_id().context("Select a project")?)?.tasks.iter().any(|task|task.name==candidate.name),"A task with this name is already registered; edit or select the existing task.");
+                        let task = candidate.task_definition()?;
+                        self.run_submit(RunRequest::SaveTask {
+                            revision: self.view.revision,
+                            project_id: self.current_id().context("Select a project")?,
+                            task: Box::new(task),
+                        })?;
+                        return Ok(false);
+                    }
+                    _ => {}
+                },
+                RunDialog::Export(input) => {
+                    if matches!(key.code, KeyCode::F(2) | KeyCode::Enter) {
+                        let mut path = PathBuf::from(&input.text);
+                        if !path.is_absolute() {
+                            path = std::env::current_dir()?.join(path);
+                        }
+                        ensure!(!input.text.is_empty(), "Enter a new export file path");
+                        self.run_submit(RunRequest::ResultExport {
+                            run_id: self.runs.selected.clone().context("Select a Run")?,
+                            path,
+                        })?;
+                        return Ok(false);
+                    }
+                    input.key(key).map_err(anyhow::Error::msg)?;
+                }
                 RunDialog::TaskReview {
                     review,
                     parallel,
@@ -1075,18 +1561,21 @@ impl App<'_> {
                             review.common_approved,
                             "Project initialization needs approval first: close this review and use t on the project"
                         );
+                        let (rows, cols) = self.runtime.as_ref().unwrap().dimensions;
+                        let start = RunRequest::Start {
+                            project_id: review.project_id.clone(),
+                            task_id: review.task.id.clone(),
+                            operation_id: uuid::Uuid::new_v4().to_string(),
+                            environment: self.environment.variables().clone(),
+                            expected_digest: Some(review.digest.clone()),
+                            parallel: *parallel,
+                            rows,
+                            cols,
+                        };
                         let request = if review.approved {
-                            let (rows, cols) = self.runtime.as_ref().unwrap().dimensions;
-                            RunRequest::Start {
-                                project_id: review.project_id.clone(),
-                                task_id: review.task.id.clone(),
-                                operation_id: uuid::Uuid::new_v4().to_string(),
-                                environment: self.environment.variables().clone(),
-                                parallel: *parallel,
-                                rows,
-                                cols,
-                            }
+                            start
                         } else {
+                            self.runs.approval_start = Some(start);
                             RunRequest::ApproveTask {
                                 revision: review.revision,
                                 project_id: review.project_id.clone(),

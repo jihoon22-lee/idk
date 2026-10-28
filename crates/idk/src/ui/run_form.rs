@@ -29,6 +29,8 @@ pub(super) struct RunForm {
     pub revision: u64,
     pub fields: Vec<DraftField>,
     pub selected: usize,
+    pub advanced: bool,
+    args_json: bool,
     pub task: Option<TaskDefinition>,
     editor: Option<EditorConfig>,
     pub source_count: usize,
@@ -36,6 +38,14 @@ pub(super) struct RunForm {
 }
 impl RunForm {
     pub fn task(project: String, revision: u64, task: TaskDefinition) -> Self {
+        let args_json = task
+            .execution
+            .as_ref()
+            .is_some_and(|execution| match execution {
+                TaskExecution::Process { args, .. } | TaskExecution::Script { args, .. } => {
+                    args.iter().any(|arg| arg.is_empty() || arg.contains('\n'))
+                }
+            });
         let mut fields = vec![
             DraftField::new("Name", task.name.clone()),
             DraftField::new(
@@ -108,8 +118,16 @@ impl RunForm {
                 program.to_string_lossy(),
             );
             fields.push(DraftField::new(
-                "Literal arguments (JSON array; no shell expansion)",
-                serde_json::to_string(args).unwrap(),
+                if args_json {
+                    "Arguments (JSON array; preserves empty/multiline values)"
+                } else {
+                    "Literal arguments (one per line; F11 JSON mode)"
+                },
+                if args_json {
+                    serde_json::to_string(args).unwrap()
+                } else {
+                    args.join("\n")
+                },
             ));
             fields.push(DraftField::new(
                 "Environment overrides (JSON object)",
@@ -124,6 +142,8 @@ impl RunForm {
             revision,
             fields,
             selected: 0,
+            advanced: false,
+            args_json,
             task: Some(task.clone()),
             editor: None,
             source_count: 0,
@@ -137,6 +157,81 @@ impl RunForm {
         }
         form.selected = 0;
         form
+    }
+    pub fn toggle_arguments(&mut self) -> Result<()> {
+        ensure!(
+            self.task
+                .as_ref()
+                .is_some_and(|task| task.execution.is_some()),
+            "Arguments belong to process/script tasks"
+        );
+        let args = self.argument_values()?;
+        if self.args_json {
+            ensure!(
+                args.iter()
+                    .all(|arg| !arg.is_empty() && !arg.contains('\n')),
+                "Empty or multiline arguments need JSON mode; edit or remove them explicitly first"
+            );
+        }
+        self.args_json = !self.args_json;
+        self.fields[10] = DraftField::new(
+            if self.args_json {
+                "Arguments (JSON array; preserves empty/multiline values)"
+            } else {
+                "Literal arguments (one per line; F11 JSON mode)"
+            },
+            if self.args_json {
+                serde_json::to_string(&args)?
+            } else {
+                args.join("\n")
+            },
+        );
+        self.selected = 10;
+        Ok(())
+    }
+    fn argument_values(&self) -> Result<Vec<String>> {
+        if self.value(10).is_empty() {
+            return Ok(vec![]);
+        }
+        if self.args_json {
+            Ok(serde_json::from_str(self.value(10))?)
+        } else {
+            Ok(self.value(10).split('\n').map(str::to_owned).collect())
+        }
+    }
+    pub fn visible_fields(&self) -> Vec<usize> {
+        if self.advanced || self.task.is_none() {
+            return (0..self.fields.len()).collect();
+        }
+        let mut fields = vec![0, 1];
+        if self
+            .task
+            .as_ref()
+            .is_some_and(|task| task.execution.is_some())
+        {
+            fields.push(10);
+        }
+        fields.push(2);
+        if self
+            .task
+            .as_ref()
+            .is_some_and(|task| matches!(task.execution, Some(TaskExecution::Script { .. })))
+        {
+            fields.push(12);
+        }
+        fields
+    }
+    pub fn move_field(&mut self, back: bool) {
+        let fields = self.visible_fields();
+        let at = fields
+            .iter()
+            .position(|index| *index == self.selected)
+            .unwrap_or(0);
+        self.selected = fields[if back {
+            (at + fields.len() - 1) % fields.len()
+        } else {
+            (at + 1) % fields.len()
+        }];
     }
     /// Explicitly choose a different execution contract in the local draft.
     /// Existing script/source text must be cleared by the user before switching.
@@ -179,6 +274,8 @@ impl RunForm {
             project,
             revision,
             selected: 0,
+            advanced: false,
+            args_json: false,
             task: None,
             editor: Some(config.clone()),
             source_count: 0,
@@ -262,7 +359,7 @@ impl RunForm {
                 }
             };
             *program = path_value(self.value(1), program);
-            *args = serde_json::from_str(self.value(10))?;
+            *args = self.argument_values()?;
             *env = serde_json::from_str(self.value(11))?;
         } else {
             task.command = self.value(1).into();

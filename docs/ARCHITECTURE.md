@@ -95,6 +95,10 @@ Run의 raw log는 terminal scrollback과 별개이고 크기·큐·보관 한도
 현재 SHA·dirty 관찰·artifact 경로는 소스 snapshot 또는 테스트 바이너리 bytes 증명이 아니다.
 실제 exit, 진단 severity와 관찰 범위의 미확인을 각각 표시한다.
 
+선택적 idk.toml schema 1은 사용자 의도이고 UUID·revision·승인·Run은 로컬 관리 상태다. resolver는 기본값→개인 shell/editor 선호→선언→명시 local override 순으로 해석하고 출처를 표시한다. CLI와 TUI 선언 저장은 같은 CAS writer를 사용한다. 선언 digest는 검토/시작에서 재확인하고 동일 실행 의미의 승인은 sync 후 보존한다.
+
+구조화 결과는 private immutable 본문과 요약·digest·참조를 분리한다. ledger/IPC에 큰 원문을 넣지 않고 bounded raw/finding 페이지로 조회한다. legacy inline 결과는 확인 후 이행한다. pin·age·disk 예산과 producer별 보수적 비교, events 관찰은 실제 exit/cleanup과 별개다. [결과 보관](result-storage.md)에 한도와 실패 상태를 기록한다.
+
 ## 저장과 배포
 
 v0.4는 XDG의 `idk/v0.4` namespace와 private host-local runtime을 사용한다. SQLite/WAL을
@@ -117,7 +121,7 @@ TLS와 redirect protocol을 검증하고 크기·시간을 제한한 bytes를 �
 확장하며 현재 macOS/native Windows/Linux ARM64는 공개 지원 범위가 아니다. `/proc`, Unix
 peer credential, signal·자손 추적 등의 플랫폼 의존은 단순 파일명 변경으로 해결되지 않는다.
 
-설정 schema 1은 기존 실행 의미를 유지해서 읽는다. 새 native 실행 정의의 schema 2 이행과
+설정 schema 1/2는 기존 실행 의미를 유지해서 읽는다. portable binding을 포함한 로컬 schema 3 이행과
 설치 inventory schema 2는 별개의 계약이다. 구 설정을 보존하고 future/손상 schema를 거부하며,
 기존 live host와 generation을 새 실행기로 자동 이전하지 않는다.
 

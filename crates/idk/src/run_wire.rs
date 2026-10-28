@@ -59,8 +59,15 @@ pub struct ArtifactRelation {
     pub path: Option<PathBuf>,
     pub from_task: Option<String>,
     pub from_run: Option<String>,
-    /// Explicit registration relates runs; this never proves binary byte identity.
+    /// True only when current and predecessor digest observations match. This
+    /// does not promise that the mutable artifact path still has those bytes.
     pub verified_bytes: bool,
+    #[serde(default)]
+    pub snapshot: Option<crate::discovery::ArtifactSnapshot>,
+    #[serde(default)]
+    pub snapshot_error: Option<String>,
+    #[serde(default)]
+    pub observed_at_ms: Option<u64>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunInfo {
@@ -90,6 +97,10 @@ pub struct RunInfo {
     pub steps: Vec<StepResult>,
     #[serde(default)]
     pub structured_result: Option<crate::structured_result::StructuredResult>,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub events: Option<crate::result_store::EventProgress>,
     pub source_start: SourceObservation,
     pub source_end: Option<SourceObservation>,
     pub source_changed: Option<bool>,
@@ -155,6 +166,8 @@ pub enum RunRequest {
         project_id: String,
         task_id: String,
         operation_id: String,
+        #[serde(default)]
+        expected_digest: Option<String>,
         environment: std::collections::BTreeMap<String, String>,
         parallel: bool,
         rows: u16,
@@ -183,6 +196,36 @@ pub enum RunRequest {
     },
     Problems {
         run_id: String,
+    },
+    ResultRaw {
+        run_id: String,
+        offset: u64,
+        limit: usize,
+    },
+    Findings {
+        run_id: String,
+        offset: usize,
+        limit: usize,
+    },
+    ResultPin {
+        run_id: String,
+        pinned: bool,
+    },
+    ResultExport {
+        run_id: String,
+        path: PathBuf,
+    },
+    Compare {
+        baseline_run_id: String,
+        run_id: String,
+    },
+    Events {
+        run_id: String,
+    },
+    FindingEditorReview {
+        run_id: String,
+        body_sha256: String,
+        index: usize,
     },
     EditorReview {
         run_id: String,
@@ -247,6 +290,7 @@ impl RunRequest {
                 project_id,
                 task_id,
                 operation_id,
+                expected_digest,
                 environment,
                 rows,
                 cols,
@@ -255,13 +299,46 @@ impl RunRequest {
                 valid_id(project_id)?;
                 valid_id(task_id)?;
                 valid_id(operation_id)?;
+                if let Some(digest) = expected_digest {
+                    ensure!(
+                        digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()),
+                        "invalid expected task digest"
+                    );
+                }
                 crate::project::LaunchEnvironment::from_variables(environment.clone())?;
                 crate::protocol::validate_dimensions(*rows, *cols)?;
             }
             Self::Info { run_id }
             | Self::Cancel { run_id, .. }
             | Self::Reconcile { run_id }
-            | Self::Problems { run_id } => valid_id(run_id)?,
+            | Self::Problems { run_id }
+            | Self::ResultPin { run_id, .. }
+            | Self::Events { run_id } => valid_id(run_id)?,
+            Self::ResultRaw { run_id, limit, .. } => {
+                valid_id(run_id)?;
+                ensure!(
+                    (1..=65536).contains(limit),
+                    "result raw page limit must be 1–65536"
+                );
+            }
+            Self::Findings { run_id, limit, .. } => {
+                valid_id(run_id)?;
+                ensure!(
+                    (1..=100).contains(limit),
+                    "finding page limit must be 1–100"
+                );
+            }
+            Self::ResultExport { run_id, path } => {
+                valid_id(run_id)?;
+                crate::model::absolute_path(path)?;
+            }
+            Self::Compare {
+                baseline_run_id,
+                run_id,
+            } => {
+                valid_id(baseline_run_id)?;
+                valid_id(run_id)?;
+            }
             Self::Log { run_id, limit, .. } => {
                 valid_id(run_id)?;
                 ensure!(
@@ -276,6 +353,17 @@ impl RunRequest {
                         && query.len() <= 1024
                         && !query.chars().any(char::is_control),
                     "invalid log search query"
+                );
+            }
+            Self::FindingEditorReview {
+                run_id,
+                body_sha256,
+                ..
+            } => {
+                valid_id(run_id)?;
+                ensure!(
+                    body_sha256.len() == 64 && body_sha256.bytes().all(|b| b.is_ascii_hexdigit()),
+                    "invalid finding body digest"
                 );
             }
             Self::EditorReview {
@@ -348,4 +436,10 @@ pub enum RunResult {
         session_id: String,
     },
     Reconciled(RunInfo),
+    ResultRaw(crate::result_store::RawResultPage),
+    Findings(crate::result_store::FindingPage),
+    ResultPinned(RunInfo),
+    ResultExported(crate::result_store::ExportedResult),
+    Compared(crate::result_store::ResultComparison),
+    Events(crate::result_store::EventProgress),
 }

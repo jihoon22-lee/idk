@@ -111,6 +111,9 @@ pub enum RunCommand {
         operation_id: Option<String>,
         #[arg(long)]
         parallel: bool,
+        /// Review and approve this exact task before starting; common initialization remains separate.
+        #[arg(long)]
+        approve: bool,
         /// Wait for observed completion. Interrupting this client does not cancel the run.
         #[arg(long)]
         wait: bool,
@@ -157,6 +160,59 @@ pub enum RunCommand {
     },
     Problems {
         run: String,
+    },
+    /// Read findings (default) or a bounded raw result body page.
+    Result {
+        run: String,
+        #[arg(long)]
+        raw: bool,
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+        #[arg(long)]
+        limit: Option<usize>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Keep a baseline outside ordinary 64-run/30-day rotation (16 runs / 128 MiB maximum).
+    Pin {
+        run: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Return a baseline to ordinary retention. Export it first to keep a separate copy.
+    Unpin {
+        run: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write original result bytes to a new file; existing destinations are preserved.
+    Export {
+        run: String,
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Compare matching producer identities and scopes; incomplete evidence cannot resolve findings.
+    Compare {
+        baseline: String,
+        run: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Observe bounded producer progress independently of actual Run exit/cleanup.
+    Events {
+        run: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Review/open an exact structured finding, independently of raw-log offsets.
+    FindingEditor {
+        run: String,
+        index: usize,
+        #[arg(long)]
+        body_sha256: String,
+        #[arg(long)]
+        yes: bool,
     },
     /// Review/open one diagnostic in the configured dedicated editor terminal.
     Editor {
@@ -444,6 +500,7 @@ pub fn run(store: &Store, launcher: &Path, command: RunCommand) -> Result<i32> {
     } else {
         Client::connect(store)?
     };
+    let pin_requested = matches!(command, RunCommand::Pin { .. });
     match command {
         RunCommand::List { project: selector } => {
             let project_id = selector
@@ -457,12 +514,35 @@ pub fn run(store: &Store, launcher: &Path, command: RunCommand) -> Result<i32> {
             task,
             operation_id,
             parallel,
+            approve,
             wait,
             rows,
             cols,
         } => {
             let project_id = project(store, &selector)?;
             let task = task_definition(store, &project_id, &task)?;
+            let environment = LaunchEnvironment::capture()?;
+            let service = TaskService { store };
+            let review = service.review(&project_id, &task.id, &environment)?;
+            if approve {
+                eprintln!("{}", serde_json::to_string_pretty(&review)?);
+                ensure!(review.common_approved, "common initialization needs separate review: idk project trust {selector} --yes");
+                if !review.approved {
+                    service.approve(
+                        review.revision,
+                        &project_id,
+                        &task.id,
+                        &review.digest,
+                        &environment,
+                    )?;
+                }
+            } else {
+                ensure!(
+                    review.common_approved,
+                    "common initialization needs review: idk project trust {selector} --yes"
+                );
+                ensure!(review.approved, "task needs review; run idk task review {selector} {} then repeat run start with --approve", task.name);
+            }
             let operation_id = operation_id.unwrap_or_else(new_id);
             valid_id(&operation_id)?;
             let result = request(
@@ -471,7 +551,8 @@ pub fn run(store: &Store, launcher: &Path, command: RunCommand) -> Result<i32> {
                     project_id,
                     task_id: task.id,
                     operation_id,
-                    environment: LaunchEnvironment::capture()?.variables().clone(),
+                    expected_digest: Some(review.digest),
+                    environment: environment.variables().clone(),
                     parallel,
                     rows,
                     cols,
@@ -542,6 +623,236 @@ pub fn run(store: &Store, launcher: &Path, command: RunCommand) -> Result<i32> {
         }
         RunCommand::Problems { run } => {
             output(&request(&mut client, RunRequest::Problems { run_id: run })?)?
+        }
+        RunCommand::Result {
+            run,
+            raw,
+            offset,
+            limit,
+            json,
+        } => {
+            if raw {
+                let result = request(
+                    &mut client,
+                    RunRequest::ResultRaw {
+                        run_id: run,
+                        offset,
+                        limit: limit.unwrap_or(65536),
+                    },
+                )?;
+                let RunResult::ResultRaw(page) = result else {
+                    bail!("unexpected raw result response")
+                };
+                if json {
+                    output(&page)?;
+                } else {
+                    use base64::Engine;
+                    println!(
+                        "{} · bytes {}..{} · {}",
+                        page.result.status_label(),
+                        page.offset,
+                        page.next_offset,
+                        if page.eof {
+                            "end"
+                        } else {
+                            "more: use --offset with the next byte"
+                        }
+                    );
+                    if let Some(diagnostic) = page.result.diagnostic() {
+                        println!("{diagnostic}");
+                    }
+                    println!(
+                        "{}",
+                        idk_workspace::run::safe_text(
+                            &base64::engine::general_purpose::STANDARD.decode(&page.data_base64)?
+                        )
+                    );
+                }
+            } else {
+                let result = request(
+                    &mut client,
+                    RunRequest::Findings {
+                        run_id: run,
+                        offset: usize::try_from(offset)
+                            .context("finding offset exceeds platform size")?,
+                        limit: limit.unwrap_or(100),
+                    },
+                )?;
+                let RunResult::Findings(page) = result else {
+                    bail!("unexpected findings response")
+                };
+                if json {
+                    output(&page)?;
+                } else {
+                    println!(
+                        "{} · findings {}..{} / {}",
+                        page.result.status_label(),
+                        page.offset,
+                        page.next_offset,
+                        page.total
+                    );
+                    if let Some(diagnostic) = page.result.diagnostic() {
+                        println!("{diagnostic}");
+                    }
+                    for finding in &page.findings {
+                        let location = finding
+                            .location
+                            .as_ref()
+                            .map(|location| {
+                                format!(
+                                    " · {}{}",
+                                    location.path,
+                                    location
+                                        .start_line
+                                        .map(|line| format!(":{line}"))
+                                        .unwrap_or_default()
+                                )
+                            })
+                            .unwrap_or_default();
+                        println!(
+                            "[{}] {} {}{}",
+                            finding.index,
+                            finding.severity,
+                            finding.code.as_deref().unwrap_or(""),
+                            location
+                        );
+                        println!("  {}", finding.message);
+                    }
+                    if let Some(body) = page.result.body() {
+                        println!("body SHA-256: {}", body.sha256);
+                    }
+                    if page.more {
+                        println!("More: --offset {}", page.next_offset);
+                    }
+                }
+            }
+        }
+        RunCommand::Pin { run, json } | RunCommand::Unpin { run, json } => {
+            let pinned = pin_requested;
+            let result = request(
+                &mut client,
+                RunRequest::ResultPin {
+                    run_id: run,
+                    pinned,
+                },
+            )?;
+            let RunResult::ResultPinned(run) = result else {
+                bail!("unexpected pin response")
+            };
+            if json {
+                output(&run)?;
+            } else {
+                println!(
+                    "{} · {}",
+                    run.run_id,
+                    if run.pinned {
+                        "pinned baseline"
+                    } else {
+                        "ordinary retention"
+                    }
+                );
+            }
+        }
+        RunCommand::Export { run, path, json } => {
+            let path = std::path::absolute(path)?;
+            let result = request(&mut client, RunRequest::ResultExport { run_id: run, path })?;
+            let RunResult::ResultExported(exported) = result else {
+                bail!("unexpected export response")
+            };
+            if json {
+                output(&exported)?;
+            } else {
+                println!(
+                    "{} bytes · SHA-256 {} · {}",
+                    exported.bytes,
+                    exported.sha256,
+                    exported.path.display()
+                );
+            }
+        }
+        RunCommand::Compare {
+            baseline,
+            run,
+            json,
+        } => {
+            let result = request(
+                &mut client,
+                RunRequest::Compare {
+                    baseline_run_id: baseline,
+                    run_id: run,
+                },
+            )?;
+            let RunResult::Compared(comparison) = result else {
+                bail!("unexpected comparison response")
+            };
+            if json {
+                output(&comparison)?;
+            } else {
+                println!("{:?}: {}", comparison.state, comparison.reason);
+                println!(
+                    "new {} · unchanged {} · resolved {} · carried {}",
+                    comparison.new_count,
+                    comparison.unchanged_count,
+                    comparison.resolved_count,
+                    comparison.carried_count
+                );
+            }
+        }
+        RunCommand::Events { run, json } => {
+            let result = request(&mut client, RunRequest::Events { run_id: run })?;
+            let RunResult::Events(events) = result else {
+                bail!("unexpected events response")
+            };
+            if json {
+                output(&events)?;
+            } else {
+                println!(
+                    "{:?} · {} events / {} bytes · {} invalid · {} sequence gaps",
+                    events.state,
+                    events.events_observed,
+                    events.bytes_observed,
+                    events.invalid_events,
+                    events.sequence_gaps
+                );
+                if let Some(latest) = events.latest {
+                    println!("#{} {}: {}", latest.seq, latest.event_type, latest.message);
+                }
+                if let Some(error) = events.error {
+                    println!("{error}");
+                }
+                println!("Progress observation; use run status for actual exit and cleanup.");
+            }
+        }
+        RunCommand::FindingEditor {
+            run,
+            index,
+            body_sha256,
+            yes,
+        } => {
+            let review = request(
+                &mut client,
+                RunRequest::FindingEditorReview {
+                    run_id: run,
+                    body_sha256,
+                    index,
+                },
+            )?;
+            if !yes {
+                output(&review)?;
+            } else {
+                let RunResult::EditorReview { review_id, .. } = review else {
+                    bail!("unexpected editor review response")
+                };
+                output(&request(
+                    &mut client,
+                    RunRequest::EditorOpen {
+                        review_id,
+                        environment: LaunchEnvironment::capture()?.variables().clone(),
+                        rows: 24,
+                        cols: 80,
+                    },
+                )?)?;
+            }
         }
         RunCommand::Editor { run, problem, yes } => {
             let current = info(&mut client, &run)?;

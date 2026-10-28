@@ -2,7 +2,7 @@
 
 등록 Run은 실행별 `IDK_RUN_ID`, `IDK_RESULT_PATH`, `IDK_EVENTS_PATH` 환경 변수를 제공한다.
 도구나 사용자가 작성한 명시적 wrapper가 결과를 `IDK_RESULT_PATH`에 저장하면, idk는 실제
-프로세스 cleanup 이후 읽고 Run 이력의 `structured_result`에 원문 JSON과 SHA-256을 보관한다.
+프로세스 cleanup 이후 읽고 private state의 독립된 본문에 immutable bytes를 보관한다. Run 이력에는 요약·SHA-256·참조만 저장한다.
 이 파일을 쓰는 것이 결과 보관의 선택이다. 도구의 argv·환경·결과에 비밀이 있으면 wrapper에서
 출력 범위를 정해야 한다. 일반 터미널 입력이나 인증 대화를 이 경로로 자동 수집하지 않는다.
 
@@ -18,10 +18,13 @@ Run exit/signal/cleanup, idk의 source 관찰, 도구의 판단, 결과 파일 b
 결과의 검사 수준·제한·미완료를 일반 성공으로 바꾸지 않는다. raw-log `Problems`의 offset과
 구조화 finding의 source 위치도 별개이며, Lens message에서 가짜 파일/행을 만들지 않는다.
 
-결과는 최대 32 KiB의 일반 파일만 읽고, 저장 시 들여쓰기까지 포함한 JSON 예산도 32 KiB로 제한한다. symlink·FIFO와 초과 파일을 거부한다. 최대 64개 Run의 결과가 4 MiB 상태/IPC 한도를 침범하지 않도록 파일별 한도를 둔다. Run 이력의
-기존 보관 한도를 적용하고 원본 결과는 해당 Run runtime 디렉터리와 함께 정리한다. events 경로는
-producer가 필요할 때 쓸 수 있는 별도 파일이며, 현재 idk는 이벤트 스트림을 분석·성공 판정하거나
-TUI 로그로 재생하지 않는다. 장기 보관이 필요하면 도구 wrapper가 별도로 관리한다.
+결과 본문은 최대 16 MiB이고 raw 조회는 최대 64 KiB, findings는 최대 100개 및 직렬화 bytes 한도 내에서 페이지로 제공한다. symlink·FIFO·변조·손상·future schema·oversize·expired를 구분한다. 일반 Run은 64개/30일, 결과 전체는 256 MiB이고 pinned Run은 별도 16개/128 MiB 한도를 적용한다. 원문은 `idk run export RUN PATH`로 기존 파일을 덮어쓰지 않고 export한다.
+
+TUI Results의 `s`에서 findings를, `v`에서 원문을 보고 `[`/`]`로 페이지를 옮긴다. 위치 없는 finding도 메시지·evidence를 보존하며 digest/index로 source 위치를 검토한다. `P`는 pin/unpin, `b`는 기준 선택, `c`는 비교다. producer/schema/identity/scope가 맞아야 비교하며 incomplete·unknown에서 해결된 항목을 만들지 않는다.
+
+events는 최대 8 MiB의 별도 관찰이다. 잘린 마지막 행·잘못된 event·sequence gap을 표시하며 실제 exit·cleanup·producer gate를 바꾸지 않는다. `idk run events RUN` 또는 TUI `i`로 확인한다. 자세한 예산·이행·비교 계약은 [결과 보관](result-storage.md)을 따른다.
+
+선택적 도구는 `idk discover PROJECT --tool ici --executable /absolute/path/ici` 또는 `--tool lens`로 명시 버전을 확인하고 자동 wrapper 초안을 볼 수 있다. `--register NAME`은 초안만 저장한다. 아래 wrapper 예시는 기존 수동 설정과의 호환 설명이다.
 
 ## ici
 

@@ -19,8 +19,9 @@ pub enum PackageCommand {
         bundle: PathBuf,
         #[arg(long)]
         sha256: String,
+        /// Installation root (default: $HOME/.local/share/idk).
         #[arg(long)]
-        prefix: PathBuf,
+        prefix: Option<PathBuf>,
         #[arg(long)]
         yes: bool,
     },
@@ -35,8 +36,9 @@ pub enum PackageCommand {
         url: String,
         #[arg(long)]
         sha256: String,
+        /// Installation root (default: $HOME/.local/share/idk).
         #[arg(long)]
-        prefix: PathBuf,
+        prefix: Option<PathBuf>,
         #[arg(long)]
         yes: bool,
     },
@@ -44,26 +46,36 @@ pub enum PackageCommand {
     Targets,
     /// Inspect the committed installation and preserved generations.
     Status {
+        /// Installation root (default: $HOME/.local/share/idk).
         #[arg(long)]
-        prefix: PathBuf,
+        prefix: Option<PathBuf>,
     },
     /// Resolve an interrupted activation without restoring live workspace data.
     Recover {
+        /// Installation root (default: $HOME/.local/share/idk).
         #[arg(long)]
-        prefix: PathBuf,
+        prefix: Option<PathBuf>,
         #[arg(long)]
         yes: bool,
+    },
+    /// Find a verified client matching the live host without stopping or replacing it.
+    CompatibleClient {
+        /// Optional known installation root; otherwise inspect the peer's generation and default root.
+        #[arg(long)]
+        prefix: Option<PathBuf>,
     },
     /// Verify all bytes of an explicitly selected preserved installation generation.
     VerifyGeneration {
         generation: String,
+        /// Installation root (default: $HOME/.local/share/idk).
         #[arg(long)]
-        prefix: PathBuf,
+        prefix: Option<PathBuf>,
     },
     /// Remove managed entrypoints only; preserve generations, data, logs and live hosts.
     Uninstall {
+        /// Installation root (default: $HOME/.local/share/idk).
         #[arg(long)]
-        prefix: PathBuf,
+        prefix: Option<PathBuf>,
         #[arg(long)]
         yes: bool,
     },
@@ -82,6 +94,7 @@ pub fn execute(data_dir: Option<&std::path::Path>, command: PackageCommand) -> R
             prefix,
             yes,
         } => {
+            let prefix = resolve_prefix(prefix)?;
             ensure!(prefix.is_absolute(), "installation prefix must be absolute");
             let verified = VerifiedBundle::read(&bundle, &sha256)?;
             install_verified(data_dir, verified, prefix, yes)?
@@ -95,6 +108,7 @@ pub fn execute(data_dir: Option<&std::path::Path>, command: PackageCommand) -> R
             prefix,
             yes,
         } => {
+            let prefix = resolve_prefix(prefix)?;
             ensure!(prefix.is_absolute(), "installation prefix must be absolute");
             install_verified(
                 data_dir,
@@ -105,10 +119,12 @@ pub fn execute(data_dir: Option<&std::path::Path>, command: PackageCommand) -> R
         }
         PackageCommand::Targets => json!(idk_workspace::package::SUPPORTED_TARGETS),
         PackageCommand::Status { prefix } => {
+            let prefix = resolve_prefix(prefix)?;
             ensure!(prefix.is_dir(), "installation prefix does not exist");
             json!(Installer::open(&prefix)?.status()?)
         }
         PackageCommand::Recover { prefix, yes } => {
+            let prefix = resolve_prefix(prefix)?;
             ensure!(prefix.is_dir(), "installation prefix does not exist");
             if yes {
                 json!(Installer::open(&prefix)?.recover()?)
@@ -117,11 +133,18 @@ pub fn execute(data_dir: Option<&std::path::Path>, command: PackageCommand) -> R
                     "preserved":"live workspace data and all installation generations; no host is restarted or stopped"})
             }
         }
+        PackageCommand::CompatibleClient { prefix } => {
+            let store = Store::open(data_dir)?;
+            let matched = idk_workspace::client::compatible_host_client(&store, prefix.as_deref())?;
+            json!({"compatible_client":matched,"performed":false,"preserved":"live host, processes, workspace data and installation generations","next":"Use inspect_command first; older TUI requires a workspace schema that its generation supports."})
+        }
         PackageCommand::VerifyGeneration { prefix, generation } => {
+            let prefix = resolve_prefix(prefix)?;
             ensure!(prefix.is_dir(), "installation prefix does not exist");
             json!(Installer::open(&prefix)?.verify(&generation)?)
         }
         PackageCommand::Uninstall { prefix, yes } => {
+            let prefix = resolve_prefix(prefix)?;
             ensure!(prefix.is_dir(), "installation prefix does not exist");
             let installer = Installer::open(&prefix)?;
             let state = installer.status()?;
@@ -160,4 +183,17 @@ fn install_verified(
         let store = Store::open(data_dir)?;
         Ok(json!(Installer::open(&prefix)?.install(&verified, &store)?))
     }
+}
+
+fn resolve_prefix(value: Option<PathBuf>) -> Result<PathBuf> {
+    use anyhow::Context;
+    let prefix = match value {
+        Some(path) => path,
+        None => PathBuf::from(
+            std::env::var_os("HOME").context("HOME is not set; supply --prefix /absolute/path")?,
+        )
+        .join(".local/share/idk"),
+    };
+    ensure!(prefix.is_absolute(), "installation prefix must be absolute");
+    Ok(prefix)
 }

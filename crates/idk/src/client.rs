@@ -6,6 +6,7 @@ use crate::store::Store;
 use anyhow::{ensure, Context, Result};
 use base64::Engine;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -128,10 +129,23 @@ impl Client {
         let timeout = Duration::from_millis(MAX_REQUEST_MS);
         let client_id = new_id();
         let request = Envelope::new(&client_id, Request::Hello);
-        let response = exchange(&store.socket_path(), &request, timeout)?;
-        let host: HostInfo = response.decode()?;
-        ensure!(host.protocol == PROTOCOL && host.version == env!("CARGO_PKG_VERSION"), "running host version differs; preserve its sessions and use the matching binary or stop it explicitly");
-        ensure!(host.build_id == build, "running host binary differs; preserve its sessions and use the matching binary or stop it explicitly");
+        let response = exchange(&store.socket_path(), &request, timeout)
+            .map_err(|error| compatibility_error(store, error))?;
+        let host: HostInfo = response
+            .decode()
+            .map_err(|error| compatibility_error(store, error))?;
+        if host.protocol != PROTOCOL || host.version != env!("CARGO_PKG_VERSION") {
+            return Err(compatibility_error(
+                store,
+                anyhow::anyhow!("running host version differs; existing sessions were preserved"),
+            ));
+        }
+        if host.build_id != build {
+            return Err(compatibility_error(
+                store,
+                anyhow::anyhow!("running host binary differs; existing sessions were preserved"),
+            ));
+        }
         crate::model::valid_id(&host.host_instance)?;
         Ok(Self {
             socket: store.socket_path(),
@@ -449,4 +463,221 @@ fn exchange(socket: &Path, request: &Envelope, timeout: Duration) -> Result<Resp
         );
     }
     Ok(response)
+}
+
+/// A verified installation client matching the kernel-observed socket peer's exact bytes.
+/// These are instructions only: discovery never executes the client or stops the host.
+#[derive(Debug, Clone, Serialize)]
+pub struct CompatibleHostClient {
+    pub host_pid: u32,
+    pub observed_executable: PathBuf,
+    pub client: PathBuf,
+    pub binary_sha256: String,
+    pub invocation: String,
+    pub inspect_command: String,
+    pub config_dir: PathBuf,
+    pub state_dir: PathBuf,
+    pub runtime_dir: PathBuf,
+}
+
+fn command_word(value: &std::ffi::OsStr) -> Result<String> {
+    let value = value
+        .to_str()
+        .context("recovery command path is not UTF-8")?;
+    ensure!(
+        !value.chars().any(char::is_control),
+        "recovery command path contains control characters"
+    );
+    Ok(format!("'{}'", value.replace('\'', "'\"'\"'")))
+}
+fn compatible_invocation(store: &Store, binary: &Path) -> Result<String> {
+    let binary = command_word(binary.as_os_str())?;
+    if let Some(root) = store.config_dir.parent() {
+        if store.config_dir == root.join("config")
+            && store.state_dir == root.join("state")
+            && store.runtime_dir == root.join("run")
+        {
+            return Ok(format!(
+                "{binary} --data-dir {}",
+                command_word(root.as_os_str())?
+            ));
+        }
+    }
+    let xdg_base = |path: &Path| -> Option<PathBuf> {
+        (path.file_name()? == "v0.4" && path.parent()?.file_name()? == "idk")
+            .then(|| path.parent().unwrap().parent().map(Path::to_path_buf))
+            .flatten()
+    };
+    if let (Some(config), Some(state), Some(runtime)) = (
+        xdg_base(&store.config_dir),
+        xdg_base(&store.state_dir),
+        store.runtime_dir.parent(),
+    ) {
+        ensure!(
+            store
+                .runtime_dir
+                .file_name()
+                .is_some_and(|name| name == "idk-v04"),
+            "custom runtime path cannot be represented by the public CLI"
+        );
+        return Ok(format!(
+            "env -u IDK_HOME XDG_CONFIG_HOME={} XDG_STATE_HOME={} XDG_RUNTIME_DIR={} {binary}",
+            command_word(config.as_os_str())?,
+            command_word(state.as_os_str())?,
+            command_word(runtime.as_os_str())?
+        ));
+    }
+    anyhow::bail!(
+        "custom config/state/runtime paths cannot be represented by a same-data public CLI command"
+    )
+}
+fn process_start(pid: u32) -> Result<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+    stat.rsplit_once(") ")
+        .context("invalid peer process stat")?
+        .1
+        .split_whitespace()
+        .nth(19)
+        .context("peer process start time missing")?
+        .parse()
+        .context("invalid peer start time")
+}
+
+/// Read-only compatibility lookup. The PID comes from SO_PEERCRED, never a stored PID record.
+/// A same-UID peer is not enough: executable bytes must match a fully verified retained generation.
+pub fn compatible_host_client(
+    store: &Store,
+    prefix: Option<&Path>,
+) -> Result<Option<CompatibleHostClient>> {
+    let socket = store.socket_path();
+    let metadata = std::fs::symlink_metadata(&socket)?;
+    ensure!(
+        metadata.file_type().is_socket()
+            && metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.permissions().mode() & 0o077 == 0,
+        "host socket must be owned and private for compatibility lookup"
+    );
+    let stream = connect_deadline(&socket, Instant::now() + Duration::from_secs(2))?;
+    let peer = peer_credentials(&stream)?;
+    ensure!(peer.pid > 1, "invalid host peer PID");
+    let started = process_start(peer.pid)?;
+    let proc_exe = PathBuf::from(format!("/proc/{}/exe", peer.pid));
+    let executable = std::fs::read_link(&proc_exe).context("read live host executable")?;
+    let before = std::fs::metadata(&proc_exe)?;
+    let build = executable_build_id(&proc_exe)?;
+    let mut prefixes = Vec::new();
+    if let Some(prefix) = prefix {
+        prefixes.push(prefix.to_path_buf());
+    }
+    if executable
+        .file_name()
+        .is_some_and(|name| name == crate::package::BINARY)
+    {
+        if let Some(generations) = executable.parent().and_then(Path::parent) {
+            if generations
+                .file_name()
+                .is_some_and(|name| name == "generations")
+            {
+                if let Some(root) = generations.parent() {
+                    prefixes.push(root.into());
+                }
+            }
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        prefixes.push(PathBuf::from(home).join(".local/share/idk"));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for prefix in prefixes {
+        if !seen.insert(prefix.clone()) {
+            continue;
+        }
+        if let Some(client) = crate::install::Installer::compatible_client(&prefix, &build)? {
+            let after = std::fs::metadata(&proc_exe)?;
+            ensure!(
+                started == process_start(peer.pid)?
+                    && before.dev() == after.dev()
+                    && before.ino() == after.ino()
+                    && executable == std::fs::read_link(&proc_exe)?,
+                "host process identity changed during compatibility lookup"
+            );
+            ensure!(
+                executable_build_id(&client)? == build,
+                "retained client bytes changed after verification"
+            );
+            let invocation = compatible_invocation(store, &client)?;
+            return Ok(Some(CompatibleHostClient {
+                host_pid: peer.pid,
+                observed_executable: executable,
+                client,
+                binary_sha256: build,
+                inspect_command: format!("{invocation} session list"),
+                invocation,
+                config_dir: store.config_dir.clone(),
+                state_dir: store.state_dir.clone(),
+                runtime_dir: store.runtime_dir.clone(),
+            }));
+        }
+    }
+    Ok(None)
+}
+fn compatibility_error(store: &Store, error: anyhow::Error) -> anyhow::Error {
+    // Initial host absence must remain a cheap, typed condition for explicit host startup.
+    if error.downcast_ref::<std::io::Error>().is_some_and(|error| {
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+        )
+    }) {
+        return error;
+    }
+    match compatible_host_client(store, None) {
+        Ok(Some(client)) => error.context(format!("Preserved host PID {} has a verified matching client. Inspect its sessions with the same data paths:\n{}\nFor a compatible workspace schema, use the same invocation with `session attach SESSION_ID`. Configuration migration may prevent the older TUI; session list/snapshot remain read-only. No process was stopped or command replayed.", client.host_pid, client.inspect_command)),
+        Ok(None) => error.context("No verified matching installation generation was found. Preserve the host and use its original installation; `package compatible-client --prefix /absolute/installation` can inspect a known prefix without changing it."),
+        Err(detail) => error.context(format!("Compatible-client verification was unavailable: {detail:#}. Existing host and data were preserved; no unverified executable was suggested.")),
+    }
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+    #[test]
+    fn recovery_invocation_keeps_exact_data_paths_and_quotes_shell_metacharacters() {
+        let root = PathBuf::from("/tmp/idk data ' $(false)");
+        let store = Store {
+            config_dir: root.join("config"),
+            state_dir: root.join("state"),
+            runtime_dir: root.join("run"),
+        };
+        let command = compatible_invocation(&store, Path::new("/tmp/install path/idk")).unwrap();
+        assert_eq!(
+            command,
+            "'/tmp/install path/idk' --data-dir '/tmp/idk data '\"'\"' $(false)'"
+        );
+        let xdg = Store {
+            config_dir: "/a/config/idk/v0.4".into(),
+            state_dir: "/b/state/idk/v0.4".into(),
+            runtime_dir: "/c/run/idk-v04".into(),
+        };
+        let command = compatible_invocation(&xdg, Path::new("/installation/idk")).unwrap();
+        assert!(
+            command.contains("env -u IDK_HOME")
+                && command.contains("XDG_CONFIG_HOME='/a/config'")
+                && command.contains("XDG_STATE_HOME='/b/state'")
+                && command.contains("XDG_RUNTIME_DIR='/c/run'")
+        );
+    }
+    #[test]
+    fn compatibility_lookup_does_not_create_an_installation_or_trust_a_saved_pid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open(Some(&tmp.path().join("data"))).unwrap();
+        crate::store::atomic_write(
+            &store.state_dir.join("host-exit.json"),
+            format!("{{\"pid\":{}}}", std::process::id()).as_bytes(),
+        )
+        .unwrap();
+        let absent = tmp.path().join("not-installed");
+        assert!(compatible_host_client(&store, Some(&absent)).is_err());
+        assert!(!absent.exists());
+    }
 }

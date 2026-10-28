@@ -428,6 +428,7 @@ fn start_source_user(fixture: &Fixture) -> String {
     match run_request(
         &mut client,
         RunRequest::Start {
+            expected_digest: None,
             project_id: fixture.project.clone(),
             task_id: task.id,
             operation_id: new_id(),
