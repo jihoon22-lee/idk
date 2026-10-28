@@ -1,6 +1,7 @@
 use idk_workspace::client::Client;
 use idk_workspace::store::Store;
 use serde_json::Value;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -15,6 +16,14 @@ impl Drop for OwnedHost {
             let _ = self.0.kill();
         }
         let _ = self.0.wait();
+    }
+}
+
+fn host_stderr(path: &Path) -> String {
+    let mut bytes = Vec::new();
+    match std::fs::File::open(path).and_then(|file| file.take(64 * 1024).read_to_end(&mut bytes)) {
+        Ok(_) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(error) => format!("could not read host stderr: {error}"),
     }
 }
 
@@ -100,6 +109,10 @@ fn cli_reuses_the_live_shell_requires_explicit_reopen_and_preserves_unrelated_pr
         !store.socket_path().exists(),
         "status must not launch a host"
     );
+    // A regular fixture-owned file can be inspected without waiting for EOF
+    // from a host that is still alive but has not accepted connections yet.
+    let host_stderr_path = temp.path().join("host-stderr.log");
+    let host_stderr_file = std::fs::File::create(&host_stderr_path).unwrap();
     let mut host = OwnedHost(
         Command::new(env!("CARGO_BIN_EXE_idk"))
             .arg("__host")
@@ -111,22 +124,26 @@ fn cli_reuses_the_live_shell_requires_explicit_reopen_and_preserves_unrelated_pr
             .arg(&store.runtime_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::from(host_stderr_file))
             .spawn()
             .unwrap(),
     );
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(8);
     let mut client = loop {
-        if let Ok(client) =
-            Client::connect_with_launcher(&store, Path::new(env!("CARGO_BIN_EXE_idk")))
-        {
-            break client;
-        }
+        let connection_error =
+            match Client::connect_with_launcher(&store, Path::new(env!("CARGO_BIN_EXE_idk"))) {
+                Ok(client) => break client,
+                Err(error) => error,
+            };
+        let status = host.0.try_wait();
         assert!(
-            host.0.try_wait().unwrap().is_none(),
-            "host failed during startup"
+            matches!(status, Ok(None)) && Instant::now() < deadline,
+            "host startup failed after {:?}: child status {status:?}; last connection error: {connection_error:#}; host stderr ({}, first 64 KiB):\n{}",
+            started.elapsed(),
+            host_stderr_path.display(),
+            host_stderr(&host_stderr_path),
         );
-        assert!(Instant::now() < deadline, "host startup deadline");
         std::thread::sleep(Duration::from_millis(20));
     };
     let mut unrelated = OwnedHost(Command::new("sleep").arg("60").spawn().unwrap());

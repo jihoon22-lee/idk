@@ -902,3 +902,71 @@ fn host_crash_restores_unknown_without_replaying_git_or_persisting_terminal_cont
     assert!(!ledger.contains("hook-invocations"));
     shutdown(&mut client, &mut replacement);
 }
+
+#[test]
+fn late_resize_after_git_completion_is_read_only_and_does_not_block_next_snapshot() {
+    let fixture = Fixture::new();
+    let project = fixture.project("late-resize");
+    fs::write(project.root.join("changed"), "changed\n").unwrap();
+    fixture.git(&project.root, &["add", "changed"]);
+    hook(&project.root, "#!/bin/sh\nprintf ready > hook-ready\ni=0\nwhile [ ! -f hook-release ] && [ \"$i\" -lt 500 ]; do i=$((i+1)); sleep 0.02; done\ntest -f hook-release\n");
+    let (mut host, mut client) = fixture.host();
+    let context = fixture.open(&mut client, &project, fixture.env.clone());
+    let review = match job(
+        &mut client,
+        GitTask::CommitReview {
+            context: context.id.clone(),
+        },
+    ) {
+        GitValue::CommitReview(value) => value,
+        _ => unreachable!(),
+    };
+    let commit = plan(
+        &mut client,
+        GitTask::Commit {
+            context: context.id,
+            review: review.review_id,
+            message: "resize race fixture".into(),
+        },
+    );
+    let operation = client.git_execute(&commit.id, 24, 100).unwrap();
+    let owned = client.git_operation_attach(&operation.id, false).unwrap();
+    wait_file(&project.root.join("hook-ready"));
+    assert!(
+        client
+            .git_operation_resize(&operation.id, owned.input_epoch + 1, 30, 110)
+            .is_err(),
+        "live operation must still validate its owner epoch"
+    );
+    client
+        .git_operation_resize(&operation.id, owned.input_epoch, 30, 110)
+        .unwrap();
+    fs::write(project.root.join("hook-release"), b"release").unwrap();
+    let completed = complete(&mut client, &operation.id);
+    assert_eq!(completed.state, GitOperationState::Complete);
+    assert_eq!(
+        completed.result.as_ref().unwrap().outcome,
+        GitOutcome::Succeeded
+    );
+    assert!(completed.owner.is_none());
+    let before = client.git_operation_snapshot(&operation.id, None).unwrap();
+    // This request was valid when queued by the UI, but the PTY is now gone.
+    let resized = client.git_operation_resize(&operation.id, owned.input_epoch, 40, 120);
+    let after = client.git_operation_snapshot(&operation.id, None).unwrap();
+    let input = client.git_operation_input(&operation.id, owned.input_epoch, b"must not execute\n");
+    shutdown(&mut client, &mut host);
+    assert!(
+        resized.is_ok(),
+        "late resize must be a read-only acknowledgment: {resized:?}"
+    );
+    assert_eq!(after.operation.state, GitOperationState::Complete);
+    assert_eq!(
+        serde_json::to_value(&before).unwrap(),
+        serde_json::to_value(&after).unwrap(),
+        "late resize must preserve completed operation and retained screen"
+    );
+    assert!(
+        input.is_err(),
+        "completed operation must still reject input"
+    );
+}
