@@ -64,3 +64,13 @@ ici `ici.next.run` v2와 Lens `lens.result` v1을 읽고 실제 exits 0,1,2,3,13
   이 branch 후보를 공개하지 않으며 PR 병합 후 성공한 exact-main CI의 새 후보를 별도 검증한다.
 - 기본 suite에서 ignored인 실제 PTY 4개와 패키지 설치 1개는 별도 실행 PASS. 실제 ici 검사는
   지정 개발 binary로 실행한 위 결과만 적용한다. zsh fixture는 실제 prompt를 관찰한 뒤 입력한다.
+
+## main 공개 gate에서 발견한 후속 수정
+
+첫 main CI 시도는 host startup deadline, 두 번째는 software SHA 경로의 Git Push UI 완료
+관찰에서 실패했다. 실패를 PASS로 바꾸거나 그 후보를 공개하지 않았다. 조사 중 완료 직후
+queued resize가 ownership 오류가 되어 UI 조회를 중단할 수 있는 기존 경합을 실제 Git 회귀로
+재현했다(수정 전 실패, 수정 후 PASS). CI의 직접 원인이 이 경합이었다고 확정한 것은 아니다.
+완료/exit/reap 뒤의 resize만 read-only 응답으로 바꾸고, active owner 검증·실제 cleanup·결과는
+유지한다. host 시작 실패에는 마지막 연결 오류와 fixture stderr 진단을 추가하고 기존 시간
+제한을 유지한다. 이미 병합된 PR #64 뒤 공개 gate에서 드러난 문제라 별도 후속 PR로 검토한다.

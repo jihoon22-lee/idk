@@ -141,6 +141,13 @@ impl Operation {
             .input(bytes)
     }
     pub fn resize(&mut self, client: &str, epoch: u64, rows: u16, cols: u16) -> Result<()> {
+        // A UI may queue resize while its last snapshot still shows Running.
+        // Once exit is observed (including pending descendant cleanup), resizing
+        // cannot affect a live terminal. Acknowledge without touching ownership,
+        // the retained screen, or completion so the next snapshot can reconcile.
+        if self.exit.is_some() || !self.active() || self.reaped() {
+            return Ok(());
+        }
         self.owner(client, epoch)?;
         self.terminal
             .as_mut()

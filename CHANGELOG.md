@@ -22,6 +22,10 @@
 - ici v2와 Lens v1 구조화 결과의 producer/schema/run identity·파일 digest·findings를
   실제 process exit와 별도로 보관한다. 미완료·손상·미지원 스키마를 성공으로 해석하지 않는다.
 
+### Fixed
+- Git 작업 종료 후 늦게 도착한 화면 크기 요청을 read-only 응답으로 처리한다. 실행 중
+  소유권·epoch 검증과 완료 후 입력 거부는 유지하며, 이 경합이 UI 조회를 멈추지 않게 한다.
+
 ### Compatibility
 - configuration schema 2와 host protocol 2를 사용한다. schema 1은 읽고 최초 이행 시 보관한다.
   기존 host·셸·Run을 자동 종료하지 않는다. 처음 v0.4에서 업데이트할 때는 검증한 새 binary로
