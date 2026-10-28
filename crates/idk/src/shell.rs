@@ -43,6 +43,7 @@ pub struct ShellInspection {
 
 #[derive(Clone)]
 pub struct ShellPlan {
+    pub native: Option<crate::model::NativeShell>,
     pub shell: PathBuf,
     pub login: bool,
     pub init_cwd: PathBuf,
@@ -72,6 +73,8 @@ impl std::fmt::Debug for ShellPlan {
 pub enum InitializationState {
     /// Includes scripts waiting for terminal input. Silence is not readiness.
     Initializing,
+    /// Process started; no shell-specific readiness observation is installed.
+    Unobserved,
     Ready,
     Failed,
 }
@@ -97,12 +100,16 @@ impl std::fmt::Debug for PreparedShell {
 
 impl PreparedShell {
     pub fn state(&self) -> Result<InitializationState> {
+        if self.state_path.as_os_str().is_empty() {
+            return Ok(InitializationState::Unobserved);
+        }
         let bytes = crate::store::read_private(&self.state_path, 64)?;
         let state =
             std::str::from_utf8(&bytes).context("shell initialization state is not UTF-8")?;
         match state.trim() {
             "initializing" => Ok(InitializationState::Initializing),
             "ready" => Ok(InitializationState::Ready),
+            "unobserved" => Ok(InitializationState::Unobserved),
             "failed" => Ok(InitializationState::Failed),
             // Redirection briefly truncates the file. Never call it ready.
             "" => Ok(InitializationState::Initializing),
@@ -118,6 +125,31 @@ impl ShellPlan {
     /// `--bsd-login` instead execs argv0=-csh with no arguments and HOME removed;
     /// this mode receives its single bootstrap source through the PTY even for tasks.
     pub fn prepare(&self, resource_root: &Path, launcher: &Path) -> Result<PreparedShell> {
+        if let Some(native) = &self.native {
+            crate::model::absolute_path(&self.shell)?;
+            crate::model::absolute_path(&self.start_cwd)?;
+            crate::model::validate_execution_arguments(&native.args, &native.env)?;
+            if self.login || !self.sources.is_empty() || self.command.is_some() {
+                bail!("native execution cannot use legacy csh initialization");
+            }
+            let resource_dir = resource_root.join(format!("shell-{}", Uuid::new_v4()));
+            fs::create_dir_all(resource_root)?;
+            DirBuilder::new().mode(0o700).create(&resource_dir)?;
+            let state_path = PathBuf::new();
+            let mut command = CommandBuilder::new(&self.shell);
+            command.args(&native.args);
+            command.cwd(&self.start_cwd);
+            command.env_clear();
+            for (key, value) in self.env.iter().chain(native.env.iter()) {
+                command.env(key, value);
+            }
+            return Ok(PreparedShell {
+                command,
+                bootstrap_bytes: Vec::new(),
+                state_path,
+                resource_dir,
+            });
+        }
         for (label, path) in [
             ("shell", &self.shell),
             ("initialization cwd", &self.init_cwd),

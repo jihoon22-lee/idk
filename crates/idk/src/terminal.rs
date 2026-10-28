@@ -705,6 +705,8 @@ pub struct TerminalSession {
     exit: Option<TerminalExit>,
     defer_reap: bool,
     reaped: bool,
+    close_signal: libc::c_int,
+    piped: bool,
 }
 
 impl TerminalSession {
@@ -786,7 +788,114 @@ impl TerminalSession {
             exit: None,
             defer_reap: false,
             reaped: false,
+            close_signal: libc::SIGHUP,
+            piped: false,
         })
+    }
+
+    /// Spawn a task without a controlling terminal. Stdin is closed; stdout and
+    /// stderr are independently drained with bounded buffers. Their merged log
+    /// reflects observation order, not an ordering guarantee between streams.
+    pub fn spawn_process(
+        mut command: std::process::Command,
+        rows: u16,
+        cols: u16,
+        output: Option<crate::run::RunOutputSink>,
+    ) -> Result<Self> {
+        use std::os::unix::process::CommandExt;
+        use std::process::Stdio;
+        let size = Size::checked(rows, cols)?;
+        // Prepare every fallible collector resource before a program can run.
+        // A setup error must never discard ownership of already-created descendants.
+        let pipe = || -> Result<(File, File)> {
+            let mut fds = [-1; 2];
+            // SAFETY: pipe2 fills exactly two descriptors. Each is immediately owned by File.
+            if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } < 0 {
+                return Err(std::io::Error::last_os_error()).context("create task output pipe");
+            }
+            let (read, write) = unsafe { (File::from_raw_fd(fds[0]), File::from_raw_fd(fds[1])) };
+            let flags = unsafe { libc::fcntl(read.as_raw_fd(), libc::F_GETFL) };
+            if flags < 0
+                || unsafe { libc::fcntl(read.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) }
+                    < 0
+            {
+                return Err(std::io::Error::last_os_error())
+                    .context("make task read pipe nonblocking");
+            }
+            // The child write endpoint remains blocking, as normal stdout/stderr require.
+            Ok((read, write))
+        };
+        let (stdout_read, stdout_write) = pipe()?;
+        let (stderr_read, stderr_write) = pipe()?;
+        let pipes = [stdout_read, stderr_read];
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout_write))
+            .stderr(Stdio::from(stderr_write));
+        // Only async-signal-safe libc calls between fork and exec. A dedicated
+        // SID lets the existing host ownership and deferred reap logic apply.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP, libc::SIGPIPE] {
+                    libc::signal(signal, libc::SIG_DFL);
+                }
+                Ok(())
+            });
+        }
+        let engine = Arc::new(Mutex::new(Engine::new(
+            size,
+            2000,
+            Box::new(std::io::sink()),
+        )));
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_engine = engine.clone();
+        let thread_stop = stop.clone();
+        let (reaper, reap_child) = mpsc::sync_channel::<OwnedChild>(1);
+        let reader = thread::Builder::new()
+            .name("idk-process-output".into())
+            .spawn(move || {
+                pipe_loop(pipes, thread_engine, thread_stop, output);
+                if let Ok(mut child) = reap_child.recv() {
+                    let _ = child.wait();
+                }
+            })
+            .context("start task output collector")?;
+        let child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                stop.store(true, Ordering::Release);
+                drop(command);
+                drop(reaper);
+                let _ = reader.join();
+                return Err(error).context("spawn registered process");
+            }
+        };
+        let pid = Some(child.id());
+        // No fallible setup remains after spawn; the caller receives ownership.
+        Ok(Self {
+            master: None,
+            child: Some(Box::new(child)),
+            pid,
+            engine,
+            stop,
+            reader: Some(reader),
+            reaper: Some(reaper),
+            exit: None,
+            defer_reap: false,
+            reaped: false,
+            close_signal: libc::SIGTERM,
+            piped: true,
+        })
+    }
+
+    pub(crate) fn set_close_signal(&mut self, signal: libc::c_int) {
+        self.close_signal = signal;
+    }
+    pub(crate) fn close_signal(&self) -> libc::c_int {
+        self.close_signal
     }
 
     fn engine(&self) -> Result<MutexGuard<'_, Engine>> {
@@ -822,6 +931,10 @@ impl TerminalSession {
 
     /// Accept bytes into the bounded queue. Later I/O errors appear in snapshot.error.
     pub fn input(&mut self, bytes: &[u8]) -> Result<()> {
+        ensure!(
+            !self.piped,
+            "noninteractive process does not accept terminal input"
+        );
         ensure!(self.try_wait()?.is_none(), "terminal shell has exited");
         let mut engine = self.engine()?;
         ensure!(!engine.reader_closed, "terminal PTY is closed");
@@ -849,11 +962,13 @@ impl TerminalSession {
             engine.scrollback.saturating_mul(usize::from(cols)) <= MAX_SCROLLBACK_CELLS,
             "resized scrollback exceeds cell limit"
         );
-        self.master
-            .as_ref()
-            .context("terminal output collection has ended")?
-            .resize(size.pty())
-            .context("resize PTY")?;
+        if !self.piped {
+            self.master
+                .as_ref()
+                .context("terminal output collection has ended")?
+                .resize(size.pty())
+                .context("resize PTY")?;
+        }
         engine.term.resize(size);
         engine.changed();
         Ok(())
@@ -1053,7 +1168,14 @@ impl TerminalSession {
             unsafe { libc::getsid(pid) } == pid,
             "terminal process session ownership changed"
         );
-        signal(pid, if force { libc::SIGKILL } else { libc::SIGHUP })
+        signal(
+            pid,
+            if force {
+                libc::SIGKILL
+            } else {
+                self.close_signal
+            },
+        )
     }
 
     /// Close bounded PTY collection while retaining an unreaped child handle.
@@ -1076,7 +1198,7 @@ impl TerminalSession {
     /// Request hangup of the owned shell and its current foreground job. This is
     /// a signal request, not proof of exit: callers must continue try_wait().
     pub fn terminate(&mut self) -> Result<()> {
-        self.signal_owned(libc::SIGHUP)
+        self.signal_owned(self.close_signal)
     }
 
     /// Force the still-owned shell and current owned foreground process group.
@@ -1161,6 +1283,68 @@ impl Drop for TerminalSession {
     }
 }
 
+fn pipe_loop(
+    mut pipes: [File; 2],
+    engine: Arc<Mutex<Engine>>,
+    stop: Arc<AtomicBool>,
+    output: Option<crate::run::RunOutputSink>,
+) {
+    let mut open = [true; 2];
+    let mut bytes = [0u8; IO_CHUNK];
+    while open.iter().any(|value| *value) && !stop.load(Ordering::Acquire) {
+        let mut poll: Vec<_> = pipes
+            .iter()
+            .enumerate()
+            .map(|(i, pipe)| libc::pollfd {
+                fd: if open[i] { pipe.as_raw_fd() } else { -1 },
+                events: libc::POLLIN,
+                revents: 0,
+            })
+            .collect();
+        let result = unsafe { libc::poll(poll.as_mut_ptr(), 2, 25) };
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            if let Ok(mut state) = engine.lock() {
+                state.error = Some(format!("task pipe poll failed: {error}"));
+            }
+            break;
+        }
+        for i in 0..2 {
+            if !open[i] || poll[i].revents & (libc::POLLIN | libc::POLLHUP | libc::POLLERR) == 0 {
+                continue;
+            }
+            match pipes[i].read(&mut bytes) {
+                Ok(0) => open[i] = false,
+                Ok(count) => {
+                    if let Some(output) = &output {
+                        output.push(&bytes[..count]);
+                    }
+                    if let Ok(mut state) = engine.lock() {
+                        state.process(&bytes[..count]);
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(error) => {
+                    open[i] = false;
+                    if let Ok(mut state) = engine.lock() {
+                        state.error = Some(format!("task pipe read failed: {error}"));
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(mut state) = engine.lock() {
+        state.finish_output();
+    }
+}
+
 fn reader_loop(
     mut reader: Box<dyn Read + Send>,
     poll_file: File,
@@ -1240,6 +1424,32 @@ fn reader_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_collector_is_ready_before_exec_and_failed_exec_releases_it() {
+        let missing = std::process::Command::new("/idk-test-no-such-executable");
+        let started = Instant::now();
+        assert!(TerminalSession::spawn_process(missing, 4, 80, None).is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
+
+        let mut command = std::process::Command::new("/bin/sh");
+        // The child must see blocking stdout/stderr, despite nonblocking parent readers.
+        command.args(["-c", "for fd in 1 2; do while read key value; do case \"$key\" in flags:) test \"$((0$value & 04000))\" = 0 || exit 23;; esac; done < /proc/self/fdinfo/$fd; done; printf OUT; printf ERR >&2"]);
+        let mut terminal = TerminalSession::spawn_process(command, 4, 80, None).unwrap();
+        let deadline = Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if let Some(exit) = terminal.try_wait().unwrap() {
+                assert_eq!(exit.code, 0);
+                if terminal.status().unwrap().reader_closed {
+                    break;
+                }
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let output = terminal.snapshot().unwrap().text();
+        assert!(output.contains("OUT") && output.contains("ERR"), "{output}");
+    }
 
     fn engine(rows: u16, cols: u16) -> Engine {
         Engine::new(Size { rows, cols }, 100, Box::new(std::io::sink()))

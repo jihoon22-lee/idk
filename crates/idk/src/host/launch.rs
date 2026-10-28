@@ -29,6 +29,9 @@ pub(super) struct Runtime {
 }
 impl Runtime {
     pub fn initialization(&self) -> Result<InitializationState> {
+        if self.state_path.as_os_str().is_empty() {
+            return Ok(InitializationState::Unobserved);
+        }
         let bytes = read_private(&self.state_path, 64)?;
         match std::str::from_utf8(&bytes)?.trim() {
             "initializing" | "" => Ok(InitializationState::Initializing),

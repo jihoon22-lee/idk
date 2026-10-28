@@ -60,6 +60,7 @@ impl Fixture {
                 name: "Git UI fixture".into(),
                 root: root.clone(),
                 shell: ShellConfig {
+                    native: None,
                     executable: shell,
                     login: false,
                     init_cwd: root.clone(),
@@ -385,6 +386,7 @@ fn start_source_user(fixture: &Fixture) -> String {
         .approve_initialization(review.revision, review)
         .unwrap();
     let task = TaskDefinition {
+        execution: None,
         id: new_id(),
         name: "Registered source user".into(),
         command: "sleep 120".into(),

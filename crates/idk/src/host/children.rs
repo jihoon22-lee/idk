@@ -289,7 +289,10 @@ pub(super) fn reap_child(pid: libc::pid_t) -> Result<()> {
     Ok(())
 }
 pub(super) fn signal_child(pid: libc::pid_t, force: bool) -> Result<()> {
-    if unsafe { libc::kill(pid, if force { libc::SIGKILL } else { libc::SIGHUP }) } != 0 {
+    signal_child_with_signal(pid, if force { libc::SIGKILL } else { libc::SIGHUP })
+}
+pub(super) fn signal_child_with_signal(pid: libc::pid_t, signal: libc::c_int) -> Result<()> {
+    if unsafe { libc::kill(pid, signal) } != 0 {
         return Err(std::io::Error::last_os_error()).context("signal verified adopted child");
     }
     Ok(())

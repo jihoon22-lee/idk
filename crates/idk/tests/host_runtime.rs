@@ -81,6 +81,7 @@ impl Fixture {
                 name: name.into(),
                 root: self.root.clone(),
                 shell: ShellConfig {
+                    native: None,
                     executable: self.shell.clone(),
                     login: false,
                     init_cwd: self.root.clone(),
@@ -1296,4 +1297,102 @@ open('escaped-done', 'w').write('completed naturally')
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[test]
+fn native_batch_without_hook_completes_and_reconnect_keeps_process_and_environment() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("source");
+    let home = tmp.path().join("home");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&home).unwrap();
+    let store = Store::open(Some(&tmp.path().join("data"))).unwrap();
+    let env = BTreeMap::from([
+        ("HOME".into(), home.to_string_lossy().into_owned()),
+        ("PATH".into(), "/usr/bin:/bin".into()),
+        ("TERM".into(), "xterm".into()),
+    ]);
+    let fixture = Fixture {
+        _tmp: tmp,
+        store,
+        root,
+        env,
+        shell: "/bin/bash".into(),
+    };
+    fs::write(
+        home.join(".bashrc"),
+        "echo started >> \"$HOME/native-starts\"\nexport NATIVE_STATE=kept\n",
+    )
+    .unwrap();
+    let service = ProjectService {
+        store: &fixture.store,
+    };
+    let preview = service
+        .preview_connect(ConnectDraft {
+            name: "native".into(),
+            root: fixture.root.clone(),
+            shell: ShellConfig {
+                native: Some(idk_workspace::model::NativeShell {
+                    args: vec!["-i".into()],
+                    env: BTreeMap::new(),
+                }),
+                executable: "/bin/bash".into(),
+                login: false,
+                init_cwd: fixture.root.clone(),
+                sources: vec![],
+                trusted_digest: None,
+            },
+            terminals: (0..2)
+                .map(|i| TerminalDraft {
+                    name: format!("dev{i}"),
+                    cwd: fixture.root.clone(),
+                    sources: vec![],
+                    persistent: true,
+                })
+                .collect(),
+        })
+        .unwrap();
+    let project = service.create(preview.revision, preview).unwrap();
+    let (mut host, mut client) = fixture.host();
+    let batch = client
+        .start_defaults(&project.id, fixture.env.clone(), 24, 100)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let current = client.batch(&batch.batch_id).unwrap();
+        if current.state == BatchState::Complete {
+            assert!(current.failures.is_empty());
+            break;
+        }
+        assert!(Instant::now() < deadline, "{current:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let sessions = client.list(Some(&project.id)).unwrap();
+    assert_eq!(sessions.len(), 2);
+    assert!(sessions
+        .iter()
+        .all(|s| s.initialization == Some(InitializationState::Unobserved)));
+    let identity: Vec<_> = sessions
+        .iter()
+        .map(|s| (s.session_id.clone(), s.child_pid))
+        .collect();
+    drop(client);
+    let mut client = Client::connect_with_launcher(&fixture.store, binary()).unwrap();
+    let reconnected: Vec<_> = client
+        .list(Some(&project.id))
+        .unwrap()
+        .into_iter()
+        .map(|s| (s.session_id, s.child_pid))
+        .collect();
+    assert_eq!(identity, reconnected);
+    loop {
+        if fs::read_to_string(home.join("native-starts"))
+            .is_ok_and(|text| text.lines().count() == 2)
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    stop(&mut client, &mut host);
 }

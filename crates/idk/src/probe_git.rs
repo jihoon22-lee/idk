@@ -128,6 +128,7 @@ pub(crate) fn run(
         name: "Synthetic packaged Git proof".into(),
         root: root.clone(),
         shell: ShellConfig {
+            native: None,
             executable: shell.into(),
             login: false,
             init_cwd: external.clone(),

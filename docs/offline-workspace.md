@@ -1,9 +1,39 @@
-# v0.4 오프라인 설치·업데이트·복구
+# 설치·업데이트·복구
 
-v0.4 기본 반입물은 `idk-0.4.3-x86_64-unknown-linux-musl.tar.gz` 하나다. 내부에는 정적 실행 파일,
+현재 Linux x86_64 배포 archive 예시는 `idk-0.5.0-x86_64-unknown-linux-musl.tar.gz` 하나다. 내부에는 정적 실행 파일,
 manifest, 구성요소 checksum, 의존성 inventory, 라이선스 원문이 있다. 제품 실행에 Python·Rust·C
-compiler나 사외 네트워크가 필요하지 않다. 기존 csh/tcsh와 Git은 해당 환경의 승인된 실행 파일을
-사용한다. 별도 도구 팩·전체 구 기능 호환·자동 도구 설치는 포함하지 않는다.
+compiler나 사외 네트워크가 필요하지 않다. 셸과 Git은 해당 환경의 기존 실행 파일을 사용한다. 별도 도구 팩·전체 구 기능 호환·자동 도구 설치는 포함하지 않는다.
+
+## 온라인 설치와 업데이트
+
+새 버전 idk에서는 HTTPS archive를 직접 검증하고 설치할 수 있다. 최초 설치는 아래의
+archive 확인·실행 파일 추출 절차로 시작한다. 공개 릴리스에서 실제 버전의 archive URL과
+별도의 신뢰할 수 있는 경로에서 확인한 SHA-256을 사용한다.
+
+```text
+idk package targets
+idk package verify-url https://github.com/jihoon22-lee/idk/releases/download/v<VERSION>/idk-<VERSION>-x86_64-unknown-linux-musl.tar.gz --sha256 <trusted-SHA256>
+idk package install-url https://github.com/jihoon22-lee/idk/releases/download/v<VERSION>/idk-<VERSION>-x86_64-unknown-linux-musl.tar.gz --sha256 <trusted-SHA256> --prefix /absolute/user/path/idk-workspace
+```
+
+v0.4에서 최초 전환은 아래 로컬 archive 절차로 검증한 **새 binary**를 사용한다. 구 installer는
+새 schema/protocol을 거부하므로 구 binary로 업데이트를 시도하지 않는다. 원래 generation은
+보존되어 살아 있는 구 host에 다시 접속할 때 사용할 수 있다.
+
+검토한 install-url 명령에 `--yes`를 붙이면 검증한 bytes를 기존 generation 설치 경로로
+활성화한다. 업데이트도 같은 명령이다. 실행 중인 기존 host·셸·Run은 원래 generation을
+유지한다. 자동 업데이트나 시작 시 네트워크 조회는 하지 않는다.
+
+온라인 명령만 시스템 `curl`이 필요하다. HTTPS와 HTTPS redirect만 허용하고 TLS 인증서를
+검증하며 시스템 CA, `CURL_CA_BUNDLE` 및 proxy 환경 설정을 사용한다. `.curlrc`는 적용하지
+않는다. URL의 `user:password@host` 형식은 지원하지 않는다. 다운로드는 메모리에서 64 MiB로 제한하고 연결 15초,
+전체 120초, redirect 5회로 제한한다. 실패·중단·digest 불일치에는 설치를 시작하지 않으며
+부분 archive 파일을 남기지 않는다. curl이 없거나 네트워크를 사용할 수 없으면 로컬 archive
+명령을 사용한다. TLS·redirect 옵션은 [curl 공식 설명](https://curl.se/docs/manpage.html)을 따른다.
+
+현재 검증된 배포 target은 `x86_64-unknown-linux-musl`이다. `package targets`는 지원되는
+배포 계약을 JSON으로 표시한다. 다른 architecture/OS의 archive는 거부하며, 이 목록은
+macOS/native Windows 또는 모든 Linux filesystem 지원을 뜻하지 않는다.
 
 ## 반입과 첫 실행
 
@@ -15,8 +45,8 @@ compiler나 사외 네트워크가 필요하지 않다. 기존 csh/tcsh와 Git�
    실제 승인 값으로 바꾼다. 프로그램은 `--yes` 전까지 활성화하지 않는다.
 
 ```text
-./idk-linux-x86_64 package verify /absolute/path/idk-0.4.3-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256>
-./idk-linux-x86_64 package install /absolute/path/idk-0.4.3-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256> --prefix /absolute/user/path/idk-workspace
+./idk-linux-x86_64 package verify /absolute/path/idk-0.5.0-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256>
+./idk-linux-x86_64 package install /absolute/path/idk-0.5.0-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256> --prefix /absolute/user/path/idk-workspace
 ```
 
 검토한 같은 명령에 `--yes`를 붙여 설치한다. 이후 `/absolute/user/path/idk-workspace/idk`로

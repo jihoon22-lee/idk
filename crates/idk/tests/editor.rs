@@ -58,6 +58,7 @@ impl Fixture {
             related_repositories: Vec::new(),
             default_terminal: None,
             shell: ShellConfig {
+                native: None,
                 executable: "/usr/bin/tcsh".into(),
                 login: false,
                 init_cwd: source.clone(),

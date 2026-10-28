@@ -1,6 +1,6 @@
 # Native release promotion
 
-v0.4 태그는 성공한 main push의 `native` CI 산출물을 승격한다. `release.yml`에는
+공개 태그는 성공한 main push의 `native` CI 산출물을 승격한다. `release.yml`에는
 컴파일, 번들 생성, 체크섬 재생성이나 `idk.pyz` 업로드가 없다. 릴리스는 다음 일곱 파일을
 다운로드했던 bytes 그대로 게시한다.
 
@@ -88,3 +88,15 @@ ShellCheck와 함께 actionlint로 검사한다.
 GitHub 계약: [workflow run metadata](https://docs.github.com/en/rest/actions/workflow-runs),
 [artifact metadata와 digest](https://docs.github.com/en/rest/actions/artifacts),
 [GitHub CLI release create](https://cli.github.com/manual/gh_release_create).
+
+## 배포 target과 온라인 소비
+
+현재 공개 target은 Linux x86_64 정적 musl 하나다. 이는 제품 전체의 영구 플랫폼 조건이
+아니라 실제 후보 build·ELF·notice·smoke 검증을 갖춘 배포 목록이다. 추가 target은 manifest
+이름 변경만으로 활성화하지 않는다. 실행 파일 format/architecture, host 호환, notice 및
+그 target의 실제 CI 후보를 함께 추가한 뒤 `package targets` 목록을 갱신한다.
+macOS/native Windows와 Linux ARM64는 아직 공개 지원 target이 아니다.
+
+사용자는 `package verify-url` 또는 `package install-url`로 공개 archive를 취득할 수 있다.
+이 경로도 신뢰한 archive SHA-256과 기존 bundle 검증을 요구하고, release 후보 생성이나
+checksum 재생성을 하지 않는다. 공개 후 새 다운로드 검증에는 HTTPS 취득 경로도 포함한다.

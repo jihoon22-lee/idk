@@ -318,3 +318,76 @@ fn internally_rehashed_notice_contradictions_are_rejected() {
         );
     }
 }
+
+#[test]
+fn online_cli_uses_identical_verifier_and_install_review_without_partial_files() {
+    let root = tempfile::tempdir().unwrap();
+    let bytes = archive(&files(static_elf()), None);
+    let bundle = root.path().join("bundle.tar.gz");
+    std::fs::write(&bundle, &bytes).unwrap();
+    let curl = root.path().join("curl");
+    std::fs::write(
+        &curl,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGS\"\n/bin/cat \"$BUNDLE\"\nexit \"${FAIL:-0}\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&curl, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let args_file = root.path().join("args");
+    let invoke = |command: &str, digest: &str, fail: &str| {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_idk"));
+        cmd.env("PATH", root.path())
+            .env("ARGS", &args_file)
+            .env("BUNDLE", &bundle)
+            .env("FAIL", fail)
+            .args([
+                "package",
+                command,
+                "https://example.org/release",
+                "--sha256",
+                digest,
+            ]);
+        if command == "install-url" {
+            cmd.arg("--prefix").arg(root.path().join("install"));
+        }
+        cmd.output().unwrap()
+    };
+    let output = invoke("verify-url", &sha256(&bytes), "0");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let review: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        review,
+        serde_json::to_value(verify(&bytes).unwrap().review()).unwrap()
+    );
+    let arguments = std::fs::read_to_string(&args_file).unwrap();
+    assert!(arguments.starts_with("-q\n"));
+    assert!(arguments.contains("--proto\n=https\n--proto-redir\n=https\n"));
+    assert!(arguments.contains("--globoff\n"));
+    let output = invoke("install-url", &sha256(&bytes), "0");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!root.path().join("install").exists());
+    assert!(!invoke("install-url", &"0".repeat(64), "0").status.success());
+    assert!(!invoke("install-url", &sha256(&bytes), "22")
+        .status
+        .success());
+    assert!(!root.path().join("install").exists());
+    // Only fixture inputs and captured argv exist: no partial download or staging files.
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 3);
+}
+
+#[test]
+fn target_registry_does_not_accept_unverified_architectures() {
+    let mut entries = files(static_elf());
+    let mut manifest: serde_json::Value = serde_json::from_slice(&entries[MANIFEST]).unwrap();
+    manifest["target"] = json!("aarch64-unknown-linux-musl");
+    entries.insert(MANIFEST.into(), serde_json::to_vec(&manifest).unwrap());
+    checksums(&mut entries);
+    assert!(verify(&archive(&entries, None)).is_err());
+}

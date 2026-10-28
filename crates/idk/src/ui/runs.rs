@@ -936,6 +936,11 @@ impl App<'_> {
         };
         let key = (project.id.clone(), selected.as_ref().map(|t| t.id.clone()));
         let task = selected.unwrap_or(TaskDefinition {
+            execution: Some(crate::model::TaskExecution::Process {
+                program: std::path::PathBuf::new(),
+                args: vec![],
+                env: Default::default(),
+            }),
             id: uuid::Uuid::new_v4().to_string(),
             name: "New task".into(),
             command: String::new(),
@@ -1011,6 +1016,7 @@ impl App<'_> {
                         form.selected = (form.selected + form.fields.len() - 1) % form.fields.len()
                     }
                     KeyCode::F(6) if form.task.is_some() => {
+                        ensure!(form.task.as_ref().is_some_and(|task| task.execution.is_none()), "Sources belong to legacy csh tasks; use an explicit script for native initialization");
                         ensure!(
                             form.source_count < 32,
                             "A task supports at most 32 source scripts"
@@ -1021,11 +1027,15 @@ impl App<'_> {
                         });
                     }
                     KeyCode::F(7) if form.task.is_some() => {
+                        ensure!(form.task.as_ref().is_some_and(|task| task.execution.is_none()), "Same-shell steps belong to legacy csh tasks; use one explicit script for shared state");
                         ensure!(form.step_count < 64, "A task supports at most 64 steps");
                         form.add_step(TaskStep {
                             name: format!("Step {}", form.step_count + 1),
                             command: String::new(),
                         });
+                    }
+                    KeyCode::F(8) if form.task.is_some() => {
+                        form.cycle_execution()?;
                     }
                     KeyCode::F(4) => {
                         form.revision = self.service.store.load()?.revision;
@@ -1036,7 +1046,7 @@ impl App<'_> {
                             RunRequest::SaveTask {
                                 revision: form.revision,
                                 project_id: form.project.clone(),
-                                task: form.build_task()?,
+                                task: Box::new(form.build_task()?),
                             }
                         } else {
                             RunRequest::SaveEditor {

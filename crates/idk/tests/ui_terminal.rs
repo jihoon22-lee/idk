@@ -189,6 +189,7 @@ impl Fixture {
                 name: "UI runtime".into(),
                 root: root.clone(),
                 shell: ShellConfig {
+                    native: None,
                     executable: shell,
                     login: false,
                     init_cwd: root.clone(),

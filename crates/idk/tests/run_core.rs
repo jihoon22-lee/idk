@@ -37,6 +37,7 @@ impl Fixture {
         .unwrap();
         let store = Store::open(Some(&temp.path().join("data"))).unwrap();
         let task = TaskDefinition {
+            execution: None,
             id: new_id(),
             name: "build".into(),
             command: String::new(),
@@ -68,6 +69,7 @@ impl Fixture {
             related_repositories: vec![],
             default_terminal: None,
             shell: ShellConfig {
+                native: None,
                 executable: launcher::test_shell(),
                 login: false,
                 init_cwd: root,

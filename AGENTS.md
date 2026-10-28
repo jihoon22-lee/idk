@@ -1,6 +1,9 @@
 # idk — Integrated Developer Kit
 
-WSL/Linux에서 개발하고 폐쇄망 RHEL 8.10에서 사용하는 프로젝트 중심 CLI/TUI 도구다.
+Linux/WSL에서 주어진 셸과 개발 도구를 사용하는 프로젝트 중심 CLI/TUI 도구다.
+폐쇄망 RHEL 8.10과 csh/tcsh는 지원 환경/호환 경로이며 전체 제품의 필수 조건이 아니다.
+2026-10-28 사용자 승인에 따른 범용화 계획과 진행은 `docs/generalization.md`를 따른다.
+기존 v0.4 이슈와 ADR의 환경 한정은 역사적 결정이며 이 전환 원장의 결정이 우선한다.
 현재 제품 코드는 `crates/idk/`의 Rust 구현이다. v0.3 Python 제품은 Git history와 기존 공개
 릴리스에 보존한다. Python은 native 빌드·릴리스 도구와 그 검증에만 사용한다.
 
@@ -35,7 +38,7 @@ WSL/Linux에서 개발하고 폐쇄망 RHEL 8.10에서 사용하는 프로젝트
   이유로 자동 변환·삭제·종료하지 않는다. 사용자가 요청한 정상 Git 작업은 그 범위에서 수행한다.
 - 기본 제품 사용에 사외 서비스가 필요하지 않게 한다. 내부 통신은 승인된 CA·인증을 사용한다.
   공개 코드 개발을 위한 GitHub·공식 문서 조회와 제품의 폐쇄망 실행 조건을 구분한다.
-- 초기화한 실제 csh/tcsh 상태, UI와 셸/호스트의 수명, 프로젝트 Git 대상과 terminal cwd를 구분한다.
+- native 셸 startup과 기존 csh 호환 초기화를 구분하고, UI와 셸/호스트의 수명, 프로젝트 Git 대상과 terminal cwd를 구분한다.
   `.csh`를 bash로 번역하거나 재접속 때 source를 반복하지 않는다.
 - 셸·Git·등록 작업·편집기는 명시적 소유권과 실행 의도를 유지한다. 일반 터미널에 작업 명령을
   임의 주입하지 않는다. 종료·취소·background cleanup을 확인하기 전에 완료나 idle로 바꾸지 않는다.
@@ -51,7 +54,7 @@ WSL/Linux에서 개발하고 폐쇄망 RHEL 8.10에서 사용하는 프로젝트
 
 ## 빌드·개발 도구
 
-- 배포 대상은 Linux x86_64 정적 musl 실행 파일과 manifest/checksum/전체 notice를 포함한 검증된
+- 현재 검증된 배포 대상은 Linux x86_64 정적 musl 실행 파일과 manifest/checksum/전체 notice를 포함한 검증된
   archive다. 제품 실행에 Python/compiler가 필요하지 않다. 기존 csh/tcsh·Git을 자동 교체하지 않는다.
 - native 빌드·릴리스·저장 실패 검증용 `scripts/*.py`와 `tests/test_native_*.py`는
   Python 3.10+ stdlib 도구다. `pyproject.toml`은 Ruff 설정이며 Python 제품·런타임 의존성을 정의하지 않는다.

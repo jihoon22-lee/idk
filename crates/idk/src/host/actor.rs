@@ -1261,7 +1261,10 @@ impl Actor {
                                     "terminal initialization did not complete successfully".into()
                                 }),
                             );
-                        } else if slot.info.initialization != Some(InitializationState::Ready) {
+                        } else if !matches!(
+                            slot.info.initialization,
+                            Some(InitializationState::Ready | InitializationState::Unobserved)
+                        ) {
                             waiting = true;
                             if batch
                                 .waiting_since
@@ -1374,7 +1377,15 @@ impl Actor {
                             && slot.cleanup.signalled.get(&process.pid).copied()
                                 != Some(slot.cleanup.force)
                         {
-                            let result = children::signal_child(process.pid, slot.cleanup.force);
+                            let signal = if slot.cleanup.force {
+                                libc::SIGKILL
+                            } else {
+                                slot.runtime
+                                    .as_ref()
+                                    .map(|runtime| runtime.terminal.close_signal())
+                                    .unwrap_or(libc::SIGHUP)
+                            };
+                            let result = children::signal_child_with_signal(process.pid, signal);
                             if result.is_ok() {
                                 slot.cleanup
                                     .signalled
@@ -1524,6 +1535,23 @@ impl Actor {
                         slot.info.initialization = None;
                     }
                 }
+            }
+            // Cancellation grace also covers surviving adopted descendants after leader exit.
+            if slot.cleanup.requested
+                && !slot.cleanup.force
+                && runtime.terminal.close_signal() == libc::SIGTERM
+                && slot
+                    .closing_at
+                    .is_some_and(|time| time.elapsed() >= Duration::from_secs(2))
+                && (!matches!(slot.purpose, SlotPurpose::Run { .. })
+                    || slot.run_cancel_durable
+                    || self.runs_dead)
+            {
+                slot.cleanup.force = true;
+                if let Err(error) = runtime.terminal.request_host_close(true) {
+                    slot.info.error = Some(safe_error(error));
+                }
+                changed = true;
             }
             match runtime.terminal.try_wait() {
                 Ok(Some(exit)) => {

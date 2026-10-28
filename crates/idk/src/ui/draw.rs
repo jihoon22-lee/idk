@@ -1048,6 +1048,9 @@ fn initialization_label(state: Option<&crate::shell::InitializationState>) -> &'
     match state {
         Some(crate::shell::InitializationState::Initializing) => "in progress",
         Some(crate::shell::InitializationState::Ready) => "ready",
+        Some(crate::shell::InitializationState::Unobserved) => {
+            "process started; shell readiness not observed"
+        }
         Some(crate::shell::InitializationState::Failed) => "failed",
         None => "unknown",
     }

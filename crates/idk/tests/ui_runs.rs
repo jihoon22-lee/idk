@@ -90,6 +90,7 @@ impl Fixture {
         let init = root.join("init.csh");
         fs::write(&init, "echo initialized >> init-count\n").unwrap();
         let task = TaskDefinition {
+            execution: None,
             id: new_id(),
             name: "Build task".into(),
             command: command.into(),
@@ -118,6 +119,7 @@ impl Fixture {
             related_repositories: vec![],
             default_terminal: None,
             shell: ShellConfig {
+                native: None,
                 executable: shell,
                 login: false,
                 init_cwd: root.clone(),
@@ -509,6 +511,8 @@ fn new_task_form_preserves_literal_source_arguments_and_starts_selected_ordered_
     fs::write(&source, "echo \"$argv[1]\" > source-argument\n").unwrap();
     let mut app = f.app();
     key(&mut app, KeyCode::Char('n'));
+    key(&mut app, KeyCode::F(8)); // process -> explicit script
+    key(&mut app, KeyCode::F(8)); // explicit legacy csh draft
     wait(&mut app, "Task draft");
     ctrl(&mut app, 'u');
     event(&mut app, Event::Paste("Ordered UI task".into()));

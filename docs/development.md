@@ -1,6 +1,7 @@
 # 개발 작업 안내
 
-규약은 [AGENTS.md](../AGENTS.md), v0.4 범위·PR 묶음은
+범용화 계획과 현재 지원·검증 계약은 [전환 원장](generalization.md)을 따른다.
+규약은 [AGENTS.md](../AGENTS.md), 역사적 v0.4 범위·PR 묶음은
 [메인 #38](https://github.com/jihoon22-lee/idk/issues/38), 수용 조건은
 [명세 #39](https://github.com/jihoon22-lee/idk/issues/39)가 담당한다.
 작업 계획을 매번 복제하지 않고 해당 WP와 관련 요구사항·계약을 참조한다.
@@ -15,7 +16,7 @@
 |---|---|
 | 문서·지침 | diff 공백, 링크·실제 CLI/규약 일치; 이 변경만으로 전체 실행 검사를 반복하지 않음 |
 | native 동작 | 관련 회귀·실패 사례, fmt/Clippy/workspace 검사와 연결된 실제 csh/PTY/Git/Run 경로 |
-| 셸·host·Run 수명 | 실제 tcsh와 BSD csh, 재접속·취소·소유 자손 정리·장애 복구·source gate |
+| 셸·host·Run 수명 | native bash/zsh와 실제 tcsh·BSD csh, 직접 process pipes, 재접속·취소·소유 자손 정리·장애 복구·source gate |
 | Python 빌드/릴리스 도구 | Ruff와 stdlib unittest를 Python 3.10/3.14에서 실행 |
 | 의존성·패키지·배포 | 전체 notice, 정적 ELF, 독립 빌드 재현성, 동일 후보 smoke/UBI/설치·실패 복구 |
 

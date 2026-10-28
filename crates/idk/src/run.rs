@@ -1,6 +1,8 @@
 //! Host-owned registered-run intents, source leases and bounded private PTY logs.
 //! No process is adopted or signalled here; the host reports confirmed ownership cleanup.
-use crate::model::{new_id, valid_id, FailurePolicy, GateLease, SourceGate, TaskLogging};
+use crate::model::{
+    new_id, valid_id, FailurePolicy, GateLease, SourceGate, TaskExecution, TaskLogging,
+};
 use crate::run_wire::*;
 use crate::saved_state::RunLedger as Ledger;
 use crate::shell::ShellPlan;
@@ -23,6 +25,14 @@ const HISTORY_LIMIT: usize = crate::saved_state::RUN_RECORD_LIMIT;
 const LOG_LIMIT: u64 = crate::saved_state::LOG_BYTE_LIMIT;
 const CHUNK_LIMIT: usize = 64 * 1024;
 const LEDGER: &str = "runs.json";
+
+pub struct ProcessLaunch {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    pub cwd: PathBuf,
+    pub interactive: bool,
+}
 
 #[derive(Clone)]
 pub struct RunOutputSink(Arc<OutputInner>);
@@ -563,7 +573,7 @@ impl RunRegistry {
             bytes: 0,
             observed_bytes: 0,
             limit_bytes: LOG_LIMIT,
-            merged_pty: true,
+            merged_pty: plan.task.execution.is_none() || plan.task.interactive,
             file_identity: None,
         };
         let sink = RunOutputSink::new(&self.logs.join(format!("{run_id}.log")), log)?;
@@ -581,6 +591,7 @@ impl RunRegistry {
                 .map(|run| run.run_id.clone())
         });
         let run = RunInfo {
+            structured_result: None,
             run_id: run_id.clone(),
             operation_id,
             project_id: plan.project_id.clone(),
@@ -668,6 +679,63 @@ impl RunRegistry {
         );
         Ok(active.shell.clone())
     }
+    /// Validated native launch details; None preserves legacy same-shell steps.
+    pub fn process_plan(&self, run_id: &str) -> Result<Option<ProcessLaunch>> {
+        self.shell_plan(run_id)?; // Recheck definition and durable Preparing state.
+        let active = self
+            .active
+            .get(run_id)
+            .context("run is not owned by this host")?;
+        let Some(execution) = &active.plan.task.execution else {
+            return Ok(None);
+        };
+        let (program, mut args, overrides) = match execution {
+            TaskExecution::Process { program, args, env } => (program.clone(), args.clone(), env),
+            TaskExecution::Script {
+                interpreter,
+                args,
+                env,
+                ..
+            } => {
+                let mut args = args.clone();
+                args.push(
+                    active
+                        .directory
+                        .join("task.script")
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+                (interpreter.clone(), args, env)
+            }
+        };
+        let mut env = active.plan.shell.env.clone();
+        env.extend(overrides.clone());
+        env.insert("IDK_RUN_ID".into(), run_id.into());
+        env.insert(
+            "IDK_RESULT_PATH".into(),
+            active
+                .directory
+                .join("result.json")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        env.insert(
+            "IDK_EVENTS_PATH".into(),
+            active
+                .directory
+                .join("events.jsonl")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        Ok(Some(ProcessLaunch {
+            program,
+            args: std::mem::take(&mut args),
+            env,
+            cwd: active.plan.task.cwd.clone(),
+            interactive: active.plan.task.interactive,
+        }))
+    }
+
     pub fn output_sink(&self, run_id: &str) -> Result<RunOutputSink> {
         Ok(self
             .active
@@ -799,10 +867,25 @@ impl RunRegistry {
         // a deferred probe. A failed save must leave its retry state and lease
         // intact even though the in-memory outcome below is already final.
         active.finishing = true;
-        let results = read_steps(&active.directory, &steps(&active.plan.task));
+        let results = if active.plan.task.execution.is_some() {
+            vec![StepResult {
+                index: 0,
+                name: active.plan.task.name.clone(),
+                exit_code: exit
+                    .as_ref()
+                    .filter(|value| value.signal.is_none())
+                    .and_then(|value| i32::try_from(value.code).ok()),
+            }]
+        } else {
+            read_steps(&active.directory, &steps(&active.plan.task))
+        };
         active.sink.finish();
         let log = active.sink.descriptor();
+        let structured_result = cleanup_confirmed.then(|| {
+            crate::structured_result::inspect(&active.directory.join("result.json"), run_id)
+        });
         let run = self.run_mut(run_id)?;
+        run.structured_result = structured_result;
         run.source_changed = if run.source_start.error.is_none()
             && source_end.error.is_none()
             && run.source_start.identity.is_some()
@@ -857,7 +940,9 @@ impl RunRegistry {
             .clone();
         if let Some(active) = self.active.get(run_id) {
             run.log = active.sink.descriptor();
-            run.steps = read_steps(&active.directory, &steps(&active.plan.task));
+            if active.plan.task.execution.is_none() {
+                run.steps = read_steps(&active.directory, &steps(&active.plan.task));
+            }
         }
         if run.log.state != LogState::Disabled {
             match log_file(&self.logs.join(format!("{run_id}.log"))) {
@@ -1069,6 +1154,12 @@ fn quote(path: &Path) -> Result<String> {
     ))
 }
 fn create_steps(plan: &TaskLaunchPlan, directory: &Path) -> Result<ShellPlan> {
+    if let Some(execution) = &plan.task.execution {
+        if let TaskExecution::Script { script, .. } = execution {
+            crate::store::atomic_write(&directory.join("task.script"), script.as_bytes())?;
+        }
+        return Ok(plan.shell.clone());
+    }
     let prefix = format!("__idk_{}", &new_id().replace('-', "")[..12]);
     let builtin = format!("{prefix}b");
     let code = format!("{prefix}c");

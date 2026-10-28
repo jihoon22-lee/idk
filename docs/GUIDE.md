@@ -1,20 +1,20 @@
-# idk v0.4 사용 안내
+# idk 사용 안내
 
 `idk`는 프로젝트 중심 TUI를 열고, 하위 명령은 같은 프로젝트·호스트·실행 상태를 다룬다.
 명령 없이 실행하려면 실제 터미널이 필요하다. 각 명령의 정확한 인자는 `idk <command> --help`로
-확인한다. [설치·첫 실행](closed-network-setup.md)을 마친 뒤
+확인한다. [설치·첫 실행](offline-workspace.md)을 마친 뒤
 [프로젝트와 작업 상세 안내](workspace-guide.md)를 따른다.
 
 | 명령/화면 | 용도 |
 |---|---|
 | `idk` | 프로젝트·터미널·Git·작업·결과 TUI |
-| `idk project` | 프로젝트 연결과 공통 csh 초기화 정의 |
+| `idk project` | 프로젝트 연결·native 셸 정의·기존 csh 초기화 호환 |
 | `idk terminal` | 저장된 터미널의 cwd·환경 정의 |
 | `idk session` / `idk host` | 실제 셸과 호스트의 조회·접속·명시적 종료 |
 | Git 화면 | 프로젝트 저장소 diff·index·commit·branch·명시 원격 작업 |
 | `idk task` | 빌드·테스트 정의와 초기 실행 검토, 편집기 설정 |
 | `idk run` | 등록 작업 시작·결과·취소·로그·Problems·편집기 연결 |
-| `idk package` | 검증된 오프라인 번들 설치·업데이트·복구·entrypoint 제거 |
+| `idk package` | 로컬/HTTPS archive 검증·설치·업데이트·복구·entrypoint 제거 |
 | `idk doctor` | 현지 상태 진단; `--brief` 요약, `--json`, `--strict` |
 | `idk version` / `idk --version` | 제품 버전과 protocol/버전 정보 |
 | `idk probe --shell <absolute-csh-path>` | 사용자 프로젝트 대신 합성 입력을 사용하는 패키지 실행 검사 |
@@ -25,10 +25,50 @@
 상세 정의·키 안내는 [workspace-guide.md](workspace-guide.md), 패키지 수명과 저장 위치는
 [offline-workspace.md](offline-workspace.md)를 참조한다. 상세 문서는 각 구현과 함께 갱신한다.
 
+## 셸과 작업 등록
+
+새 프로젝트는 native startup을 사용한다. `--shell`을 생략하면 실행 환경의 기본 셸 후보를
+찾으며 `$SHELL`을 현재 호출 셸이라고 단정하지 않는다. 실행 파일·argv를 명시하면 알 수 없는
+wrapper도 사용할 수 있다. shell 인자는 문자열을 셸 문법으로 재해석하지 않고 argv로 전달한다.
+
+```text
+idk project connect demo /absolute/source --shell /bin/bash
+idk project connect custom /absolute/source --shell /absolute/wrapper --shell-arg=-l --shell-env MODE=development
+idk project environment demo --native --shell /bin/zsh
+idk task add demo build --program /usr/bin/make --arg=all --cwd /absolute/source
+idk task add demo check --interpreter /bin/sh --script-file /absolute/scripts/check.sh
+```
+
+위 명령의 project 식별자는 실제 이름 또는 ID로 바꾼다. 실행 정의는 기존 검토·승인 흐름을
+따른다. `--script-file`의 bytes는 등록 정의에 보관되어 검토한 script가 실행된다. interpreter
+인자는 `--arg`로 주며 script 경로는 그 뒤에 붙는다. `--env NAME=VALUE`는 현재 요청의 환경에
+명시적인 override를 적용한다. 별도 process는 터미널 alias·셸 변수·`cd` 상태를 자동 공유하지
+않는다. 같은 셸 상태를 이어갈 명령은 하나의 script로 작성한다.
+
+일반 작업은 stdin 없이 stdout/stderr pipes로 실행한다. 출력은 관찰 순서대로 bounded raw log에
+모으며 두 스트림 사이의 원래 전체 순서를 보장하지 않는다. `--interactive`는 PTY를 사용하고
+입력 echo 보호를 위해 작업 로그를 비활성화한다. 새 process/script 작업 취소는 SIGTERM 후
+유예·강제 종료와 실제 cleanup 확인으로 진행한다. 일반 터미널과 legacy csh의 종료 의미는
+따로 유지한다.
+
+기존 `--command`, `--step`, `--source`, `--login` 정의는 csh 호환 경로다. 프로젝트에
+`--legacy-csh`를 명시할 수도 있다. native 옵션과 legacy 초기화 옵션은 혼용하지 않는다.
+기존 terminal source가 남아 있으면 native 전환이 거부되므로 먼저 해당 정의를 검토해 변경한다.
+원본 `.csh`를 번역하거나 삭제하지 않는다.
+
+기존 schema 1 설정은 legacy 의미로 읽고 새 실행 정의는 schema 2로 저장한다. 이행 시 기존
+설정을 `workspace.schema1.toml`로 보존하고 직전 저장본은 `workspace.previous.toml`로 남긴다. 새 schema를 구 binary가 읽는다고 보장하지 않으며,
+설치 generation 복구가 실행 중 변경된 사용자 데이터를 과거 snapshot으로 되돌리지는 않는다.
+v0.4에서 첫 업그레이드는 검증한 새 archive에서 추출한 새 binary로 설치한다. 구 installer는
+새 schema/protocol을 거부한다. protocol 2 client는 구 host와 연결하지 않으며, 살아 있는 구
+host에는 보존된 원래 generation의 binary와 같은 data 경로로 접속한다.
+
 ## 수명을 구분하기
 
 화면을 닫거나 입력 소유권을 놓는 것은 작업 취소가 아니다. 재접속은 같은 살아 있는 셸을
-다시 보여 주며 source를 반복하지 않는다. 패키지 업데이트/entrypoint 제거도 기존 셸·Run을
+다시 보여 주며 startup이나 source를 반복하지 않는다. native 실행의 프로세스 시작과
+선택적 셸 준비 관찰은 다르다. 준비 hook이 없으면 `Unobserved`이며, Ready로 추정하지 않는다.
+batch-open은 이 상태에서도 다음 터미널을 시작할 수 있다. 패키지 업데이트/entrypoint 제거도 기존 셸·Run을
 자동 취소하거나 로그를 복원·초기화하지 않는다. 기존 host에는 같은 generation과 data 경로로 접속한다. 초기화 실패·취소 대기·호스트 장애 뒤의 Unknown은
 각각 표시하며, 실제 exit와 정리가 확인될 때까지 완료나 idle로 간주하지 않는다.
 

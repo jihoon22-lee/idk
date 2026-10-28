@@ -80,6 +80,7 @@ impl Fixture {
             name: name.into(),
             root: self.root.clone(),
             shell: ShellConfig {
+                native: None,
                 executable: self.shell.clone(),
                 login: false,
                 init_cwd: self.root.clone(),
@@ -728,6 +729,7 @@ fn framed_task_digest_cannot_move_command_bytes_into_the_cwd() {
     let fixture = Fixture::new();
     let project = fixture.create("Digest", 1);
     let task = TaskDefinition {
+        execution: None,
         id: new_id(),
         name: "Task".into(),
         command: "echo safe".into(),

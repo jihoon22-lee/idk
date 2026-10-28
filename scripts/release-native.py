@@ -457,7 +457,8 @@ def release_notes(changelog: Path, tag: str, report: dict) -> str:
 산출물을 재빌드 없이 게시합니다.
 
 번들: `{archive}`. 설치 전 별도로 확인한 신뢰할 수 있는 SHA-256과 첨부 `.sha256`을 대조하세요.
-기본 런타임에는 Python/compiler가 필요 없으며 기존 csh/tcsh와 Git을 사용합니다.
+기본 런타임에는 Python/compiler가 필요 없으며 사용자가 선택한 셸과 Git을 사용합니다.
+온라인 archive 취득에만 curl이 필요하고 기존 csh/tcsh 초기화는 호환 경로로 유지합니다.
 공개 전 개발·패키지 검증과 폐쇄망 최종 수용은 구분합니다.
 대상 RHEL·폐쇄망 실기는 공개 후 사용자가 수행하며 아직 미실행입니다.
 """
