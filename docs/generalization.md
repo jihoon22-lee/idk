@@ -13,14 +13,14 @@
 
 | 단계 | 범위 | 상태 |
 |---|---|---|
-| P0 | 지침·제품 방향·환경별 검증 계약 | 구현·로컬 검증 완료 |
-| P1 | 설정 schema/legacy reader/live generation 호환 | 구현·로컬 검증 완료 |
-| P2 | native executable/argv/cwd/env 터미널과 선택 readiness | 구현·로컬 검증 완료 |
-| P3 | process pipes/script/interactive PTY, 취소·cleanup | 구현·로컬 검증 완료 |
-| P4 | 온라인 취득→archive 검증·generation 설치 | 구현·로컬 검증 완료 |
-| P5 | 구조화 결과 provenance, ici/Lens 연결 | 구현·로컬 검증 완료 |
-| 공개 | 버전·CI·exact-main artifact·다운로드 검증 | [PR #64](https://github.com/jihoon22-lee/idk/pull/64)와 연결된 CI·릴리스 기록에서 최종 결과 확인 |
-| 정리 | 작업 branch/worktree/임시산출물만 정리 | 공개 후 작업 세션에서 실행·보고 |
+| P0 | 지침·제품 방향·환경별 검증 계약 | 완료 (아래 검증·제한 참조) |
+| P1 | 설정 schema/legacy reader/live generation 호환 | 완료 (아래 검증·제한 참조) |
+| P2 | native executable/argv/cwd/env 터미널과 선택 readiness | 완료 (아래 검증·제한 참조) |
+| P3 | process pipes/script/interactive PTY, 취소·cleanup | 완료 (아래 검증·제한 참조) |
+| P4 | 온라인 취득→archive 검증·generation 설치 | 완료 (아래 검증·제한 참조) |
+| P5 | 구조화 결과 provenance, ici/Lens 연결 | 완료 (아래 검증·제한 참조) |
+| 공개 | 버전·CI·exact-main artifact·다운로드 검증 | 완료 — [v0.5.0](https://github.com/jihoon22-lee/idk/releases/tag/v0.5.0) |
+| 정리 | 구현 branch/worktree/임시산출물만 정리 | 구현 branch/worktree 제거 완료; 임시파일 정리 완료 |
 
 실행 정의·터미널/작업, 배포, 결과 연동은 변경 단위로 검토한다. schema/protocol 2와 최초 업그레이드가 함께 적용되어야 하므로 하나의 통합 PR로 공개한다. 과거 B01~B07 이슈는 완료 이력으로 보존한다.
 
@@ -74,3 +74,59 @@ queued resize가 ownership 오류가 되어 UI 조회를 중단할 수 있는 �
 완료/exit/reap 뒤의 resize만 read-only 응답으로 바꾸고, active owner 검증·실제 cleanup·결과는
 유지한다. host 시작 실패에는 마지막 연결 오류와 fixture stderr 진단을 추가하고 기존 시간
 제한을 유지한다. 이미 병합된 PR #64 뒤 공개 gate에서 드러난 문제라 별도 후속 PR로 검토한다.
+
+## 최종 공개·검증·정리 — 2026-10-28
+
+- 구현 [PR #64](https://github.com/jihoon22-lee/idk/pull/64), 후속 경합 수정
+  [PR #65](https://github.com/jihoon22-lee/idk/pull/65)를 병합했다.
+- [v0.5.0](https://github.com/jihoon22-lee/idk/releases/tag/v0.5.0)은 public/non-draft/non-prerelease로
+  2026-10-28T00:50:17Z에 게시됐다. 태그/source SHA는 4ee4b07c40bb57da2c5e0a4676792c9ee3d3da16다.
+- [exact-main native CI](https://github.com/jihoon22-lee/idk/actions/runs/40610073121)
+  attempt 1, artifact ID 12783481414의 성공한 후보를 인증된 API로 취득·검증했다.
+  전체 Rust·software SHA·실제 셸/PTY·Git/Run·두 독립 정적 빌드 bytes 일치·UBI 8.10 network-none·
+  UID 분리·저장/설치 실패 복구를 통과했다. 앞서 실패한 main 후보를 공개하지 않았다.
+- 내려받은 동일 후보로 metadata/checksum/static ELF/실제 shell·PTY probe를 다시 확인하고,
+  [release workflow](https://github.com/jihoon22-lee/idk/actions/runs/40611277252)가 재빌드 없이 게시했다.
+  공개 자산 7개를 새로 내려받아 이름·크기·bytes가 후보와 모두 일치함을 확인했다.
+  공개 HTTPS URL의 install-url과 설치된 실행 파일의 version 확인도 PASS다.
+
+| 공개 자산 | 크기(bytes) | SHA-256 |
+|---|---:|---|
+| idk-linux-x86_64 | 9387496 | 106a9bd597b5581831caff3564cd738c9034a5c7404f4b1ab629822dc65d9882 |
+| idk-0.5.0-x86_64-unknown-linux-musl.tar.gz | 3910651 | 606c422dd24fd1f13f528a6aebfe88cee49b4c019e3de8cb375bbb2c04207297 |
+
+### 공개 idk bytes로 새로 실행한 결과 소비
+
+두 시험은 위 공개 실행 파일로 새 임시 프로젝트/data를 만들어 각각 1회 수행했다. 앞선
+개발 후보의 PASS를 재사용하지 않았다. 실행 전후 idk와 producer byte digest가 동일했고,
+실제 cleanup과 시험 host의 정상 종료를 확인했다. raw log는 pipe 관찰 순서이며 merged_pty=false다.
+
+- **공개 Lens 0.10.0**: [릴리스](https://github.com/jihoon22-lee/lens-diagnostics/releases/tag/v0.10.0),
+  archive SHA-256 ead763c46cf09bbaaa6bc6c7cee63adbaab852ae71a1612c559fe2e9fadf3806,
+  BUILD/source ad68e69d25cc328c52ff3a6e1a8f25aa1a5a9d39를 별도로 검증했다.
+  producer 실행 파일 SHA-256 83ead4182c7263893d11cdf0e644e1c7fb5dfa3acaad3915c214346fb2586ba7.
+  실제 exit 1, idk Failed, lens.result v1/producer 0.10.0,
+  complete=false/findings 2개를 보존했다.
+  idk/Lens run ID a3f62d37-91da-4cd3-b6b5-fc4f7c734094가 일치했고,
+  결과 bytes SHA-256은 df2c9a9603f1d6bbaf233004791c96be523f2016f7a2ffa8d77ebfc1347b316b다.
+- **미공개 ici 0.13.0 후보**: 허용된 pyz를 시험 소유 경로에 복사하고 실행 전에
+  SHA-256 c179986f3d0eac110cf436a961458e56c0f4a218517e9883ff47cd67addc1cde를 검증했다.
+  실제 exit 3, idk Failed, ici.next.run v2/producer 0.13.0,
+  required_complete=false, partial/full_required_satisfied=false,
+  selected INCOMPLETE/workspace NOT_EVALUATED, findings 0을 그대로 보존했다.
+  mypy 부재와 coverage exit 1을 분석 PASS로 바꾸지 않았다. 결과 소비 검증이며 ici 공개
+  stable의 수용 판정이 아니다. idk run 4130978b-cd2a-4737-9664-24ec7081726a와
+  producer run 179886d321544353b399e06e271287cc를 구분했고 새 events 파일 생성을 확인했다.
+  결과 bytes SHA-256은 93ecc15d00d7efbd857fe6958616c7f5defb4b38042b170640afc175036a5b3e다.
+
+### 정리와 남은 환경 경계
+
+- 구현 브랜치 feat/general-execution, fix/git-operation-completion을 local/remote에서 제거했다.
+  임시 worktree /home/jihoon/projects/idk-generalization도 제거했다.
+- 원본 /home/jihoon/projects/idk를 main으로 동기화했다. 원장 마감만 별도 문서 커밋으로 남기며
+  제품 코드·태그·공개 asset bytes를 변경하지 않는다.
+- 임시파일 정리 완료. 기존 공유 build cache와 부모 조정 세션의 heavy lock은 보존한다.
+  다른 프로젝트/producer의 원본과 작업 자원은 삭제하지 않는다.
+- 대상 RHEL·폐쇄망 정책 실기는 여전히 미실행이다. UBI 결과를 현장 PASS로 대신하지 않는다.
+  NFS state/runtime 비지원과 로컬 XDG/data-dir 선택, 첫 v0.4→v0.5 업데이트에 새 binary 사용,
+  기존 live host는 이전 generation으로 사용·종료하는 이행 조건을 유지한다.
