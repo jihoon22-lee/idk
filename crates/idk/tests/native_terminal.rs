@@ -19,6 +19,12 @@ fn native_startup_is_owned_by_shell_and_rc_changes_do_not_require_script_approva
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     std::fs::create_dir(&home).unwrap();
+    if executable.ends_with("zsh") {
+        // Ubuntu's global zshrc documents this opt-out in .zshenv. Hosted CI
+        // completion directories can require an interactive compaudit decision;
+        // this fixture tests the user's startup file, not global completions.
+        std::fs::write(home.join(".zshenv"), "skip_global_compinit=1\n").unwrap();
+    }
     std::fs::write(
         home.join(rc_name),
         "echo startup >> \"$HOME/count\"\nexport NATIVE_RC=loaded\nPS1=\"IDK_NATIVE_PROMPT> \"\n",
