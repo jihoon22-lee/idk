@@ -42,25 +42,25 @@ VISUAL='"/absolute/editor with spaces" --wait'
 변경 재확인 계약을 따른다. 발견만으로 파일을 열지 않는다. GUI 편집기 실행은 명시 설정의
 `external_gui` 선택을 따른다. 환경변수 발견은 기본적으로 전용 PTY 편집기다.
 
-## ici/Lens 연결
+## Lens 연결
 
 선택한 절대 실행 경로의 버전을 **명시적으로 검사**한 다음 작업 초안을 만든다. 이 검사만
 `--version`을 실행한다. 출력은 8 KiB, 실행은 3초로 제한하고 새로 소유한 session의 종료·자손
 정리를 확인한다. 정리를 확인하지 못하면 지원 가능으로 표시하지 않는다. 경로 부재, 실패,
 잘못된 version 출력, 지원 범위 밖 버전은 기본 작업 공간의 장애가 아니다.
 
-현재 draft 계약은 ici의 안정 숫자 버전 `0.13.x` 이상 `0.x`, Lens의 `0.10.x` 이상 `0.x`다.
+현재 draft 계약은 Lens의 안정 숫자 버전 `0.10.x` 이상 `0.x`다.
 새 major나 prerelease는 자동 승인하지 않는다. 최신 main checkout이나 다른 도구의 동시
 업데이트를 요구하지 않는다. 실행 파일 identity가 버전 검사 이후 달라지면 재검사를 요구한다.
 
-ici 기본 초안은 `analyze`, 추가로 명시 `next verify`를 지원한다. Lens는 사용자가 유한 report
+Lens는 사용자가 유한 report
 명령과 인자를 고르며 root에 `compile_commands.json`이 있으면 `build inspect`를 제안한다.
 기본 지원 domain은 build/env/abi/test/log/sys/trace/net/bundle이며 follow stream은 제외한다.
 결과가 없는 운영 오류도 실제 exit와 별도로 유지한다.
 
 초안 생성기는 literal quote한 실행 경로/argv와 `/bin/sh`의 `exec`로 관리 script를 만든다.
 사용자가 wrapper 파일을 직접 만들 필요가 없으며 script 본문을 실행 전에 검토할 수 있다.
-ici에는 Run별 `IDK_RESULT_PATH`, `IDK_EVENTS_PATH`를 전달하고 Lens는 `--format envelope`의
+Lens는 `--format envelope`의
 stdout만 `IDK_RESULT_PATH`에 쓴다. stderr와 실제 exit는 원래 Run에 남는다. 일반 작업 터미널에
 명령을 주입하지 않으며 등록·승인·실행은 기존 Run 경로를 따른다.
 
@@ -83,8 +83,6 @@ idk discover demo
 idk discover demo --json
 idk discover demo --register 'cargo test'
 idk discover demo --register 1
-idk discover demo --tool ici --executable /absolute/path/ici
-idk discover demo --tool ici --executable /absolute/path/ici --register 'static analysis'
 idk discover demo --tool lens --executable /absolute/path/lens --arg build --arg inspect --arg compile_commands.json --register 'build report'
 idk discover demo --artifact 'build' --max-bytes 104857600 --json
 ```

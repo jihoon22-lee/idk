@@ -1,6 +1,6 @@
 # 설치·업데이트·복구
 
-현재 Linux x86_64 배포 archive 예시는 `idk-0.6.0-x86_64-unknown-linux-musl.tar.gz` 하나다. 내부에는 정적 실행 파일,
+현재 Linux x86_64 배포 archive 예시는 `idk-0.7.0-x86_64-unknown-linux-musl.tar.gz` 하나다. 내부에는 정적 실행 파일,
 manifest, 구성요소 checksum, 의존성 inventory, 라이선스 원문이 있다. 제품 실행에 Python·Rust·C
 compiler나 사외 네트워크가 필요하지 않다. 셸과 Git은 해당 환경의 기존 실행 파일을 사용한다. 별도 도구 팩·전체 구 기능 호환·자동 도구 설치는 포함하지 않는다.
 
@@ -16,7 +16,7 @@ idk package verify-url https://github.com/jihoon22-lee/idk/releases/download/v<V
 idk package install-url https://github.com/jihoon22-lee/idk/releases/download/v<VERSION>/idk-<VERSION>-x86_64-unknown-linux-musl.tar.gz --sha256 <trusted-SHA256>
 ```
 
-v0.4/v0.5에서 v0.6으로 전환할 때는 아래 로컬 archive 절차로 검증한 **새 binary**를 사용한다.
+v0.4/v0.5에서 v0.6 이상으로 전환할 때는 아래 로컬 archive 절차로 검증한 **새 binary**를 사용한다.
 v0.6은 workspace schema 3·host protocol 3을 사용하며 구 installer는 새 schema/protocol을
 거부하므로 구 binary로 업데이트를 시도하지 않는다. 원래 generation은
 보존되어 살아 있는 구 host에 다시 접속할 때 사용할 수 있다.
@@ -36,7 +36,7 @@ v0.6은 workspace schema 3·host protocol 3을 사용하며 구 installer는 새
 배포 계약을 JSON으로 표시한다. 다른 architecture/OS의 archive는 거부하며, 이 목록은
 macOS/native Windows 또는 모든 Linux filesystem 지원을 뜻하지 않는다.
 
-## 반입과 첫 실행
+## 로컬 archive 설치
 
 1. 공개 릴리스와 연결된 승인 경로에서 archive의 SHA-256을 확인한다. archive와 함께 받은 checksum만
    맞춘 것은 publisher 신뢰를 확인한 것이 아니다. 승인 경로·반입 정책을 먼저 따른다.
@@ -46,8 +46,8 @@ macOS/native Windows 또는 모든 Linux filesystem 지원을 뜻하지 않는�
    실제 승인 값으로 바꾼다. 프로그램은 `--yes` 전까지 활성화하지 않는다.
 
 ```text
-./idk-linux-x86_64 package verify /absolute/path/idk-0.6.0-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256>
-./idk-linux-x86_64 package install /absolute/path/idk-0.6.0-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256>
+./idk-linux-x86_64 package verify /absolute/path/idk-0.7.0-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256>
+./idk-linux-x86_64 package install /absolute/path/idk-0.7.0-x86_64-unknown-linux-musl.tar.gz --sha256 <승인받은-SHA256>
 ```
 
 검토한 같은 명령에 `--yes`를 붙여 설치한다. 기본 prefix는 `$HOME/.local/share/idk`이며
@@ -160,14 +160,9 @@ v0.4.2에서 중복 Run 준비 요청의 취소 또는 이력 한도 근처의 �
 exit는 0이고 CI 판정에는 `--strict`를 붙인다. 종료 기록이 없는 host는 같은 binary의 검증된
 접속에서 instance와 PID가 모두 일치해야 실행 중으로 판정한다. 접속을 확인할 수 없거나
 기록과 다르면 경고이며, PID가 살아 있다는 사실만으로 정상 상태로 판단하지 않는다.
-`--brief`는 프로젝트 이름·경로·오류 원문을 제외한
-상태 개수만 출력한다. 이것이 반출 허가를 대신하지 않는다. 파일·로그·원문·hash를 외부로 가져오는
-support archive나 자동 전송 절차는 없다. 현지 원본 증거를 보관하고 정책상 허용된 판정만 공유한다.
+`--brief`는 프로젝트 이름·경로·오류 원문을 제외한 상태 개수만 출력한다. 자동 전송은 하지 않는다.
 
-공개 전 검증과 대상 폐쇄망 실기를 구분한다. 실제 정적 후보의 Ubuntu 실행, UBI 8.10/glibc 2.28/
-nonroot/network-none 설치와 파일시스템 실패 검사를 수행한다. 대상 RHEL 8.10의 startup·CA·인증·
-NFS/noexec·로그아웃 정책 실기는 사용자 지시에 따라 공개된 동일 결과물로 릴리스 후 수행하며,
-실행하기 전에는 PASS로 간주하지 않는다.
+배포 검증과 환경별 미실행·반출 정책은 [수용 원장](acceptance/v0.4.0.md)을 따른다.
 
 ## NFS home과 상태 저장소 오류
 

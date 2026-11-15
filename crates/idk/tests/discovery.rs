@@ -128,21 +128,17 @@ fn artifacts_measure_bytes_and_reject_symlink_fifo_and_size() {
 #[test]
 fn explicit_optional_version_and_drafts_preserve_args_exit_and_result_paths() {
     let root = tempfile::tempdir().unwrap();
-    let ici = root.path().join("ici space ' quote");
+    let lens = root.path().join("lens space ' quote");
     executable(
-        &ici,
-        "if [ \"$1\" = --version ]; then echo 'ici 0.13.0'; else printf '%s\\n' \"$@\"; exit 3; fi",
+        &lens,
+        "if [ \"$1\" = --version ]; then echo 'lens 0.10.0'; else printf '%s\\n' \"$@\"; exit 3; fi",
     );
-    let info = inspect_optional_tool(OptionalTool::Ici, &ici, &environment(root.path())).unwrap();
+    let info = inspect_optional_tool(OptionalTool::Lens, &lens, &environment(root.path())).unwrap();
     assert!(info.supported, "{:?}", info.reason);
     let task = optional_task_draft(
         &info,
         root.path(),
-        &[
-            "analyze".into(),
-            "--component".into(),
-            "a' $(touch BAD)".into(),
-        ],
+        &["log".into(), "stats".into(), "a' $(touch BAD)".into()],
     )
     .unwrap();
     let TaskExecution::Script { script, .. } = task.execution.unwrap() else {
@@ -156,12 +152,15 @@ fn explicit_optional_version_and_drafts_preserve_args_exit_and_result_paths() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(3));
-    assert!(String::from_utf8_lossy(&out.stdout).contains("a' $(touch BAD)"));
+    assert!(fs::read_to_string(root.path().join("result space.json"))
+        .unwrap()
+        .contains("a' $(touch BAD)"));
+    assert!(out.stdout.is_empty());
     assert!(!root.path().join("BAD").exists());
-    executable(&ici, "echo 'ici 9.0.0'");
+    executable(&lens, "echo 'lens 9.0.0'");
     assert!(optional_task_draft(&info, root.path(), &[]).is_err());
     assert!(
-        !inspect_optional_tool(OptionalTool::Ici, &ici, &environment(root.path()))
+        !inspect_optional_tool(OptionalTool::Lens, &lens, &environment(root.path()))
             .unwrap()
             .supported
     );
@@ -211,22 +210,22 @@ fn lens_draft_redirects_only_result_and_preserves_exit() {
 #[test]
 fn version_probes_are_bounded_and_never_accept_partial_or_failed_versions() {
     let root = tempfile::tempdir().unwrap();
-    let tool = root.path().join("ici");
+    let tool = root.path().join("lens");
     for script in [
-        "echo ici 0.13.0; exit 1",
-        "echo unrelated 0.13.0",
-        "echo ici future",
+        "echo lens 0.10.0; exit 1",
+        "echo unrelated 0.10.0",
+        "echo lens future",
         "while :; do printf xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done",
     ] {
         executable(&tool, script);
         let result =
-            inspect_optional_tool(OptionalTool::Ici, &tool, &environment(root.path())).unwrap();
+            inspect_optional_tool(OptionalTool::Lens, &tool, &environment(root.path())).unwrap();
         assert!(!result.supported, "{script}");
     }
     executable(&tool, "while :; do :; done");
     let start = std::time::Instant::now();
     let result =
-        inspect_optional_tool(OptionalTool::Ici, &tool, &environment(root.path())).unwrap();
+        inspect_optional_tool(OptionalTool::Lens, &tool, &environment(root.path())).unwrap();
     assert!(!result.supported);
     assert!(result.reason.unwrap().contains("timed out"));
     assert!(start.elapsed() < std::time::Duration::from_secs(5));
@@ -260,7 +259,7 @@ fn version_probe_kills_owned_descendants_and_preserves_unrelated() {
         0
     );
     let root = tempfile::tempdir().unwrap();
-    let tool = root.path().join("ici");
+    let tool = root.path().join("lens");
     executable(
         &tool,
         "/bin/sleep 30 &\nprintf '%s' \"$!\" > \"$CHILD_PID\"\nwhile :; do :; done",
@@ -272,7 +271,7 @@ fn version_probe_kills_owned_descendants_and_preserves_unrelated() {
         .arg("30")
         .spawn()
         .unwrap();
-    let inspection = inspect_optional_tool(OptionalTool::Ici, &tool, &env);
+    let inspection = inspect_optional_tool(OptionalTool::Lens, &tool, &env);
     let unrelated_live = unrelated.try_wait().unwrap().is_none();
     unrelated.kill().unwrap();
     unrelated.wait().unwrap();

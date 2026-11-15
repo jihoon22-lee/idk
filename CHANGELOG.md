@@ -9,6 +9,19 @@
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-15
+
+### Changed
+- ici 개발 중단에 따라 `discover --tool ici`와 자동 wrapper 생성을 제거한다. Lens 발견·등록은 유지한다.
+  기존 수동 작업 정의와 저장된 `ici.next.run` v2·event·비교·pin은 계속 읽고 보존한다.
+- Rust/Clippy 기본·short 출력, tsc 위치와 Go vet·Ruff concise의 위치 메시지를 로그 진단으로 표시한다.
+  심각도 없는 메시지는 note로 표시하며 실제 Run exit와 별개다.
+- 현재 규약·설치 안내를 정리하고 v0.3 계획을 docs/history/v0.3으로 옮긴다.
+  언어 도구는 프로젝트의 패키지 매니저·미러로 준비하고 기존 작업으로 실행한다.
+
+Linux x86_64 정적 musl 배포와 NFS host state/runtime 비지원은 유지한다.
+현장 환경의 미실행 기록은 수용 원장에 별도로 보존한다.
+
 ## [0.6.0] - 2026-10-28
 
 ### Added

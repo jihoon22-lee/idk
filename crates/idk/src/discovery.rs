@@ -344,13 +344,11 @@ pub fn snapshot_artifact(path: &Path, max_bytes: u64) -> Result<ArtifactSnapshot
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OptionalTool {
-    Ici,
     Lens,
 }
 impl OptionalTool {
     fn name(self) -> &'static str {
         match self {
-            Self::Ici => "ici",
             Self::Lens => "lens",
         }
     }
@@ -418,7 +416,6 @@ pub fn inspect_optional_tool(
         );
         inspection.version = Some(version.into());
         let minimum = match kind {
-            OptionalTool::Ici => 13,
             OptionalTool::Lens => 10,
         };
         ensure!(
@@ -671,7 +668,6 @@ pub fn optional_task_draft(
     crate::model::validate_execution_arguments(args, &BTreeMap::new())?;
     let args = if args.is_empty() {
         match inspection.kind {
-            OptionalTool::Ici => vec!["analyze".into()],
             OptionalTool::Lens => {
                 let database = root.join("compile_commands.json");
                 ensure!(
@@ -700,40 +696,27 @@ pub fn optional_task_draft(
         ),
         "result/events/format arguments are managed by the integration draft"
     );
-    if inspection.kind == OptionalTool::Ici {
-        ensure!(
-            args.first().is_some_and(|arg| arg == "analyze")
-                || args.get(..2).is_some_and(|pair| pair == ["next", "verify"]),
-            "ici integration supports analyze or next verify"
-        );
-    } else {
-        ensure!(
-            args.first().is_some_and(|arg| [
-                "build", "env", "abi", "test", "log", "sys", "trace", "net", "bundle"
-            ]
-            .contains(&arg.as_str())),
-            "select a finite Lens report command"
-        );
-        ensure!(
-            !args.iter().any(|arg| arg == "--follow"),
-            "streaming Lens reports are not supported"
-        );
-    }
+    ensure!(
+        args.first().is_some_and(|arg| [
+            "build", "env", "abi", "test", "log", "sys", "trace", "net", "bundle"
+        ]
+        .contains(&arg.as_str())),
+        "select a finite Lens report command"
+    );
+    ensure!(
+        !args.iter().any(|arg| arg == "--follow"),
+        "streaming Lens reports are not supported"
+    );
     let mut argv = vec![quote_arg(
         program.to_str().context("tool path is not UTF-8")?,
     )?];
-    if inspection.kind == OptionalTool::Lens {
-        argv.extend(["--format".into(), "envelope".into()]);
-    }
+    argv.extend(["--format".into(), "envelope".into()]);
     argv.extend(
         args.iter()
             .map(|arg| quote_arg(arg))
             .collect::<Result<Vec<_>>>()?,
     );
-    let ending = match inspection.kind {
-        OptionalTool::Ici => " --result \"${IDK_RESULT_PATH:?}\" --events \"${IDK_EVENTS_PATH:?}\"",
-        OptionalTool::Lens => " > \"${IDK_RESULT_PATH:?}\"",
-    };
+    let ending = " > \"${IDK_RESULT_PATH:?}\"";
     let script = format!("exec {}{}\n", argv.join(" "), ending);
     let mut task = process_task(
         &format!("{} report", inspection.kind.name()),

@@ -104,7 +104,7 @@ batch-open은 이 상태에서도 다음 터미널을 시작할 수 있다. 패�
 원본을 변환·삭제하지 않는다. 프로젝트 소스와 `.csh`는 그대로 두고 새 프로젝트·작업 정의를
 명시적으로 등록한다. 이전 릴리스의 사용법과 소스는 해당 Git 태그/공개 릴리스에서 확인할 수 있다.
 
-이전 `docs/plan.md`, `docs/spec-ws-run.md`, `docs/spec-dt.md`, `docs/env-survey.md`와 과거
+이전 `docs/history/v0.3/`의 계획·명세·환경 조사와 과거
 작업 기록은 역사적 자료다. 현재 설치·검증 명령이나 폐쇄망 반출 권한으로 해석하지 않는다.
 
 공개 후 대상 RHEL·폐쇄망 실기는 [후속 #53](https://github.com/jihoon22-lee/idk/issues/53)에서

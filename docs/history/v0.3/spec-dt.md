@@ -1,6 +1,6 @@
 # Phase 2 명세 — `idk dt`
 
-> **v0.3 이하 Python 제품의 역사적 명세다.** 현재 명령은 [사용 안내](GUIDE.md)를 따른다.
+> **v0.3 이하 Python 제품의 역사적 명세다.** 현재 명령은 [사용 안내](../../GUIDE.md)를 따른다.
 > 당시 구현 규약은 [v0.3.1 구조 문서](https://github.com/jihoon22-lee/idk/blob/v0.3.1/docs/ARCHITECTURE.md)에 보존되어 있다.
 
 개발 도구 모음. 폐쇄망에서 jsonformatter·jwt.io 같은 웹 도구를 열 수 없다는 것이 존재 이유다.
@@ -329,7 +329,7 @@ Phase 1 과 달리 도구들이 서로 독립이라 병렬로 나가도 되지�
 A~C 가 실사용 가치의 대부분이다. D 는 없어도 동작하므로 시간이 밀리면 뒤로 미룬다.
 E 에서 `docs/GUIDE.md` 의 "아직 없는 명령" 표를 정리하고 `README.md` 의 상태 표를 갱신한다.
 
-릴리스 준비는 [CHANGELOG.md](../CHANGELOG.md)의 절차대로 `__version__` → `0.2.0`,
+릴리스 준비는 [CHANGELOG.md](../../../CHANGELOG.md)의 절차대로 `__version__` → `0.2.0`,
 `[Unreleased]` → `[0.2.0]` 이동까지 수행한다. PR 병합·CI green·최종 공개 승인이 publish
 gate이며, 그 뒤에 `git tag v0.2.0` 생성과 push, GitHub Release 생성을 진행한다.
 폐쇄망 field acceptance와 `env-survey.md` 확인은 publish와 분리된 후속 단계다.

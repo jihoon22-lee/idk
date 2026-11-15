@@ -30,16 +30,18 @@ Python·Rust compiler·외부 서비스·root 권한이 필요하지 않다. 온
 idle로 추정하지 않는다. 사용자 소스·`.csh`·기존 설정과 무관한 프로세스는 자동 변환·삭제·종료
 대상이 아니다.
 
+[언어별 검사 작업](docs/task-tools.md)에 Rust·Go·TypeScript·Python 등록 예시와 로그 진단 범위를 설명한다.
+
 ## 설치와 시작
 
 [릴리스](https://github.com/jihoon22-lee/idk/releases)의
-`idk-0.6.0-x86_64-unknown-linux-musl.tar.gz`와 **별도의 신뢰할 수 있는 경로로 확인한 SHA-256**을
+`idk-0.7.0-x86_64-unknown-linux-musl.tar.gz`와 **별도의 신뢰할 수 있는 경로로 확인한 SHA-256**을
 사용한다. archive와 checksum이 서로 맞는 것만으로 publisher 신뢰가 생기는 것은 아니다.
 [설치·첫 실행 안내](docs/offline-workspace.md)에 따라 실행 파일을 준비한 뒤 설치를 검토한다.
 
 ```text
-./idk-linux-x86_64 package verify /absolute/path/idk-0.6.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
-./idk-linux-x86_64 package install /absolute/path/idk-0.6.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
+./idk-linux-x86_64 package verify /absolute/path/idk-0.7.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
+./idk-linux-x86_64 package install /absolute/path/idk-0.7.0-x86_64-unknown-linux-musl.tar.gz --sha256 <approved-SHA256>
 ```
 
 새 버전 idk에서는 `package verify-url <https-url> --sha256 <trusted-SHA256>`과
@@ -47,7 +49,7 @@ idle로 추정하지 않는다. 사용자 소스·`.csh`·기존 설정과 무�
 같은 archive를 직접 취득할 수 있다. 로컬 설치와 동일한 bytes 검증·generation 전환을 사용한다.
 `idk package targets`는 현재 배포 target을 JSON으로 표시한다.
 
-v0.4/v0.5에서 v0.6으로 처음 전환할 때는 검증한 새 archive에서 꺼낸 **새 실행 파일**로 설치한다.
+v0.4/v0.5에서 v0.6 이상으로 처음 전환할 때는 검증한 새 archive에서 꺼낸 **새 실행 파일**로 설치한다.
 구 installer는 새 schema/protocol을 거부한다. 이후 검토한 설치 명령에 `--yes`를 붙여 활성화한다. 기본 설치 위치는 `$HOME/.local/share/idk`이며 이 위치의 `idk`를 PATH에 연결한다. `--prefix`로 다른 절대 경로를 지정할 수도 있다.
 기존 호스트가 있다면 업데이트 뒤에도 원래 generation과 같은 data 경로로 다시 접속한다.
 살아 있는 셸과 등록 Run, 해당 호스트의 로그 수집은 설치·제거 때문에 자동으로 중단되지 않는다.
@@ -59,8 +61,7 @@ idk .
 ```
 
 `idk .`은 저장소에 파일을 만들지 않고 프로젝트를 연다. 팀 작업을 선언하려면 `idk config init`으로 선택적 `idk.toml`을 만들고 예외만 적는다. [설정 안내](docs/portable-settings.md)와 [작업 발견](docs/task-discovery.md)을 참고한다. `idk`는 프로젝트 목록 TUI를 연다. `doctor`는 경고가 있어도 기본 exit 0이며 검사에서 실패로
-다루려면 `--strict`를 사용한다. 폐쇄망에서는 [반입·운영 안내](docs/closed-network-setup.md)의
-현지 정책을 적용한다. 진단 요약도 반출 권한을 대신하지 않는다.
+다루려면 `--strict`를 사용한다. 네트워크 없이 설치할 때도 같은 [로컬 archive 절차](docs/offline-workspace.md#로컬-archive-설치)를 사용한다.
 
 ## 지원 범위
 
@@ -72,8 +73,7 @@ idk .
 | NFS state/runtime | 미지원. 허용된 로컬 XDG 또는 `--data-dir` 지정 |
 | Linux ARM64 / macOS / native Windows | 현재 공개 target 아님. WSL과 native Windows 지원은 다름 |
 
-RHEL·폐쇄망 현장 실기는 기존 [후속 #53](https://github.com/jihoon22-lee/idk/issues/53)의
-미실행 기록으로 보존한다. 일반 Linux 검증을 해당 현장의 PASS로 바꾸지 않는다.
+환경별 미실행 검증은 [수용 원장](docs/acceptance/v0.4.0.md)에서 관리한다.
 
 ## 문서와 v0.3 전환
 
