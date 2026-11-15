@@ -3,7 +3,7 @@
 > **기존 Python 구현의 설계·Phase 0~5 계획이다.** 아래 결정과 작업 순서는 해당 구현에 적용한다.
 > v0.4 재설계의 범위·진행은 [메인 #38](https://github.com/jihoon22-lee/idk/issues/38),
 > 수용 기준은 [명세 #39](https://github.com/jihoon22-lee/idk/issues/39)를 따른다.
-> 개발 규약과 기존/신규 적용 범위는 [AGENTS.md](../AGENTS.md)가 정본이다.
+> 개발 규약과 기존/신규 적용 범위는 [AGENTS.md](../../../AGENTS.md)가 정본이다.
 
 > Phase 0~3과 v0.2.0 보안·안정성·build MVP 작업은 v0.2.0 범위에 반영되어 있다.
 > 핵심 실행 아티팩트는 `dist/idk.pyz` 한 개이며, ws/run pane/clipboard용 vendor는 선택 입력이다.
@@ -338,7 +338,7 @@ OS/커널/glibc/Python/컴파일러/zellij/xclip/locale/TERM + 미러 접속 가
 ## 구현 순서
 
 > 2026-08-19 전체 검토에서 나온 보안·신뢰성 보강과 Phase 3의 실제 PR 순서는
-> [즉시 실행 로드맵](superpowers/plans/2026-08-19-immediate-roadmap.md)에 정리했다.
+> [즉시 실행 로드맵](../../superpowers/plans/2026-08-19-immediate-roadmap.md)에 정리했다.
 > 폐쇄망 환경 확인을 기다리지 않는 작업과 확인 뒤 결정할 작업을 분리해 두었다.
 
 | Phase | 내용 | 비고 |

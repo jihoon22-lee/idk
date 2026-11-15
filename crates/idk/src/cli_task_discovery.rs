@@ -10,13 +10,11 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum ToolChoice {
-    Ici,
     Lens,
 }
 impl From<ToolChoice> for OptionalTool {
     fn from(value: ToolChoice) -> Self {
         match value {
-            ToolChoice::Ici => Self::Ici,
             ToolChoice::Lens => Self::Lens,
         }
     }
@@ -37,7 +35,7 @@ pub struct DiscoverArgs {
     /// Absolute path of the optional tool the user chose to execute with --version.
     #[arg(long, requires = "tool")]
     executable: Option<PathBuf>,
-    /// Literal report argument, repeatable. ici defaults to analyze.
+    /// Literal Lens report argument, repeatable.
     #[arg(long = "arg", allow_hyphen_values = true, requires = "tool")]
     args: Vec<String>,
     /// Measure the actual bytes at a registered task's artifact path (name or ID).

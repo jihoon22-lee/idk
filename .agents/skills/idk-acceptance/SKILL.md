@@ -3,7 +3,11 @@ name: idk-acceptance
 description: Audit idk v0.4 requirement and scenario evidence for WP acceptance or release readiness. Use when judging completion from tests and artifacts, not for routine coding, legacy fixes, or documentation-only edits.
 ---
 
-# idk v0.4 수용 검토
+# idk 수용 검토
+
+현재 변경은 AGENTS.md·docs/development.md·docs/native-release.md의 변경별 gate를 따른다.
+아래 WP/R/S 전체 감사는 과거 v0.4 수용 감사를 명시적으로 요청받았을 때만 적용한다.
+새 릴리스에 v0.4 이슈를 다시 열거나 당시 PR 묶음을 강제하지 않는다.
 
 [AGENTS.md](../../../AGENTS.md)와 [검증 안내](../../../docs/development.md#v04-증거와-완료-판단)를
 읽고 요청받은 WP/시나리오/후보 범위만 검토한다. 전체 릴리스 판단을 요청받았을 때는

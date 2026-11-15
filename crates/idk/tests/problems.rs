@@ -152,3 +152,121 @@ fn stripped_control_characters_never_alias_an_existing_plain_filename() {
     line.extend_from_slice(b"\nException: earlier frame cannot substitute\n");
     assert!(parse(&line, 8192).problems.is_empty());
 }
+
+#[test]
+fn captured_language_outputs_preserve_locations_codes_and_chunk_boundaries() {
+    for (output, file, line, column, severity, code) in [
+        (
+            include_str!("fixtures/language-diagnostics/rustc.log"),
+            "main.rs",
+            1,
+            26,
+            Severity::Error,
+            "E0308",
+        ),
+        (
+            include_str!("fixtures/language-diagnostics/rustc-short.log"),
+            "main.rs",
+            1,
+            26,
+            Severity::Error,
+            "E0308",
+        ),
+        (
+            include_str!("fixtures/language-diagnostics/tsc.log"),
+            "main.ts",
+            1,
+            7,
+            Severity::Error,
+            "TS2322",
+        ),
+        (
+            include_str!("fixtures/language-diagnostics/ruff.log"),
+            "main.py",
+            1,
+            8,
+            Severity::Note,
+            "F401",
+        ),
+        (
+            include_str!("fixtures/language-diagnostics/go-vet.log"),
+            "main.go",
+            3,
+            27,
+            Severity::Note,
+            "fmt.Printf",
+        ),
+    ] {
+        let whole = parse(output.as_bytes(), output.len());
+        let fragmented = parse(output.as_bytes(), 1);
+        assert_eq!(
+            serde_json::to_value(&whole).unwrap(),
+            serde_json::to_value(&fragmented).unwrap()
+        );
+        assert!(!whole.partial);
+        let diagnostic = whole
+            .problems
+            .iter()
+            .find(|p| p.file.as_deref() == Some(Path::new(file)))
+            .expect(file);
+        assert_eq!(diagnostic.severity, severity);
+        assert_eq!(diagnostic.range.as_ref().unwrap().line, line);
+        assert_eq!(diagnostic.range.as_ref().unwrap().column, Some(column));
+        assert!(diagnostic.message.contains(code), "{}", diagnostic.message);
+        assert_eq!(diagnostic.run_id, whole.run_id);
+    }
+}
+
+#[test]
+fn rust_headers_do_not_claim_unrelated_or_invalid_locations() {
+    for between in [
+        "unrelated tool output\n",
+        "invalid\u{202e} path\n",
+        "bad\0path\n",
+    ] {
+        let output = format!("error[E0308]: mismatched types\n{between} --> unrelated.rs:9:2\n");
+        let parsed = parse(output.as_bytes(), 1);
+        assert_eq!(parsed.problems.len(), 1);
+        assert!(parsed.problems[0].file.is_none());
+    }
+    let output = b"warning: unused variable\n --> first.rs:3:4\n  ::: other.rs:9:2\nerror[E0001]: no location\n";
+    let parsed = parse(output, 1);
+    assert_eq!(parsed.problems.len(), 2);
+    assert_eq!(parsed.problems[0].severity, Severity::Warning);
+    assert_eq!(
+        parsed.problems[0].file.as_deref(),
+        Some(Path::new("first.rs"))
+    );
+    assert!(parsed.problems[1].file.is_none());
+    assert!(parse(b"12:34:56: status\nhttps://host.rs:1:2: status\n", 1)
+        .problems
+        .is_empty());
+    let parsed = parse(
+        "src/한글 name.go:8: message\nC:\\src\\main.ts(2,3): error TS2322: failure\n".as_bytes(),
+        1,
+    );
+    assert_eq!(parsed.problems.len(), 2);
+    assert_eq!(
+        parsed.problems[0].file.as_deref(),
+        Some(Path::new("src/한글 name.go"))
+    );
+    assert_eq!(parsed.problems[0].range.as_ref().unwrap().column, None);
+    assert_eq!(
+        parsed.problems[1].file.as_deref(),
+        Some(Path::new("C:\\src\\main.ts"))
+    );
+}
+
+#[test]
+fn captured_clippy_output_keeps_its_primary_location() {
+    let output = include_bytes!("fixtures/language-diagnostics/clippy.log");
+    let parsed = parse(output, 1);
+    let diagnostic = parsed
+        .problems
+        .iter()
+        .find(|p| p.file.as_deref() == Some(Path::new("src/main.rs")))
+        .unwrap();
+    assert_eq!(diagnostic.range.as_ref().unwrap().line, 1);
+    assert_eq!(diagnostic.severity, Severity::Error);
+    assert!(diagnostic.message.contains("equal expressions"));
+}

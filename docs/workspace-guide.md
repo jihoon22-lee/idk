@@ -226,6 +226,8 @@ Problems는 Run과 log/source generation, 원문 위치, 진단 종류·메시�
 
 artifact가 있으면 cleanup 뒤 별도 worker가 최대 16 MiB를 측정한다. 관찰 SHA-256·크기·시각을 표시하며 retained predecessor의 경로·task·확인된 bytes가 모두 일치할 때만 historical equality를 표시한다. 더 큰 artifact나 측정 실패는 unverified이고 exit를 바꾸지 않는다. 현재 경로의 파일이 이후에도 같은 bytes라고 보증하지 않는다.
 
+지원하는 언어 도구 출력과 등록 예시는 [언어별 검사 작업](task-tools.md)을 따른다.
+
 ## 편집기 연결
 
 새 프로젝트는 VISUAL/EDITOR와 설치 후보에서 편집기를 발견한다. 명시한 설정이 사용할 수 없으면 자동 대체하지 않는다. Tasks/Results의 `E`에서 실행 파일의 절대 경로, literal argv 목록, 외부 GUI 허용 여부를 설정한다.

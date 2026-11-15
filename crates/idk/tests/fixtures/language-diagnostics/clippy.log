@@ -1,0 +1,11 @@
+    Checking diagnostic-capture v0.1.0 ($FIXTURE)
+error: equal expressions as operands to `==`
+ --> src/main.rs:1:28
+  |
+1 | fn main() { println!("{}", 1 == 1); }
+  |                            ^^^^^^
+  |
+  = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#eq_op
+  = note: `#[deny(clippy::eq_op)]` on by default
+
+error: could not compile `diagnostic-capture` (bin "diagnostic-capture") due to 1 previous error

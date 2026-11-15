@@ -1,6 +1,6 @@
 # Phase 1 명세 — `idk ws` · `idk run`
 
-> **v0.3 이하 Python 제품의 역사적 명세다.** 현재 명령은 [사용 안내](GUIDE.md)를 따른다.
+> **v0.3 이하 Python 제품의 역사적 명세다.** 현재 명령은 [사용 안내](../../GUIDE.md)를 따른다.
 > 당시 구현 규약은 [v0.3.1 구조 문서](https://github.com/jihoon22-lee/idk/blob/v0.3.1/docs/ARCHITECTURE.md)에 보존되어 있다.
 
 워크스페이스/터미널 매니저와 명령 런처. 둘은 `--pane` 으로 맞물려 있어 함께 만든다.

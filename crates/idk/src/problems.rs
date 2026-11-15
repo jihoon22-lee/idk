@@ -200,6 +200,7 @@ pub struct ProblemParser {
     controls: Controls,
     retained: usize,
     last_problem: Option<usize>,
+    rust_header: Option<usize>,
     python_frame: Option<(PathBuf, u32, u64)>,
     uic_error: Option<(u32, Option<u32>, String, u64)>,
 }
@@ -227,6 +228,7 @@ impl ProblemParser {
             controls: Controls::default(),
             retained: 0,
             last_problem: None,
+            rust_header: None,
             python_frame: None,
             uic_error: None,
         }
@@ -317,6 +319,7 @@ impl ProblemParser {
             self.python_frame = None;
             self.uic_error = None;
             self.last_problem = None;
+            self.rust_header = None;
             self.line_limited = false;
             self.line_ambiguous = false;
             return;
@@ -329,13 +332,57 @@ impl ProblemParser {
     }
     fn parse_line(&mut self, line: &str) {
         let grammar = grammar();
+        // Only the immediately following nonempty location line belongs to a
+        // Rust header. Never attach a later tool's location to an earlier error.
+        if !line.trim().is_empty() {
+            if let Some(index) = self.rust_header.take() {
+                if let Some(capture) = grammar.rust_location.captures(line) {
+                    if let Some(number) = position(&capture["line"]) {
+                        let file = &capture["file"];
+                        if file.len() <= 4096 && self.retained + file.len() <= MAX_RETAINED_TEXT {
+                            self.retained += file.len();
+                            self.result.problems[index].file = Some(file.into());
+                            self.result.problems[index].range = Some(SourceRange {
+                                line: number,
+                                column: position(&capture["column"]),
+                            });
+                        } else {
+                            self.result.limited = true;
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+        if let Some(capture) = grammar.rust_header.captures(line) {
+            self.add(
+                None,
+                None,
+                severity(&capture["severity"]),
+                &diagnostic_message(&capture),
+                self.line_offset,
+            );
+            self.rust_header = self.last_problem;
+            return;
+        }
+        if let Some(capture) = grammar.typescript.captures(line) {
+            if let Some(number) = position(&capture["line"]) {
+                self.add(
+                    Some(capture["file"].into()),
+                    Some(SourceRange {
+                        line: number,
+                        column: position(&capture["column"]),
+                    }),
+                    severity(&capture["severity"]),
+                    &capture["message"],
+                    self.line_offset,
+                );
+                return;
+            }
+        }
         if let Some(capture) = grammar.compiler.captures(line) {
             if let Some(position) = position(&capture["line"]) {
-                let severity = match capture["severity"].to_ascii_lowercase().as_str() {
-                    "warning" => Severity::Warning,
-                    "note" => Severity::Note,
-                    _ => Severity::Error,
-                };
+                let severity = severity(&capture["severity"]);
                 self.add(
                     Some(unquote(&capture["file"]).into()),
                     Some(SourceRange {
@@ -345,7 +392,7 @@ impl ProblemParser {
                             .and_then(|value| position_number(value.as_str())),
                     }),
                     severity,
-                    &capture["message"],
+                    &diagnostic_message(&capture),
                     self.line_offset,
                 );
                 return;
@@ -450,6 +497,26 @@ impl ProblemParser {
             self.add(None, None, Severity::Error, line, self.line_offset);
             return;
         }
+        // Go vet and Ruff concise do not declare severity. A location is useful
+        // without claiming the message is an error or changing the run's exit.
+        if let Some(capture) = grammar.location_message.captures(line) {
+            let file = &capture["file"];
+            if !file.contains("://") && PathBuf::from(file).extension().is_some() {
+                if let Some(number) = position(&capture["line"]) {
+                    self.add(
+                        Some(file.into()),
+                        Some(SourceRange {
+                            line: number,
+                            column: capture.name("column").and_then(|v| position(v.as_str())),
+                        }),
+                        Severity::Note,
+                        &capture["message"],
+                        self.line_offset,
+                    );
+                    return;
+                }
+            }
+        }
         if line.starts_with(char::is_whitespace) && !line.trim().is_empty() {
             if let Some(index) = self.last_problem {
                 let detail = safe_utf8(line.as_bytes(), 512);
@@ -512,6 +579,19 @@ impl ProblemParser {
         self.last_problem = Some(self.result.problems.len() - 1);
     }
 }
+fn severity(value: &str) -> Severity {
+    match value.to_ascii_lowercase().as_str() {
+        "warning" => Severity::Warning,
+        "note" => Severity::Note,
+        _ => Severity::Error,
+    }
+}
+fn diagnostic_message(capture: &regex::Captures<'_>) -> String {
+    match capture.name("code") {
+        Some(code) => format!("[{}] {}", code.as_str(), &capture["message"]),
+        None => capture["message"].to_owned(),
+    }
+}
 fn position(text: &str) -> Option<u32> {
     position_number(text)
 }
@@ -527,6 +607,10 @@ fn unquote(text: &str) -> &str {
 }
 struct Grammar {
     compiler: Regex,
+    rust_header: Regex,
+    rust_location: Regex,
+    typescript: Regex,
+    location_message: Regex,
     cmake: Regex,
     make: Regex,
     pytest: Regex,
@@ -538,7 +622,11 @@ struct Grammar {
 fn grammar() -> &'static Grammar {
     static GRAMMAR: OnceLock<Grammar> = OnceLock::new();
     GRAMMAR.get_or_init(||Grammar {
-        compiler:Regex::new(r"^(?P<file>.+?):(?P<line>[0-9]+)(?::(?P<column>[0-9]+))?:\s*(?P<severity>fatal error|error|warning|note|Error|Warning):\s*(?P<message>.*)$").unwrap(),
+        compiler:Regex::new(r"^(?P<file>.+?):(?P<line>[0-9]+)(?::(?P<column>[0-9]+))?:\s*(?P<severity>fatal error|error|warning|note|Error|Warning)(?:\[(?P<code>[^\]]+)\])?:\s*(?P<message>.*)$").unwrap(),
+        rust_header: Regex::new(r"^(?P<severity>error|warning)(?:\[(?P<code>[^\]]+)\])?:\s*(?P<message>.*)$").unwrap(),
+        rust_location: Regex::new(r"^\s*--> (?P<file>.+?):(?P<line>[0-9]+):(?P<column>[0-9]+)\s*$").unwrap(),
+        typescript: Regex::new(r"^(?P<file>.+)\((?P<line>[0-9]+),(?P<column>[0-9]+)\):\s*(?P<severity>error|warning)\s+(?P<message>TS[0-9]+:.*)$").unwrap(),
+        location_message: Regex::new(r"^(?P<file>\S.*?):(?P<line>[0-9]+)(?::(?P<column>[0-9]+))?:\s+(?P<message>\S.*)$").unwrap(),
         cmake:Regex::new(r"^CMake (?P<severity>Error|Warning(?: \(dev\))?) at (?P<file>.+):(?P<line>[0-9]+) \((?P<command>[^)]+)\):").unwrap(),
         make:Regex::new(r"^(?:g?make)(?:\[[0-9]+\])?: \*\*\* \[(?P<file>.+?):(?P<line>[0-9]+): [^]]+\] (?P<message>.*)$").unwrap(),
         pytest:Regex::new(r"^(?P<file>.+\.py):(?P<line>[0-9]+): (?P<message>(?:[A-Za-z_][A-Za-z0-9_]*\.)?(?:[A-Za-z_][A-Za-z0-9_]*)?(?:Error|Exception)(?::.*)?)$").unwrap(),

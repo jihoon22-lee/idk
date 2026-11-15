@@ -101,9 +101,10 @@ fn optional_tool_is_inspected_only_when_selected_and_registration_does_not_run_a
     for path in [&source, &home, &bin] {
         fs::create_dir(path).unwrap();
     }
-    let tool = bin.join("ici");
+    fs::write(source.join("compile_commands.json"), "[]").unwrap();
+    let tool = bin.join("lens");
     let marker = source.join("version-was-run");
-    executable(&tool, &format!("if [ \"$1\" = --version ]; then echo selected > '{}'; echo ici 0.13.0; else exit 90; fi", marker.display()));
+    executable(&tool, &format!("if [ \"$1\" = --version ]; then echo selected > '{}'; echo lens 0.10.0; else exit 90; fi", marker.display()));
     success(call(
         &data,
         &home,
@@ -127,21 +128,21 @@ fn optional_tool_is_inspected_only_when_selected_and_registration_does_not_run_a
             "discover",
             "demo",
             "--tool",
-            "ici",
+            "lens",
             "--executable",
             tool.to_str().unwrap(),
             "--register",
-            "static analysis",
+            "log report",
             "--json",
         ],
     ));
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(value["inspection"]["version"], "0.13.0");
+    assert_eq!(value["inspection"]["version"], "0.10.0");
     assert_eq!(value["registered"], true);
     assert_eq!(value["executed"], false);
     assert!(value["draft"]["approved_digest"].is_null());
     assert!(marker.exists());
-    executable(&tool, "echo ici 1.0.0");
+    executable(&tool, "echo lens 1.0.0");
     let rejected = call(
         &data,
         &home,
@@ -150,7 +151,7 @@ fn optional_tool_is_inspected_only_when_selected_and_registration_does_not_run_a
             "discover",
             "demo",
             "--tool",
-            "ici",
+            "lens",
             "--executable",
             tool.to_str().unwrap(),
             "--register",
@@ -234,4 +235,21 @@ fn artifact_cli_measures_registered_bytes_without_mutating_definitions() {
     .status
     .success());
     assert_eq!(fs::read(store.config_path()).unwrap(), before);
+}
+
+#[test]
+fn retired_ici_discovery_is_rejected_before_execution() {
+    let output = Command::new(env!("CARGO_BIN_EXE_idk"))
+        .args([
+            "discover",
+            "demo",
+            "--tool",
+            "ici",
+            "--executable",
+            "/bin/false",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid value 'ici'"));
 }

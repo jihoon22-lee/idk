@@ -1,10 +1,8 @@
 # 개발 작업 안내
 
 범용화 계획과 현재 지원·검증 계약은 [전환 원장](generalization.md)을 따른다.
-규약은 [AGENTS.md](../AGENTS.md), 역사적 v0.4 범위·PR 묶음은
-[메인 #38](https://github.com/jihoon22-lee/idk/issues/38), 수용 조건은
-[명세 #39](https://github.com/jihoon22-lee/idk/issues/39)가 담당한다.
-작업 계획을 매번 복제하지 않고 해당 WP와 관련 요구사항·계약을 참조한다.
+규약은 [AGENTS.md](../AGENTS.md), 현재 변경 이력은 [CHANGELOG](../CHANGELOG.md)와
+workthrough 기록을 따른다. v0.4 이슈·WP·PR 묶음은 완료된 전환의 역사로 보존한다.
 
 ## 검증
 
@@ -122,21 +120,7 @@ main push에서만 exact-main provenance가 부여된다. 공개는 [릴리스 �
 사용 예: `$idk-change WP02 #41을 구현해줘`, `$idk-acceptance 이 후보의 S01~S08 증거를 검토해줘`.
 스킬 호출이나 계획 등록 자체가 GitHub 게시·이슈 종료·릴리스 권한을 추가하지 않는다.
 
-## Codex 운영
+## 작업 운영
 
-모델·reasoning은 개인 설정이나 작업별 선택으로 관리한다. B01의 기술 판단·PTY 수명·복구 검토에는
-Astra high를 유지하고, 범위가 정해진 구현은 medium, 작은 반복 수정은 낮은 effort나 Terra/Luna를
-필요에 따라 비교한다. 이는 출발점이며 성능·비용 개선을 측정 없이 단정하지 않는다.
-사용자가 지정한 컨텍스트 윈도우·자동 압축 한계는 유지한다. 지침 최적화를 이유로 바꾸지 않는다.
-
-독립 조사·검증·리뷰는 명확한 입력·완료 조건·편집 범위를 정해 위임하고 주 에이전트가 통합한다.
-같은 계약에 의존하는 구현을 계약 확정 전에 병렬 착수하지 않는다. 하나의 일관된 결과를 대화의
-단위로 삼고, 이어지는 작업은 문서·SHA·실제 검증·미해결 항목으로 인계한다.
-AGENTS 변경 후 새 세션에서 지침 로딩을 확인한다. 모델·스킬 설정을 주기적으로 무조건 바꾸거나
-안정화되지 않은 작업을 자동 실행하는 절차는 필요할 때 도입한다.
-
-공식 근거(2026-09-07 확인): [AGENTS.md](https://developers.openai.com/codex/guides/agents-md),
-[Skills](https://developers.openai.com/codex/skills),
-[Astra prompting](https://developers.openai.com/api/docs/guides/latest-model),
-[모델 선택](https://developers.openai.com/codex/models),
-[Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents).
+현재 사용자 요청의 범위와 기존 승인을 유지한다. 필요한 검사를 통과한 뒤 근거 없이 반복하지 않는다.
+역사적 계획·모델 설정을 새 작업에 강제하지 않는다. 문서·SHA·실제 검증·미해결 항목으로 진행을 기록한다.

@@ -24,19 +24,14 @@ TUI Results의 `s`에서 findings를, `v`에서 원문을 보고 `[`/`]`로 페�
 
 events는 최대 8 MiB의 별도 관찰이다. 잘린 마지막 행·잘못된 event·sequence gap을 표시하며 실제 exit·cleanup·producer gate를 바꾸지 않는다. `idk run events RUN` 또는 TUI `i`로 확인한다. 자세한 예산·이행·비교 계약은 [결과 보관](result-storage.md)을 따른다.
 
-선택적 도구는 `idk discover PROJECT --tool ici --executable /absolute/path/ici` 또는 `--tool lens`로 명시 버전을 확인하고 자동 wrapper 초안을 볼 수 있다. `--register NAME`은 초안만 저장한다. 아래 wrapper 예시는 기존 수동 설정과의 호환 설명이다.
+선택적 Lens 연결은 `idk discover PROJECT --tool lens --executable /absolute/path/lens`로
+명시 버전을 확인하고 wrapper 초안을 만든다. `--register NAME`은 실행 없이 초안만 저장한다.
 
-## ici
+## 과거 결과 호환
 
-다음 내용을 별도 `/absolute/path/check-ici.sh` 파일로 두고 `--interpreter /bin/sh --script-file`
-등록 작업으로 실행할 수 있다. script의 executable은 실제 설치 경로를 사용한다.
-
-```sh
-exec /absolute/path/ici next verify --result "$IDK_RESULT_PATH" --events "$IDK_EVENTS_PATH"
-```
-
-ici의 0/1/2/3/130 종료와 partial result는 그대로 보존한다. ici v2의 `checks: null`은
-검사 범위 미확인이며 빈 검사 집합이나 전체 PASS가 아니다.
+ici 개발 중단으로 신규 발견·wrapper 생성은 제거했다. 저장된 `ici.next.run` v2와 event·비교는
+계속 읽으며 pinned Run도 보존한다. 기존 사용자가 직접 등록한 명령·설정은 자동 변경하지 않는다.
+ici v2의 `checks: null`은 검사 범위 미확인이며 빈 검사 집합이나 전체 PASS가 아니다.
 
 ## Lens
 
